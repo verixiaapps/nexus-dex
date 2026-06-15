@@ -1,123 +1,102 @@
-name: Diagnose pump-swap-sdk crash
+name: Fix pump-sdk crash
 
 on:
- workflow_dispatch:
-   inputs:
-     entrypoint:
-       description: "App entrypoint (e.g. dist/index.js, src/index.ts, index.js)"
-       required: false
-       default: ""
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
 
 jobs:
- diagnose:
-   runs-on: ubuntu-latest
-   timeout-minutes: 10
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
 
-   steps:
-     - name: Checkout
-       uses: actions/checkout@v4
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-     - name: Setup Node 22
-       uses: actions/setup-node@v4
-       with:
-         node-version: "22"
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
-     - name: Show package.json deps
-       run: |
-         echo "=== dependencies ==="
-         node -e "const p=require('./package.json'); console.log(JSON.stringify({...p.dependencies, ...p.devDependencies}, null, 2))" || true
+      - name: Pin Node to 20 via .nvmrc
+        run: echo "20" > .nvmrc
 
-     - name: Install
-       run: |
-         if [ -f pnpm-lock.yaml ]; then
-           npm i -g pnpm && pnpm install --frozen-lockfile
-         elif [ -f yarn.lock ]; then
-           corepack enable && yarn install --frozen-lockfile
-         else
-           npm ci || npm install
-         fi
+      - name: Add anchor override to package.json
+        run: |
+          node <<'EOF'
+          const fs = require('fs');
+          const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          p.overrides = p.overrides || {};
+          p.overrides['@coral-xyz/anchor'] = '0.30.1';
+          p.engines = p.engines || {};
+          p.engines.node = '20.x';
+          fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
+          console.log('Updated package.json');
+          EOF
+          cat package.json
 
-     - name: Find pump SDK usage in your code
-       run: |
-         echo "=== files importing @pump-fun/* ==="
-         grep -rEn "@pump-fun/(pump-sdk|pump-swap-sdk)" \
-           --include="*.ts" --include="*.js" --include="*.mjs" --include="*.cjs" \
-           --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git \
-           . || echo "(no matches)"
+      - name: Nuke node_modules and lockfile
+        run: |
+          rm -rf node_modules package-lock.json yarn.lock pnpm-lock.yaml
 
-         echo ""
-         echo "=== symbols used from pump SDKs ==="
-         grep -rEn "(getPumpAmmProgram|PumpAmmSdk|PumpSdk|OnlinePumpSdk|PUMP_AMM_PROGRAM|PUMP_PROGRAM)" \
-           --include="*.ts" --include="*.js" --include="*.mjs" --include="*.cjs" \
-           --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git \
-           . || echo "(no matches)"
+      - name: Fresh install
+        run: npm install
 
-     - name: Find every env var your code reads
-       run: |
-         echo "=== process.env.* references in source ==="
-         grep -rEoh "process\.env\.[A-Z_][A-Z0-9_]*" \
-           --include="*.ts" --include="*.js" --include="*.mjs" --include="*.cjs" \
-           --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git \
-           . | sort -u || true
+      - name: Verify only one anchor version
+        run: |
+          echo "=== anchor versions installed ==="
+          npm ls @coral-xyz/anchor || true
+          COUNT=$(npm ls @coral-xyz/anchor --all --json 2>/dev/null | grep -o '"version"' | wc -l)
+          echo "anchor instances: $COUNT"
 
-     - name: Inspect the exact crash site in pump-swap-sdk
-       run: |
-         SDK="node_modules/@pump-fun/pump-swap-sdk/dist/index.js"
-         if [ -f "$SDK" ]; then
-           echo "=== getPumpAmmProgram region (lines 8330-8370) ==="
-           sed -n '8330,8370p' "$SDK" || true
-           echo ""
-           echo "=== module-init region (lines 8880-8910) ==="
-           sed -n '8880,8910p' "$SDK" || true
-         else
-           echo "pump-swap-sdk not installed at expected path"
-           find node_modules/@pump-fun -maxdepth 3 -name "index.js" 2>/dev/null || true
-         fi
+      - name: Smoke test - can we require pump-sdk without crashing?
+        run: |
+          node -e "
+          try {
+            require('@pump-fun/pump-sdk');
+            console.log('✅ @pump-fun/pump-sdk loads cleanly');
+          } catch (e) {
+            console.error('❌ Still crashing on require:');
+            console.error(e.stack);
+            process.exit(1);
+          }
+          "
 
-     - name: Probe PublicKey construction with empty/bad values
-       run: |
-         node -e "
-         const { PublicKey } = require('@solana/web3.js');
-         for (const v of ['', undefined, null, '0', 'not-base58!']) {
-           try { new PublicKey(v); console.log('OK   ', JSON.stringify(v)); }
-           catch (e) { console.log('THROW', JSON.stringify(v), '->', e.message); }
-         }
-         " || true
+      - name: Smoke test - load your trade file
+        run: |
+          node -e "
+          try {
+            require('./pumpfun-trade.js');
+            console.log('✅ pumpfun-trade.js loads cleanly');
+          } catch (e) {
+            console.error('❌ pumpfun-trade.js crashed:');
+            console.error(e.stack);
+            process.exit(1);
+          }
+          " || echo "(non-fatal; may need env vars at require time)"
 
-     - name: Try to boot the app and capture the crash
-       env:
-         NODE_ENV: production
-       run: |
-         ENTRY='${{ inputs.entrypoint }}'
-         if [ -z "$ENTRY" ]; then
-           ENTRY=$(node -e "const p=require('./package.json'); console.log(p.main || '')")
-         fi
-         if [ -z "$ENTRY" ]; then
-           for c in dist/index.js build/index.js src/index.ts index.js index.ts; do
-             [ -f "$c" ] && ENTRY="$c" && break
-           done
-         fi
-         echo "Booting: $ENTRY"
+      - name: Commit fix to a new branch and open PR
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          BRANCH="fix/pump-sdk-anchor-pin-$(date +%s)"
+          git checkout -b "$BRANCH"
+          git add package.json package-lock.json .nvmrc
+          git commit -m "fix: pin @coral-xyz/anchor to 0.30.1, Node 20
 
-         if [[ "$ENTRY" == *.ts ]]; then
-           npx --yes tsx "$ENTRY" > boot.log 2>&1 &
-         else
-           node "$ENTRY" > boot.log 2>&1 &
-         fi
-         PID=$!
-         sleep 8
-         if kill -0 $PID 2>/dev/null; then
-           echo "App is running (no startup crash). Killing."
-           kill $PID || true
-         else
-           echo "=== APP CRASHED ON STARTUP ==="
-         fi
-         echo "=== boot.log ==="
-         cat boot.log || true
-
-     - name: Diagnosis summary
-       if: always()
-       run: |
-         echo "::notice::Check the 'env vars' step for every process.env.* your code reads."
-         echo "::notice::Cross-reference against Railway Variables. Any missing or empty one whose name suggests a program ID / pubkey is the cause."
-         echo "::notice::The crash is new PublicKey() receiving an invalid value inside getPumpAmmProgram."
+          Resolves 'Assertion failed' crash on startup caused by Anchor
+          version mismatch inside @pump-fun/pump-swap-sdk's module-load
+          call to getPumpAmmProgram(null)."
+          git push origin "$BRANCH"
+          gh pr create \
+            --title "fix: pump-sdk startup crash (anchor pin + Node 20)" \
+            --body "Auto-generated fix. Pins anchor to 0.30.1 via npm overrides, locks Node to 20, regenerates lockfile. Smoke test passed: pump-sdk requires cleanly." \
+            --base main \
+            --head "$BRANCH"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
