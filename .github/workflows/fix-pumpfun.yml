@@ -19,6 +19,18 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
+      - name: Verify @noble/hashes override
+        run: |
+          node -e "
+            const pkg = require('./package.json');
+            const v = pkg.overrides && pkg.overrides['@noble/hashes'];
+            if (!v || !v.startsWith('1.')) {
+              console.error('::error::package.json must pin overrides[\"@noble/hashes\"] to a 1.x version');
+              process.exit(1);
+            }
+            console.log('Override OK:', v);
+          "
+
       - name: Install
         run: |
           npm install -g npm@10
@@ -28,11 +40,20 @@ jobs:
             npm install --no-audit --no-fund
           fi
 
+      - name: Confirm installed @noble/hashes is v1
+        run: |
+          INSTALLED=$(node -p "require('@noble/hashes/package.json').version")
+          echo "Installed: $INSTALLED"
+          case "$INSTALLED" in
+            1.*) echo "OK" ;;
+            *) echo "::error::@noble/hashes resolved to $INSTALLED, expected 1.x"; exit 1 ;;
+          esac
+
       - name: Detect stale @noble/hashes subpaths
         run: |
           if grep -rn "@noble/hashes/sha3[\"']" node_modules \
                --include="*.js" --include="*.cjs" --include="*.mjs" \
                | grep -v "/sha3\.js"; then
-            echo "::error::A dependency imports the legacy '@noble/hashes/sha3' subpath, which breaks under @noble/hashes v2."
+            echo "::error::A dependency imports the legacy '@noble/hashes/sha3' subpath under @noble/hashes v2."
             exit 1
           fi
