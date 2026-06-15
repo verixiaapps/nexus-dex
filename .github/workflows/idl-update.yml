@@ -1,0 +1,59 @@
+name: Refresh Flipsy IDL
+
+on:
+  workflow_dispatch:
+    inputs:
+      cluster:
+        description: 'Solana RPC URL'
+        required: false
+        default: 'https://api.devnet.solana.com'
+      program_id:
+        description: 'Flipsy program ID'
+        required: false
+        default: '71bEAUToad7j8k8As9LwsGWBYTLxVJoP2SBNB3S3RLHs'
+  schedule:
+    - cron: '0 9 * * 1'
+
+permissions:
+  contents: write
+
+jobs:
+  fetch-idl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --no-save @solana/web3.js@^1.95.0
+
+      - name: Fetch IDL
+        env:
+          RPC: ${{ inputs.cluster || 'https://api.devnet.solana.com' }}
+          PROGRAM_ID: ${{ inputs.program_id || '71bEAUToad7j8k8As9LwsGWBYTLxVJoP2SBNB3S3RLHs' }}
+        run: |
+          node --input-type=module -e '
+          import { Connection, PublicKey } from "@solana/web3.js";
+          import { inflateSync } from "node:zlib";
+          import { writeFileSync, mkdirSync } from "node:fs";
+          const pid = new PublicKey(process.env.PROGRAM_ID);
+          const [base] = PublicKey.findProgramAddressSync([], pid);
+          const addr = await PublicKey.createWithSeed(base, "anchor:idl", pid);
+          const info = await new Connection(process.env.RPC, "confirmed").getAccountInfo(addr);
+          if (!info) { console.error("::error::No IDL on-chain. Run `anchor idl init`."); process.exit(1); }
+          const len = info.data.readUInt32LE(40);
+          const json = inflateSync(info.data.subarray(44, 44 + len)).toString("utf8");
+          mkdirSync("src/idl", { recursive: true });
+          writeFileSync("src/idl/flipsy.json", JSON.stringify(JSON.parse(json), null, 2) + "\n");
+          '
+
+      - name: Commit if changed
+        run: |
+          if git diff --quiet -- src/idl/flipsy.json; then
+            echo "No change."; exit 0
+          fi
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/idl/flipsy.json
+          git commit -m 'chore: refresh Flipsy IDL'
+          git push
