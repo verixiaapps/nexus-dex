@@ -1,5 +1,5 @@
 require('dotenv').config(); 
-   
+ 
 const express   = require('express');
 const cors      = require('cors');
 const path      = require('path');
@@ -173,6 +173,207 @@ function setCachedJson(url, status, payload, ttlMs) {
   getCache.set(url, { status, payload, expiresAt: Date.now() + ttlMs });
   if (getCache.size > 250) { const k = getCache.keys().next().value; if (k) getCache.delete(k); }
 }
+
+/* ========================================================================
+ * Launch Radar — LIVE feed via PumpPortal WebSocket  (NEW SECTION)
+ * ─────────────────────────────────────────────────────────────────────────
+ * Self-contained. Does NOT modify any pre-existing route, helper, or
+ * constant. Registered BEFORE the older /api/dex/launches route below,
+ * so Express first-match-wins: this handler serves the request and the
+ * legacy DexScreener-profiles route is dormant.
+ *
+ * DATA FLOW
+ *   1. PumpPortal WS (wss://pumpportal.fun/api/data, subscribeNewToken)
+ *      streams every new pump.fun mint at curve creation.
+ *   2. We keep a rolling buffer of the most-recent _LR_BUFFER_MAX mints
+ *      (newest first).
+ *   3. GET /api/dex/launches reads the newest 30, batches them into
+ *      DexScreener's /latest/dex/tokens/<mints> for price/liquidity
+ *      enrichment, and returns the result.
+ *
+ * CONTRACT-ADDRESS INVARIANT (the rule)
+ *   The mint string from the WS is the canonical ID. It is NEVER
+ *   transformed, substituted, or matched fuzzily. It flows verbatim:
+ *       WS  →  DexScreener enrichment  →  card  →  /api/pumpfun/trade
+ *   When bucketing DexScreener pairs, we accept a pair only if
+ *   baseToken.address === mint OR quoteToken.address === mint
+ *   (strict equality). _lrShape further requires that at least one
+ *   pair belongs to dexId "pumpfun" or "pumpswap" — the same contract
+ *   gate the legacy code uses.
+ *
+ * REQUIRES: `ws` (already a dep via alpha-watcher.js).
+ * ===================================================================== */
+const _LR_DEX_BASE     = 'https://api.dexscreener.com';
+const _LR_PUMP_WS_URL  = 'wss://pumpportal.fun/api/data';
+const _LR_PUMP_DEX_IDS = new Set(['pumpfun', 'pumpswap']);
+const _LR_BASE58_RE    = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const _LR_BUFFER_MAX   = 200;     // rolling window of newest mints
+const _LR_FEED_LIMIT   = 30;      // mints returned per response (matches DexScreener's batch limit)
+const _LR_CACHE_MS     = 3_000;   // /api/dex/launches response cache
+
+const _LR_WebSocket = require('ws');
+
+// mint → { mint, sym, name, uri, pool, createdAt }
+// Map preserves insertion order — oldest at the head, newest at the tail.
+const _lrBuf = new Map();
+let _lrWs = null;
+let _lrWsReconnect = null;
+let _lrWsConnectedAt = 0;
+
+function _lrAddMint(msg) {
+  const mint = msg?.mint;
+  if (!mint || typeof mint !== 'string') return;
+  if (!_LR_BASE58_RE.test(mint)) return;
+  if (msg.txType && msg.txType !== 'create') return;
+  if (_lrBuf.has(mint)) return;                              // dedupe
+  _lrBuf.set(mint, {
+    mint,                                                    // canonical, unchanged
+    sym:  String(msg.symbol || '???').slice(0, 24),
+    name: String(msg.name || msg.symbol || 'Unknown').slice(0, 96),
+    uri:  msg.uri || null,
+    pool: msg.pool || 'pump',
+    createdAt: Date.now(),
+  });
+  // Trim oldest entries until we're back under the cap.
+  while (_lrBuf.size > _LR_BUFFER_MAX) {
+    const oldestKey = _lrBuf.keys().next().value;
+    if (oldestKey == null) break;
+    _lrBuf.delete(oldestKey);
+  }
+}
+
+function _lrConnectWs() {
+  if (_lrWs) { try { _lrWs.close(); } catch {} _lrWs = null; }
+  let ws;
+  try { ws = new _LR_WebSocket(_LR_PUMP_WS_URL); }
+  catch (e) {
+    console.warn('[lr-ws] create failed:', e?.message);
+    clearTimeout(_lrWsReconnect);
+    _lrWsReconnect = setTimeout(_lrConnectWs, 10_000);
+    return;
+  }
+  _lrWs = ws;
+
+  ws.on('open', () => {
+    _lrWsConnectedAt = Date.now();
+    console.log('[lr-ws] connected → subscribeNewToken');
+    try { ws.send(JSON.stringify({ method: 'subscribeNewToken' })); }
+    catch (e) { console.warn('[lr-ws] subscribe send failed:', e?.message); }
+  });
+
+  ws.on('message', (raw) => {
+    try { _lrAddMint(JSON.parse(raw.toString())); }
+    catch { /* malformed frame — ignore */ }
+  });
+
+  ws.on('close', () => {
+    _lrWsConnectedAt = 0;
+    console.log('[lr-ws] disconnected → retry in 5s');
+    clearTimeout(_lrWsReconnect);
+    _lrWsReconnect = setTimeout(_lrConnectWs, 5_000);
+  });
+
+  ws.on('error', (err) => {
+    console.warn('[lr-ws] error:', err?.message);
+    // The 'close' event will follow and trigger reconnect.
+  });
+}
+
+// Kick off the WS subscriber on boot.
+_lrConnectWs();
+
+// Shape one mint's DexScreener pairs → token row.
+// Identity check is strict: a pair counts only when baseToken.address ===
+// mint OR quoteToken.address === mint (exact equality). Contract gate: at
+// least one of those qualifying pairs must be on dexId pumpfun or pumpswap.
+function _lrShape(mint, pairs, wsMeta) {
+  if (!Array.isArray(pairs) || pairs.length === 0) return null;
+  const ours = pairs.filter(p =>
+    p.baseToken?.address === mint || p.quoteToken?.address === mint
+  );
+  if (ours.length === 0) return null;
+  const pumpPair = ours.find(p => _LR_PUMP_DEX_IDS.has(String(p.dexId || '').toLowerCase()));
+  if (!pumpPair) return null;
+  const best = ours.reduce(
+    (a, b) => (Number(b.liquidity?.usd || 0) > Number(a.liquidity?.usd || 0) ? b : a),
+    ours[0],
+  );
+  const base  = best.baseToken  || {};
+  const quote = best.quoteToken || {};
+  const me    = base.address === mint ? base : quote;
+  return {
+    mint,                                                    // unchanged from WS
+    sym:            me.symbol || wsMeta?.sym || '???',
+    name:           me.name   || wsMeta?.name || me.symbol || 'Unknown',
+    icon:           best.info?.imageUrl || null,
+    price:          Number(best.priceUsd || 0),
+    priceChange24h: Number(best.priceChange?.h24 || 0),
+    mcap:           Number(best.marketCap || best.fdv || 0),
+    fdv:            Number(best.fdv || 0),
+    volume24h:      Number(best.volume?.h24 || 0),
+    liquidity:      Number(best.liquidity?.usd || 0),
+    pairCreatedAt:  best.pairCreatedAt || wsMeta?.createdAt || null,
+    dexId:          pumpPair.dexId,
+    pumpPool:       pumpPair.dexId === 'pumpswap' ? 'pump-amm' : 'pump',
+    decimals:       6,
+  };
+}
+
+app.get('/api/dex/launches', async (req, res) => {
+  try {
+    const cacheKey = 'lr:launches';
+    const cached = getCachedJson(cacheKey);
+    if (cached) return res.status(cached.status).json(cached.payload);
+
+    // Newest first — Map keys iterate in insertion order (oldest first).
+    const allMints = [..._lrBuf.keys()];
+    const mints = allMints.reverse().slice(0, _LR_FEED_LIMIT);
+
+    if (mints.length === 0) {
+      const payload = { tokens: [], wsConnected: !!_lrWsConnectedAt, bufferSize: _lrBuf.size };
+      setCachedJson(cacheKey, 200, payload, _LR_CACHE_MS);
+      return res.json(payload);
+    }
+
+    // Batch enrichment via DexScreener (up to 30 mints per call).
+    const enrichR = await fetchWithTimeout(
+      _LR_DEX_BASE + '/latest/dex/tokens/' + mints.join(','),
+      { headers: { Accept: 'application/json' } },
+      12_000,
+    );
+    if (!enrichR.ok) return respondJsonOrError(res, enrichR, await safeJson(enrichR));
+    const data = await enrichR.json();
+    const pairs = Array.isArray(data?.pairs) ? data.pairs : [];
+
+    // Bucket pairs by mint — strict address equality only. A pair whose
+    // base/quote doesn't match a requested mint is silently dropped.
+    const byMint = new Map();
+    for (const m of mints) byMint.set(m, []);
+    for (const p of pairs) {
+      const ba = p.baseToken?.address;
+      const qa = p.quoteToken?.address;
+      if (ba && byMint.has(ba))      byMint.get(ba).push(p);
+      else if (qa && byMint.has(qa)) byMint.get(qa).push(p);
+    }
+
+    const tokens = [];
+    for (const m of mints) {
+      const shaped = _lrShape(m, byMint.get(m) || [], _lrBuf.get(m));
+      if (shaped) tokens.push(shaped);
+    }
+    // Final newest-first sort by DexScreener pairCreatedAt (falls back to
+    // WS arrival via _lrShape's pairCreatedAt assignment).
+    tokens.sort((a, b) => Number(b.pairCreatedAt || 0) - Number(a.pairCreatedAt || 0));
+
+    const payload = { tokens, wsConnected: !!_lrWsConnectedAt, bufferSize: _lrBuf.size };
+    setCachedJson(cacheKey, 200, payload, _LR_CACHE_MS);
+    return res.json(payload);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'DexScreener launches timed out' });
+    logError('lr-launches', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
 
 /* ========================================================================
  * Jupiter
@@ -891,7 +1092,7 @@ app.post('/api/pumpfun/trade', async (req, res) => {
  * Builds buy/sell instructions server-side via @pump-fun/pump-sdk.
  * Mounted BEFORE the /api/* catch-all so the route resolves.
  * ===================================================================== */
-// require('./pumpfun-trade').mountRoutes(app);
+require('./pumpfun-trade').mountRoutes(app);
 
 /* ========================================================================
  * Launch Radar — Jupiter Ultra V3 proxy (Iris router; pre-grad bonding curves)
