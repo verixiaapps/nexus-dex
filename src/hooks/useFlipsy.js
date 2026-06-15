@@ -40,7 +40,6 @@ const lamportsToSol = (l) => bnToNumber(l) / LAMPORTS_PER_SOL;
 const chainPriceToUsd = (p) => bnToNumber(p) / PRICE_SCALE;
 const solToUsd = (sol, pricePerSol) => sol * (pricePerSol || 0);
 
-// Coerce string/PublicKey-like into a real PublicKey.
 function toPubkey(x) {
   if (!x) return null;
   if (x instanceof PublicKey) return x;
@@ -113,19 +112,14 @@ export function useFlipsy(wallet) {
   const [balance, setBalance] = useState(0);
   const [loading, setLoading] = useState(true);
   const [programConfig, setProgramConfig] = useState(null);
+  const [chainError, setChainError] = useState(null); // ← NEW
   const livePriceRef = useRef(0);
 
-  // Stable string key for the wallet's pubkey so memos don't rebuild
-  // every render (adapters often hand a fresh PublicKey instance each time).
   const walletPkStr = useMemo(() => {
     const pk = toPubkey(wallet?.publicKey);
     return pk ? pk.toBase58() : null;
   }, [wallet?.publicKey]);
 
-  // READ-ONLY program — works without a wallet. Lets us show live rounds
-  // before connect, and isolates "no wallet" from "no data".
-  // NOT wrapped in try/catch — if this throws, your existing hookError
-  // banner will display the real message instead of an empty screen.
   const readProgram = useMemo(() => {
     const dummyWallet = {
       publicKey: PROGRAM_ID,
@@ -140,7 +134,6 @@ export function useFlipsy(wallet) {
     return new anchor.Program(idlWithAddress, provider);
   }, [connection]);
 
-  // WRITE program — only built when wallet is ready.
   const writeProgram = useMemo(() => {
     if (!walletPkStr) return null;
     if (typeof wallet?.signTransaction !== 'function') return null;
@@ -181,7 +174,7 @@ export function useFlipsy(wallet) {
     return () => { cancelled = true; clearInterval(i); };
   }, []);
 
-  // -------- POLL CHAIN STATE (uses read-only program; works with or w/o wallet) --------
+  // -------- POLL CHAIN STATE --------
   useEffect(() => {
     if (!readProgram) return;
     let cancelled = false;
@@ -189,6 +182,17 @@ export function useFlipsy(wallet) {
     async function fetchState() {
       try {
         const configPda = findConfigPda();
+
+        // Fail fast with a clear message if the config account isn't there
+        // (program not deployed at this address on this cluster, or never initialised).
+        const configInfo = await connection.getAccountInfo(configPda);
+        if (!configInfo) {
+          throw new Error(
+            `Flipsy config not found at ${configPda.toBase58()}. ` +
+            `Program may not be deployed/initialised on this cluster (${FLIPSY_RPC}).`
+          );
+        }
+
         const config = await readProgram.account.config.fetch(configPda);
         const currentEpoch = bnToNumber(config.currentEpoch);
         const price = livePriceRef.current;
@@ -290,8 +294,12 @@ export function useFlipsy(wallet) {
           claimForfeitDelay,
           paused: config.paused,
         });
+        setChainError(null); // ← clear on success
       } catch (e) {
         console.error('[flipsy] state fetch error:', e);
+        if (!cancelled) {
+          setChainError(e?.message || String(e) || 'Failed to load on-chain state');
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -404,5 +412,6 @@ export function useFlipsy(wallet) {
   return {
     livePrice, liveRound, upcomingRounds, recentRounds, userBets, balance,
     placeBet, claim, loading, programConfig,
+    chainError, // ← NEW
   };
 }
