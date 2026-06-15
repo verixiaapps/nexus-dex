@@ -891,7 +891,7 @@ app.post('/api/pumpfun/trade', async (req, res) => {
  * Builds buy/sell instructions server-side via @pump-fun/pump-sdk.
  * Mounted BEFORE the /api/* catch-all so the route resolves.
  * ===================================================================== */
-//require('./pumpfun-trade').mountRoutes(app);
+// require('./pumpfun-trade').mountRoutes(app);
 
 /* ========================================================================
  * Launch Radar — Jupiter Ultra V3 proxy (Iris router; pre-grad bonding curves)
