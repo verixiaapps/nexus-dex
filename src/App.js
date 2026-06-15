@@ -2,13 +2,14 @@ import React, { useState, useEffect, useCallback, useRef, useReducer } from 'rea
 import { BrowserRouter, useNavigate, useLocation } from 'react-router-dom';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from './WalletContext.js';
-import SwapWidget       from './components/SwapWidget.jsx';
-import Stocks           from './components/Stocks.jsx';
-import CrossChainSwap   from './components/CrossChainSwap.jsx';
-import MemeWonderland   from './components/MemeWonderland.jsx';
-import LaunchRadar      from './components/LaunchRadar.jsx';
-import Flipsy           from './components/Flipsy.jsx';
-import GetStarted       from './components/GetStarted.jsx';
+import SwapWidget          from './components/SwapWidget.jsx';
+import Stocks              from './components/Stocks.jsx';
+import CrossChainSwap      from './components/CrossChainSwap.jsx';
+import SolToBtcChainflip   from './components/SolToBtcChainflip.jsx';
+import MemeWonderland      from './components/MemeWonderland.jsx';
+import LaunchRadar         from './components/LaunchRadar.jsx';
+import Flipsy              from './components/Flipsy.jsx';
+import GetStarted          from './components/GetStarted.jsx';
 
 // =====================================================================
 // Wonderland-light design tokens (used across the shell)
@@ -245,8 +246,8 @@ function SwapHero({ onStartTrading }) {
 }
 
 // =====================================================================
-// Below-the-fold homepage sections — trust strip, live ticker, product
-// breadth, footer. Renders below the SwapWidget on the home tab.
+// Below-the-fold homepage sections — trust strip, cross-chain cards,
+// live ticker, product breadth, footer.
 // =====================================================================
 function HomeBelow({ onSwitchTab }) {
   // Mock live trades — replace with real feed when available.
@@ -261,13 +262,33 @@ function HomeBelow({ onSwitchTab }) {
     ['SOL → USDC',   '+$2,950', '31s'],
   ];
 
+  // Six → five products (Bridge is now featured in the Cross-chain section above)
   const products = [
     { tab: 'swap',        icon: '⇅',  name: 'Swap',       desc: '12,000+ Solana tokens, best price via Jupiter.', live: '$48M / 24H', grad: 'linear-gradient(135deg,#A0E7FF,#FF8FBE)' },
     { tab: 'markets',     icon: '📈', name: 'Markets',    desc: 'Tokenized Tesla, Apple, NVIDIA — trade 24/7.',  live: '18 STOCKS',  grad: 'linear-gradient(135deg,#FF8FBE,#B794F6)' },
-    { tab: 'bridge',      icon: '🌉', name: 'Bridge',     desc: 'Out to ETH, Base, Arbitrum — ~2 min.',          live: '71 CHAINS',  grad: 'linear-gradient(135deg,#7FFFD4,#A0E7FF)' },
     { tab: 'flipsy',      icon: '🎯', name: 'Flipsy',     desc: '5-min prediction markets on SOL price.',        live: 'LIVE NOW',   grad: 'linear-gradient(135deg,#14F195,#DC1FFF)' },
     { tab: 'wonderland',  icon: '✨', name: 'Wonderland', desc: 'Discover the meme tokens going up.',           live: 'TRENDING',   grad: 'linear-gradient(135deg,#B794F6,#FFD46B)' },
     { tab: 'launchradar', icon: '🚀', name: 'Radar',      desc: 'New token launches, before they pump.',        live: 'FRESH',      grad: 'linear-gradient(135deg,#FFD46B,#FFB088)' },
+  ];
+
+  // The two featured cross-chain pages.
+  const crossChainCards = [
+    {
+      tab: 'bridge',
+      icon: '🌉',
+      name: 'Cross-Chain Swap',
+      desc: 'Move any token to Ethereum, Base, Arbitrum & 68 more — one click, ~2 min.',
+      badge: '71 CHAINS',
+      grad: 'linear-gradient(135deg,#A0E7FF,#B794F6)',
+    },
+    {
+      tab: 'solbtc',
+      icon: '₿',
+      name: 'SOL → Native BTC',
+      desc: 'Swap Solana straight to real Bitcoin on the BTC network. Powered by Chainflip.',
+      badge: 'NATIVE BTC',
+      grad: 'linear-gradient(135deg,#FFD46B,#FFB088)',
+    },
   ];
 
   const sectionHead = (title, italic, meta, liveDot = false) => (
@@ -312,6 +333,49 @@ function HomeBelow({ onSwitchTab }) {
         <span style={{ color: C.ink, fontWeight: 800 }}>CHAINALYSIS</span>
       </div>
 
+      {/* CROSS-CHAIN — featured pair */}
+      {sectionHead('Cross-chain.', 'Anywhere.', 'BRIDGE')}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        {crossChainCards.map((p, i) => (
+          <button
+            key={p.tab}
+            onClick={() => onSwitchTab(p.tab)}
+            style={{
+              background: C.glassStrong, backdropFilter: 'blur(10px)',
+              border: '1px solid rgba(255,255,255,0.85)', borderRadius: 20,
+              padding: 14, textAlign: 'left', cursor: 'pointer',
+              fontFamily: 'inherit', color: 'inherit',
+              transition: 'transform .15s, box-shadow .15s',
+              display: 'flex', flexDirection: 'column', gap: 6,
+              animation: `nx-rise .45s cubic-bezier(.2,1,.4,1) ${i * 0.05}s backwards`,
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 12px 28px rgba(160,231,255,.18)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'none'; }}
+          >
+            <div style={{
+              width: 36, height: 36, borderRadius: 11,
+              display: 'grid', placeItems: 'center', fontSize: 18,
+              marginBottom: 4, background: p.grad, color: '#fff',
+              fontFamily: "'Instrument Serif', serif", fontStyle: 'italic', fontWeight: 400,
+            }}>{p.icon}</div>
+            <div style={{
+              fontFamily: "'Instrument Serif', serif", fontStyle: 'italic', fontSize: 18, lineHeight: 1.05,
+              color: C.ink, letterSpacing: '-0.01em',
+            }}>{p.name}</div>
+            <div style={{ fontSize: 11, color: C.ink2, fontWeight: 500, lineHeight: 1.4 }}>{p.desc}</div>
+            <span style={{
+              marginTop: 6, display: 'inline-flex', alignItems: 'center', gap: 5, alignSelf: 'flex-start',
+              fontFamily: "'JetBrains Mono', monospace", fontSize: 9, fontWeight: 700, color: C.cyan,
+              letterSpacing: '0.08em', background: 'rgba(61,212,245,.10)',
+              border: `1px solid ${C.border}`, padding: '3px 8px', borderRadius: 999,
+            }}>
+              <span style={{ width: 4, height: 4, borderRadius: '50%', background: C.cyan, boxShadow: `0 0 5px ${C.cyan}` }} />
+              {p.badge}
+            </span>
+          </button>
+        ))}
+      </div>
+
       {/* LIVE TICKER */}
       {sectionHead('Live', 'swaps', 'UPDATED NOW', true)}
       <div style={{
@@ -344,7 +408,7 @@ function HomeBelow({ onSwitchTab }) {
       </div>
 
       {/* PRODUCT BREADTH — the moat */}
-      {sectionHead('Six products.', 'One wallet.', 'SUPER-APP')}
+      {sectionHead('All products.', 'One wallet.', 'SUPER-APP')}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
         {products.map((p, i) => (
           <button
@@ -525,6 +589,7 @@ async function screenAddress(address) {
 
 const PATH_TO_TAB = {
   '/': 'swap', '/swap': 'swap', '/bridge': 'bridge',
+  '/sol-btc': 'solbtc', '/btc': 'solbtc', '/bitcoin': 'solbtc',
   '/wonderland': 'wonderland', '/memes': 'wonderland',
   '/radar': 'launchradar', '/launch-radar': 'launchradar', '/launches': 'launchradar',
   '/markets': 'markets', '/tokenized': 'markets',
@@ -533,7 +598,7 @@ const PATH_TO_TAB = {
   '/stack': 'swap', '/vip': 'swap', '/perps': 'swap', '/call': 'swap',
 };
 const TAB_TO_PATH = {
-  swap: '/swap', bridge: '/bridge',
+  swap: '/swap', bridge: '/bridge', solbtc: '/sol-btc',
   wonderland: '/wonderland', launchradar: '/radar', markets: '/markets', flipsy: '/flipsy',
   getstarted: '/get-started',
 };
@@ -1036,11 +1101,12 @@ function AppInner() {
           </>
         )}
         {tab === 'launchradar' && <LaunchRadar onConnectWallet={openWallet} />}
-        {tab === 'bridge' && <><BridgeHero onSwitchTab={switchTab} /><CrossChainSwap onConnectWallet={openWallet} /></>}
-        {tab === 'wonderland' && <MemeWonderland onConnectWallet={openWallet} />}
-        {tab === 'markets'    && <Stocks {...sharedProps} />}
-        {tab === 'flipsy'     && <Flipsy onConnectWallet={openWallet} />}
-        {tab === 'getstarted' && <GetStarted onConnectWallet={openWallet} onSwitchTab={switchTab} />}
+        {tab === 'bridge'      && <><BridgeHero onSwitchTab={switchTab} /><CrossChainSwap onConnectWallet={openWallet} /></>}
+        {tab === 'solbtc'      && <SolToBtcChainflip onConnectWallet={openWallet} />}
+        {tab === 'wonderland'  && <MemeWonderland onConnectWallet={openWallet} />}
+        {tab === 'markets'     && <Stocks {...sharedProps} />}
+        {tab === 'flipsy'      && <Flipsy onConnectWallet={openWallet} />}
+        {tab === 'getstarted'  && <GetStarted onConnectWallet={openWallet} onSwitchTab={switchTab} />}
       </main>
 
       {/* MOBILE BOTTOM NAV — light glass */}
