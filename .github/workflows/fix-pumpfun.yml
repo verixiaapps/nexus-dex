@@ -1,13 +1,12 @@
-name: CI
+name: Diagnose @noble/hashes
 
 on:
   push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
 jobs:
-  build:
+  diagnose:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,31 +24,30 @@ jobs:
             npm install --no-audit --no-fund
           fi
 
-      - name: Start
-        run: node --experimental-require-module server.js &
-        env:
-          NODE_ENV: production
+      - name: npm ls @noble/hashes
+        run: npm ls @noble/hashes --all || true
 
-      - name: Diagnostics on failure
-        if: failure()
+      - name: npm ls viem @solana/web3.js
+        run: npm ls viem @solana/web3.js --all || true
+
+      - name: Every @noble/hashes package.json in tree
         run: |
-          echo "=== @noble/hashes tree ==="
-          npm ls @noble/hashes || true
-          echo
-          echo "=== viem tree ==="
-          npm ls viem || true
-          echo
-          echo "=== Top-level @noble/hashes version ==="
-          node -p "require('@noble/hashes/package.json').version" || true
-          echo
-          echo "=== Top-level @noble/hashes exports ==="
-          node -p "JSON.stringify(require('@noble/hashes/package.json').exports, null, 2)" || true
-          echo
-          echo "=== Legacy sha3 imports in tree ==="
-          grep -rn "@noble/hashes/sha3[\"']" node_modules \
+          find node_modules -path "*/@noble/hashes/package.json" | while read f; do
+            echo "=== $f ==="
+            node -p "const p=require('./$f'); JSON.stringify({version:p.version, exports:p.exports}, null, 2)"
+            echo
+          done
+
+      - name: Legacy v1-style sha* imports
+        run: |
+          grep -rEn "@noble/hashes/(sha256|sha512|sha3|blake[0-9]+|hmac|hkdf|pbkdf2|ripemd160)[\"']" node_modules \
             --include="*.js" --include="*.cjs" --include="*.mjs" \
-            | grep -v "/sha3\.js" || echo "none"
-          echo
-          echo "=== New sha3.js imports in tree ==="
-          grep -rn "@noble/hashes/sha3\.js" node_modules \
+            | grep -vE "\.(js|cjs|mjs)[\"']" || echo "none"
+
+      - name: New v2-style sha*.js imports
+        run: |
+          grep -rEn "@noble/hashes/(sha256|sha512|sha3|blake[0-9]+|hmac|hkdf|pbkdf2|ripemd160)\.js" node_modules \
             --include="*.js" --include="*.cjs" --include="*.mjs" || echo "none"
+
+      - name: Build
+        run: npm run build:all
