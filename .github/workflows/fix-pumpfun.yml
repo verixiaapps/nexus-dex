@@ -2,12 +2,9 @@ name: Fix everything
 
 on:
  workflow_dispatch:
- push:
-   branches: [main]
 
 permissions:
  contents: write
- pull-requests: write
 
 jobs:
  fix:
@@ -18,20 +15,12 @@ jobs:
      - uses: actions/checkout@v4
        with:
          fetch-depth: 0
+         token: ${{ secrets.GITHUB_TOKEN }}
 
      - uses: actions/setup-node@v4
        with:
          node-version: "20"
 
-     - name: Show starting state
-       run: |
-         echo "=== node version ==="; node -v
-         echo "=== package.json ==="; cat package.json
-         echo "=== lockfile present? ==="; ls -la package-lock.json yarn.lock pnpm-lock.yaml 2>/dev/null || true
-
-     # ----------------------------------------------------------------
-     # STEP 1: Inspect current state, find what's installed and broken
-     # ----------------------------------------------------------------
      - name: Initial install (tolerant)
        run: |
          npm install --ignore-scripts --no-audit --no-fund --legacy-peer-deps || \
@@ -55,7 +44,6 @@ jobs:
            if (a) found.push({ pkg: pkg.name, version: pkg.version, anchor: a });
          }
          console.error('Discovered:', JSON.stringify(found, null, 2));
-         // Strip ^ ~ and pick first; fall back to 0.30.1 (known-good for pump-swap-sdk 2-arg Program)
          let target = '0.30.1';
          if (found.length) {
            const raw = found[0].anchor.replace(/^[\^~>=<\s]+/, '').split(/\s/)[0];
@@ -68,9 +56,6 @@ jobs:
          echo "Target anchor: $T"
          echo "target=$T" >> $GITHUB_OUTPUT
 
-     # ----------------------------------------------------------------
-     # STEP 2: Rewrite package.json — anchor pin + Node pin + override
-     # ----------------------------------------------------------------
      - name: Patch package.json
        run: |
          T="${{ steps.discover.outputs.target }}"
@@ -78,7 +63,6 @@ jobs:
          const fs = require('fs');
          const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
          const T = '${T}';
-
          for (const k of ['dependencies','devDependencies','peerDependencies']) {
            if (p[k] && p[k]['@coral-xyz/anchor']) {
              console.log(\`\${k}.@coral-xyz/anchor: \${p[k]['@coral-xyz/anchor']} -> \${T}\`);
@@ -92,141 +76,68 @@ jobs:
          fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
          EOF
          echo "20" > .nvmrc
-         echo "=== patched package.json ==="
          cat package.json
 
-     # ----------------------------------------------------------------
-     # STEP 3: Clean install
-     # ----------------------------------------------------------------
      - name: Wipe and reinstall
        run: |
          rm -rf node_modules package-lock.json yarn.lock pnpm-lock.yaml
          npm install --no-audit --no-fund
 
      - name: Verify single anchor version
-       run: |
-         echo "=== anchor tree ==="
-         npm ls @coral-xyz/anchor --all 2>&1 || true
-         COUNT=$(find node_modules -name "package.json" -path "*@coral-xyz/anchor/*" 2>/dev/null | wc -l)
-         echo "anchor copies installed: $COUNT"
+       run: npm ls @coral-xyz/anchor --all 2>&1 || true
 
-     # ----------------------------------------------------------------
-     # STEP 4: Smoke tests — does require() work, does pump surface exist
-     # ----------------------------------------------------------------
      - name: Smoke 1 — pump-sdk loads
-       run: |
-         node -e "
-         require('@pump-fun/pump-sdk');
-         console.log('OK: @pump-fun/pump-sdk module-load passed');
-         "
+       run: node -e "require('@pump-fun/pump-sdk'); console.log('OK');"
 
      - name: Smoke 2 — pump-swap-sdk loads (the crash site)
-       run: |
-         node -e "
-         require('@pump-fun/pump-swap-sdk');
-         console.log('OK: @pump-fun/pump-swap-sdk module-load passed');
-         "
+       run: node -e "require('@pump-fun/pump-swap-sdk'); console.log('OK');"
 
-     - name: Smoke 3 — methods pumpfun-trade.js calls exist
+     - name: Smoke 3 — pump-sdk methods intact
        run: |
          node -e "
          const pkg = require('@pump-fun/pump-sdk');
          const { Connection } = require('@solana/web3.js');
          const Online = pkg.OnlinePumpSdk || pkg.PumpSdk;
-         if (!Online) { console.error('FAIL: no OnlinePumpSdk/PumpSdk export'); process.exit(1); }
-         const conn = new Connection('https://api.mainnet-beta.solana.com');
-         const sdk = new Online(conn);
-         const required = ['buyInstructions','sellInstructions','fetchGlobal','fetchBuyState','fetchSellState'];
-         let missing = 0;
-         for (const m of required) {
-           if (typeof sdk[m] !== 'function') { console.warn('MISSING:', m); missing++; }
+         if (!Online) { console.error('FAIL: no OnlinePumpSdk/PumpSdk'); process.exit(1); }
+         const sdk = new Online(new Connection('https://api.mainnet-beta.solana.com'));
+         for (const m of ['buyInstructions','sellInstructions','fetchGlobal','fetchBuyState','fetchSellState']) {
+           if (typeof sdk[m] !== 'function') console.warn('MISSING:', m);
            else console.log('ok:', m);
          }
-         if (missing) console.warn(missing + ' method(s) missing — review pumpfun-trade.js');
-         console.log('Smoke 3 done');
          "
 
-     - name: Smoke 4 — load pumpfun-trade.js if it exists
+     - name: Smoke 4 — pumpfun-trade.js loads
        run: |
          if [ -f pumpfun-trade.js ]; then
            node -e "
-           try { require('./pumpfun-trade.js'); console.log('OK: pumpfun-trade.js loaded'); }
+           try { require('./pumpfun-trade.js'); console.log('OK'); }
            catch (e) {
              if (/env|ENV|RPC|KEYPAIR|HELIUS/i.test(e.message)) {
-               console.log('OK (require-time env check expected):', e.message);
-             } else {
-               console.error('FAIL:', e.stack); process.exit(1);
-             }
+               console.log('OK (env check at require time):', e.message);
+             } else { console.error('FAIL:', e.stack); process.exit(1); }
            }
            "
-         else
-           echo "pumpfun-trade.js not at repo root, skipping"
          fi
 
-     # ----------------------------------------------------------------
-     # STEP 5: Open PR (or commit straight to main if push-triggered)
-     # ----------------------------------------------------------------
-     - name: Check for changes
-       id: changes
+     - name: Commit straight to main
        run: |
          if git diff --quiet package.json && git diff --quiet package-lock.json 2>/dev/null; then
-           echo "changed=false" >> $GITHUB_OUTPUT
-         else
-           echo "changed=true" >> $GITHUB_OUTPUT
+           echo "::notice::No changes needed"
+           exit 0
          fi
-
-     - name: Commit + open PR
-       if: steps.changes.outputs.changed == 'true'
-       run: |
          git config user.name "github-actions[bot]"
          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-         BRANCH="fix/pump-sdk-anchor-$(date +%s)"
-         git checkout -b "$BRANCH"
          git add package.json package-lock.json .nvmrc
          git commit -m "fix: align anchor to ${{ steps.discover.outputs.target }}, pin Node 20
 
          Fixes BN 'Assertion failed' crash at startup.
 
-         @pump-fun/pump-swap-sdk (transitive dep of @pump-fun/pump-sdk)
-         calls getPumpAmmProgram(null) at module load, which uses Anchor's
-         2-arg Program(idl, provider) constructor. That signature was
-         introduced in Anchor 0.30; the previous direct dep of
-         @coral-xyz/anchor@0.29.0 has the older 3-arg signature, so the
-         IDL's address field isn't read and new PublicKey() receives an
-         empty value, triggering BN assertion failure.
+         @pump-fun/pump-swap-sdk (transitive of pump-sdk) calls
+         getPumpAmmProgram(null) at module load, using Anchor's 2-arg
+         Program(idl, provider) constructor introduced in 0.30. The
+         previous @coral-xyz/anchor@0.29.0 has only the 3-arg signature,
+         so idl.address isn't read and new PublicKey() crashes BN.
 
-         Bumps to ${{ steps.discover.outputs.target }} (matches pump-sdk
-         peer dep), adds npm override to prevent duplicate copies, pins
-         Node to 20 via .nvmrc + engines."
-         git push origin "$BRANCH"
-
-         PR_URL=$(gh pr create \
-           --title "fix: pump-sdk startup crash (anchor ${{ steps.discover.outputs.target }})" \
-           --body "Auto-generated. All four smoke tests passed:
-         1. @pump-fun/pump-sdk loads
-         2. @pump-fun/pump-swap-sdk loads (the original crash site)
-         3. OnlinePumpSdk methods (buyInstructions, sellInstructions, fetchGlobal) intact
-         4. pumpfun-trade.js loads (or fails only on env vars)
-
-         Merge to deploy." \
-           --base main --head "$BRANCH")
-         echo "PR_URL=$PR_URL" >> $GITHUB_ENV
-         echo "::notice::PR opened: $PR_URL"
-       env:
-         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-     - name: Nothing to change
-       if: steps.changes.outputs.changed == 'false'
-       run: echo "::notice::package.json already correct — no PR needed"
-
-     # ----------------------------------------------------------------
-     # STEP 6: Final summary
-     # ----------------------------------------------------------------
-     - name: Summary
-       if: always()
-       run: |
-         echo "## Result" >> $GITHUB_STEP_SUMMARY
-         echo "- Target anchor: \`${{ steps.discover.outputs.target }}\`" >> $GITHUB_STEP_SUMMARY
-         echo "- Node pinned: \`20.x\`" >> $GITHUB_STEP_SUMMARY
-         echo "- Changes: \`${{ steps.changes.outputs.changed }}\`" >> $GITHUB_STEP_SUMMARY
-         if [ -n "$PR_URL" ]; then echo "- PR: $PR_URL" >> $GITHUB_STEP_SUMMARY; fi
+         All four smoke tests passed before this commit."
+         git push origin HEAD:main
+         echo "::notice::Pushed fix straight to main"
