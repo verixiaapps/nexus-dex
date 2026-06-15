@@ -1,7 +1,7 @@
 {
   "name": "nexus-dex",
   "version": "1.0.0",
-  "private": true, 
+  "private": true,
   "proxy": "http://localhost:3001",
   "dependencies": {
     "@chainflip/sdk": "2.1.1",
@@ -52,12 +52,13 @@
   "overrides": {
     "uuid": "9.0.1",
     "@noble/hashes": "1.5.0",
-    "@chainflip/utils": { "@noble/hashes": "^2.0.0" },
-    "@reown/appkit": { "@noble/hashes": "^2.0.0" },
-    "@reown/appkit-adapter-solana": { "@noble/hashes": "^2.0.0" },
-    "@walletconnect/universal-provider": { "@noble/hashes": "^2.0.0" },
-    "@walletconnect/modal": { "@noble/hashes": "^2.0.0" },
-    "@lifi/sdk": { "@noble/hashes": "^2.0.0" }
+    "viem": { "@noble/hashes": "1.5.0" },
+    "@chainflip/utils": { "@noble/hashes": "^2.0.0", "viem": { "@noble/hashes": "1.5.0" } },
+    "@reown/appkit": { "@noble/hashes": "^2.0.0", "viem": { "@noble/hashes": "1.5.0" } },
+    "@reown/appkit-adapter-solana": { "@noble/hashes": "^2.0.0", "viem": { "@noble/hashes": "1.5.0" } },
+    "@walletconnect/universal-provider": { "@noble/hashes": "^2.0.0", "viem": { "@noble/hashes": "1.5.0" } },
+    "@walletconnect/modal": { "@noble/hashes": "^2.0.0", "viem": { "@noble/hashes": "1.5.0" } },
+    "@lifi/sdk": { "@noble/hashes": "^2.0.0", "viem": { "@noble/hashes": "1.5.0" } }
   },
   "devDependencies": {
     "concurrently": "^8.2.0",
