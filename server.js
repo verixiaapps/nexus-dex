@@ -708,7 +708,7 @@ app.get('/api/dex/launches', async (req, res) => {
     }
     if (mints.length === 0) {
       const payload = { tokens: [] };
-      setCachedJson(cacheKey, 200, payload, 8_000);
+      setCachedJson(cacheKey, 200, payload, 3_000);
       return res.json(payload);
     }
 
@@ -738,7 +738,7 @@ app.get('/api/dex/launches', async (req, res) => {
     tokens.sort((a, b) => Number(b.pairCreatedAt || 0) - Number(a.pairCreatedAt || 0));
 
     const payload = { tokens };
-    setCachedJson(cacheKey, 200, payload, 8_000);
+    setCachedJson(cacheKey, 200, payload, 3_000);
     return res.json(payload);
   } catch (e) {
     if (e.name === 'AbortError') return res.status(504).json({ error: 'DexScreener launches timed out' });
@@ -766,7 +766,7 @@ app.get('/api/dex/token/:mint', async (req, res) => {
     const pairs = Array.isArray(data?.pairs) ? data.pairs : [];
     const shaped = _shapePumpToken(mint, pairs);
     const payload = { token: shaped, hasPumpPair: !!shaped };
-    setCachedJson(cacheKey, 200, payload, 5_000);
+    setCachedJson(cacheKey, 200, payload, 3_000);
     return res.json(payload);
   } catch (e) {
     if (e.name === 'AbortError') return res.status(504).json({ error: 'DexScreener token timed out' });
