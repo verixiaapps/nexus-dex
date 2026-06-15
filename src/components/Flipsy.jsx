@@ -190,7 +190,13 @@ const FLIPSY_CSS = `
 }
 .fp-card-previous{opacity:0.72}
 .fp-card-later{opacity:0.78}
-.fp-card-loading{width:100%;max-width:320px;margin:0 auto;min-height:200px;justify-content:center;align-items:center;text-align:center;color:var(--ink-2);font-size:13px;font-weight:500}
+.fp-card-loading{width:100%;max-width:320px;margin:0 auto;min-height:200px;justify-content:center;align-items:center;text-align:center;color:var(--ink-2);font-size:13px;font-weight:500;padding:24px}
+.fp-card-empty{width:100%;max-width:340px;margin:0 auto;min-height:200px;justify-content:center;align-items:center;text-align:center;padding:24px}
+.fp-card-empty-icon{font-size:28px;margin-bottom:10px;opacity:.7}
+.fp-card-empty-title{font-family:"Instrument Serif",serif;font-style:italic;font-size:20px;color:var(--ink);margin-bottom:6px;line-height:1.2}
+.fp-card-empty-msg{font-size:12px;color:var(--ink-2);font-weight:500;line-height:1.5;word-break:break-word}
+.fp-card-empty.err{border-color:rgba(209,75,106,.35);background:rgba(209,75,106,.04)}
+.fp-card-empty.err .fp-card-empty-msg{color:var(--red);font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:0.3px}
 
 /* LIVE CARD — signature treatment */
 .fp-card-live{
@@ -1174,6 +1180,7 @@ export default function Flipsy({ onConnectWallet }) {
     claim = async () => { throw new Error('Hook not ready'); },
     loading = true,
     programConfig = null,
+    chainError = null,
   } = hookData || {};
 
   const minBetUsd = programConfig && livePrice > 0
@@ -1202,6 +1209,10 @@ export default function Flipsy({ onConnectWallet }) {
   useEffect(() => {
     if (hookError) setFlash({ type: 'error', msg: `Hook crashed: ${hookError.message || 'see console'}` });
   }, [hookError]);
+
+  useEffect(() => {
+    if (chainError) setFlash({ type: 'error', msg: chainError });
+  }, [chainError]);
 
   useEffect(() => {
     if (!liveRound || loading) return;
@@ -1271,6 +1282,7 @@ export default function Flipsy({ onConnectWallet }) {
   }
 
   const liveEpoch = liveRound?.epoch ?? upcomingRounds[0]?.epoch ?? null;
+  const nothingToShow = !liveRound && upcomingRounds.length === 0 && recentRounds.length === 0;
 
   return (
     <div className="fp-page">
@@ -1331,8 +1343,22 @@ export default function Flipsy({ onConnectWallet }) {
         </div>
 
         <div className="fp-carousel" ref={carouselRef}>
-          {loading && !liveRound && (
+          {loading && nothingToShow && (
             <div className="fp-card fp-card-loading">Loading rounds…</div>
+          )}
+          {!loading && nothingToShow && chainError && (
+            <div className="fp-card fp-card-empty err">
+              <div className="fp-card-empty-icon">⚠️</div>
+              <div className="fp-card-empty-title">Couldn't load rounds</div>
+              <div className="fp-card-empty-msg">{chainError}</div>
+            </div>
+          )}
+          {!loading && nothingToShow && !chainError && (
+            <div className="fp-card fp-card-empty">
+              <div className="fp-card-empty-icon">⏳</div>
+              <div className="fp-card-empty-title">No active rounds</div>
+              <div className="fp-card-empty-msg">New rounds start automatically. Hang tight.</div>
+            </div>
           )}
           {[...recentRounds].reverse().map(r => (
             <RoundCard key={`prev-${r.epoch}`} round={r} state="previous"
