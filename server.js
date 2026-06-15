@@ -319,6 +319,72 @@ function _lrShape(mint, pairs, wsMeta) {
   };
 }
 
+/* ------------------------------------------------------------------------
+ * Pump.fun frontend-API enrichment — holders + on-curve liquidity.
+ *
+ * SOURCE: https://frontend-api.pump.fun/coins/{mint}  (undocumented, no key)
+ *
+ * CONTRACT-ADDRESS GATE: response is only trusted when its `mint` field
+ * EXACTLY equals the requested mint. Mismatch → discard, nothing written.
+ *
+ * Defensive about field names + failures. First response logs its key
+ * list so we can adjust if pump.fun changes the schema. If pump.fun is
+ * rate-limiting / Cloudflare-blocking the server IP, this silently
+ * leaves the token's existing DexScreener-derived values alone.
+ * ---------------------------------------------------------------------- */
+const _LR_PF_BASE     = 'https://frontend-api.pump.fun/coins';
+const _LR_PF_CACHE_MS = 30_000;
+const _lrPfCache  = new Map();    // mint → { holders, liquidityUsd, ts }
+let   _lrPfLogged = false;
+
+async function _lrFetchPumpInfo(mint, solPriceUsd) {
+  const hit = _lrPfCache.get(mint);
+  if (hit && Date.now() - hit.ts < _LR_PF_CACHE_MS) return hit;
+  try {
+    const r = await fetchWithTimeout(
+      _LR_PF_BASE + '/' + encodeURIComponent(mint),
+      { headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0' } },
+      6_000,
+    );
+    if (!r.ok) {
+      if (!_lrPfLogged) {
+        _lrPfLogged = true;
+        console.warn('[lr-pf] non-OK from pump.fun:', r.status, '(likely Cloudflare / rate limit)');
+      }
+      return null;
+    }
+    const d = await r.json();
+    // CONTRACT-ADDRESS GATE — only trust the response if it's for the mint we asked for.
+    if (!d || typeof d !== 'object' || d.mint !== mint) {
+      if (!_lrPfLogged) {
+        _lrPfLogged = true;
+        console.warn('[lr-pf] mint mismatch — expected', mint, 'got', d?.mint);
+      }
+      return null;
+    }
+    if (!_lrPfLogged) {
+      _lrPfLogged = true;
+      console.log('[lr-pf] sample fields:', Object.keys(d).join(','));
+    }
+    const holders = Number(d.holder_count ?? d.num_holders ?? d.holders ?? 0) || 0;
+    let liquidityUsd = 0;
+    const vSol = Number(d.virtual_sol_reserves ?? d.virtualSolReserves ?? 0);
+    if (vSol > 0 && solPriceUsd > 0) {
+      // Pump curve is single-sided; DexScreener-style "liquidity" doubles the SOL side.
+      liquidityUsd = (vSol / 1e9) * solPriceUsd * 2;
+    }
+    const out = { holders, liquidityUsd, ts: Date.now() };
+    _lrPfCache.set(mint, out);
+    return out;
+  } catch (e) {
+    if (!_lrPfLogged) {
+      _lrPfLogged = true;
+      console.warn('[lr-pf] fetch failed:', e?.message);
+    }
+    return null;
+  }
+}
+
 app.get('/api/dex/launches', async (req, res) => {
   try {
     const cacheKey = 'lr:launches';
@@ -364,6 +430,17 @@ app.get('/api/dex/launches', async (req, res) => {
     // Final newest-first sort by DexScreener pairCreatedAt (falls back to
     // WS arrival via _lrShape's pairCreatedAt assignment).
     tokens.sort((a, b) => Number(b.pairCreatedAt || 0) - Number(a.pairCreatedAt || 0));
+
+    // Pump.fun enrichment: holders + on-curve liquidity (strict mint match).
+    // Runs in parallel for all tokens. Per-mint 30s cache keeps load low.
+    // Fails silently if pump.fun is unreachable — DexScreener values remain.
+    const _solP = await fetchSolPriceUsd().catch(() => 0);
+    await Promise.all(tokens.map(async (t) => {
+      const pf = await _lrFetchPumpInfo(t.mint, _solP);
+      if (!pf) return;
+      t.holders = pf.holders;
+      if (!(t.liquidity > 0) && pf.liquidityUsd > 0) t.liquidity = pf.liquidityUsd;
+    }));
 
     const payload = { tokens, wsConnected: !!_lrWsConnectedAt, bufferSize: _lrBuf.size };
     setCachedJson(cacheKey, 200, payload, _LR_CACHE_MS);
