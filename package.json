@@ -7,7 +7,7 @@
     "@chainflip/sdk": "2.1.1",
     "@coral-xyz/anchor": "0.29.0",
     "@lifi/sdk": "^3.16.3",
-    "@noble/hashes": "1.5.0",
+    "@noble/hashes": "^2.0.0",
     "@pump-fun/pump-sdk": "^1.35.0",
     "@reown/appkit": "^1.8.20",
     "@reown/appkit-adapter-solana": "^1.8.20",
@@ -52,13 +52,7 @@
   },
   "overrides": {
     "uuid": "9.0.1",
-    "@noble/hashes": "1.5.0",
-    "@chainflip/sdk": {
-      "@noble/hashes": "2.0.1"
-    },
-    "@chainflip/utils": {
-      "@noble/hashes": "2.0.1"
-    }
+    "@noble/hashes": "^2.0.0"
   },
   "devDependencies": {
     "concurrently": "^8.2.0",
