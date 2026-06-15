@@ -58,7 +58,7 @@ jobs:
          fi
 
      - name: Smoke 1 - chainflip loads
-       run: node -e "require('@chainflip/utils/dist/ss58.cjs'); console.log('OK');"
+       run: node -e "require('@chainflip/sdk/swap'); console.log('OK');"
 
      - name: Smoke 2 - pump-sdk loads
        run: node -e "require('@pump-fun/pump-sdk'); console.log('OK');"
