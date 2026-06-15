@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useFlipsy } from '../hooks/useFlipsy';
- 
+  
 // ============================================================
 // INLINE CSS — Wonderland with Solana-tinted accents · injected once
 // ============================================================
