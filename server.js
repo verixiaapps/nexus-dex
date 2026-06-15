@@ -620,12 +620,9 @@ app.get('/api/health', (req, res) => {
 });
 
 /* ========================================================================
- * Launch Radar — DexScreener data + PumpPortal trades (NEW SECTION)
+ * Launch Radar — DexScreener data + PumpPortal trades
  * ─────────────────────────────────────────────────────────────────────────
- * Self-contained Launch Radar backend. Replaces ./pumpfun-trade.js — the
- * routes here register BEFORE the `require('./pumpfun-trade')...` line
- * further down, so this version wins (Express first-match-wins). After
- * adopting this, delete pumpfun-trade.js and the require line below.
+ * Self-contained Launch Radar backend.
  *
  *   GET  /api/dex/launches      — latest pump.fun / PumpSwap launches
  *   GET  /api/dex/token/:mint   — one token, shaped + hasPumpPair flag
@@ -637,9 +634,6 @@ app.get('/api/health', (req, res) => {
  * Contract gate: launches + token endpoints only return mints with at
  * least one pair on dexId "pumpfun" or "pumpswap". Anything in the UI
  * is guaranteed tradable via PumpPortal's pool="auto" routing.
- *
- * Re-uses existing helpers: fetchWithTimeout, safeJson, respondJsonOrError,
- * getCachedJson, setCachedJson, logError. AbortError → 504 like the rest.
  * ===================================================================== */
 const DEX_BASE          = 'https://api.dexscreener.com';
 const PUMPPORTAL_URL    = 'https://pumpportal.fun/api/trade-local';
@@ -885,13 +879,6 @@ app.post('/api/pumpfun/trade', async (req, res) => {
     return res.status(500).json({ error: e.message || 'Unknown error' });
   }
 });
-
-/* ========================================================================
- * Launch Radar — pump.fun bonding-curve trades
- * Builds buy/sell instructions server-side via @pump-fun/pump-sdk.
- * Mounted BEFORE the /api/* catch-all so the route resolves.
- * ===================================================================== */
-require('./pumpfun-trade').mountRoutes(app);
 
 /* ========================================================================
  * Launch Radar — Jupiter Ultra V3 proxy (Iris router; pre-grad bonding curves)
