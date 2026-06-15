@@ -506,7 +506,7 @@ function normalize(t) {
     ageMs:     am,
     mcap:      Number(t.mcap || t.fdv || 0),
     volume24h: Number(t.volume24h || 0),
-    holders:   0, // DexScreener doesn't expose this directly
+    holders:   Number(t.holders || 0),
     liquidity: Number(t.liquidity || 0),
     decimals:  Number(t.decimals ?? 6),
     pumpPool:  t.pumpPool || 'auto',
