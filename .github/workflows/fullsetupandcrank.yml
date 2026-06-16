@@ -16,18 +16,15 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-
       - name: Install deps
         run: npm install --no-audit --no-fund
-
       - name: Run crank (smoke test)
         env:
           CRANK_KEYPAIR: ${{ github.event.inputs.crank_keypair }}
-          RPC_URL: https://solana-devnet.drpc.org
+          RPC_URL: https://api.devnet.solana.com
         run: |
           timeout 480 npx tsx crank/crank.ts || code=$?
           if [ "$code" = "124" ]; then
