@@ -4,7 +4,6 @@ console.log("Node:", process.version);
 import * as anchor from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import * as bs58module from "bs58";
-import idl from "./flipsy-idl.json";
 
 const bs58: any = (bs58module as any).default || bs58module;
 
@@ -92,7 +91,11 @@ async function main() {
   const provider = new anchor.AnchorProvider(connection, wallet, { commitment: "confirmed" });
   anchor.setProvider(provider);
 
-  if (!(idl as any).address) (idl as any).address = PROGRAM_ID.toBase58();
+  console.log("[crank] Fetching IDL from chain...");
+  const idl = await anchor.Program.fetchIdl(PROGRAM_ID, provider);
+  if (!idl) throw new Error("No IDL on chain for " + PROGRAM_ID.toBase58() + " — was `anchor idl init` ever run?");
+  console.log("[crank] IDL fetched.");
+
   const program = new anchor.Program(idl as any, provider);
 
   const [configPda] = PublicKey.findProgramAddressSync([Buffer.from("config")], PROGRAM_ID);
