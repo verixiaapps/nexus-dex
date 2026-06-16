@@ -334,7 +334,7 @@ function _lrShape(mint, pairs, wsMeta) {
  * ---------------------------------------------------------------------- */
 const _LR_PF_BASE     = 'https://frontend-api.pump.fun/coins';
 const _LR_PF_CACHE_MS = 30_000;
-const _lrPfCache  = new Map();    // mint → { holders, liquidityUsd, ts }
+const _lrPfCache  = new Map();    // mint → { holders, liquidityUsd, imageUrl, ts }
 let   _lrPfLogged = false;
 
 async function _lrFetchPumpInfo(mint, solPriceUsd) {
@@ -367,19 +367,78 @@ async function _lrFetchPumpInfo(mint, solPriceUsd) {
       console.log('[lr-pf] sample fields:', Object.keys(d).join(','));
     }
     const holders = Number(d.holder_count ?? d.num_holders ?? d.holders ?? 0) || 0;
+    // ── IMAGE: pump.fun returns the CDN-hosted image directly. Strict mint
+    //    gate above already guarantees this image belongs to this mint.
+    const imageUrl = (typeof d.image_uri === 'string' && d.image_uri) ||
+                     (typeof d.image     === 'string' && d.image)     || null;
     let liquidityUsd = 0;
     const vSol = Number(d.virtual_sol_reserves ?? d.virtualSolReserves ?? 0);
     if (vSol > 0 && solPriceUsd > 0) {
       // Pump curve is single-sided; DexScreener-style "liquidity" doubles the SOL side.
       liquidityUsd = (vSol / 1e9) * solPriceUsd * 2;
     }
-    const out = { holders, liquidityUsd, ts: Date.now() };
+    const out = { holders, liquidityUsd, imageUrl, ts: Date.now() };
     _lrPfCache.set(mint, out);
     return out;
   } catch (e) {
     if (!_lrPfLogged) {
       _lrPfLogged = true;
       console.warn('[lr-pf] fetch failed:', e?.message);
+    }
+    return null;
+  }
+}
+
+/* ------------------------------------------------------------------------
+ * Metaplex / pump.fun off-chain JSON metadata — image fallback only.
+ *
+ * SOURCE: the `uri` field stored verbatim in _lrBuf at WS arrival. Typically
+ * an Arweave / IPFS gateway URL of a Metaplex-style JSON document:
+ *     { name, symbol, description, image, ... }
+ *
+ * CONTRACT-ADDRESS GATE: the uri itself is keyed under the canonical mint
+ * in _lrBuf — never re-derived, never substituted. A wrong uri would just
+ * yield an image for a different token, which is no worse than a missing
+ * image; we never use the URI for trading or balance lookups.
+ *
+ * Read-only. Cached per uri (NOT per mint, so we don't re-hit the same
+ * Arweave URL many times). Failures are silent — DexScreener / pump.fun
+ * icon paths remain authoritative.
+ * ---------------------------------------------------------------------- */
+const _LR_META_CACHE_MS = 5 * 60_000;
+const _lrMetaCache = new Map();      // uri → { image, ts }
+let   _lrMetaLogged = false;
+
+async function _lrFetchMetaImage(uri) {
+  if (!uri || typeof uri !== 'string') return null;
+  if (!/^https?:\/\//i.test(uri)) return null;            // ignore data:, ipfs://, etc.
+  const hit = _lrMetaCache.get(uri);
+  if (hit && Date.now() - hit.ts < _LR_META_CACHE_MS) return hit.image;
+  try {
+    const r = await fetchWithTimeout(
+      uri,
+      { headers: { Accept: 'application/json' } },
+      5_000,
+    );
+    if (!r.ok) {
+      _lrMetaCache.set(uri, { image: null, ts: Date.now() });
+      return null;
+    }
+    const d = await r.json();
+    const image = (typeof d?.image     === 'string' && d.image)     ||
+                  (typeof d?.image_url === 'string' && d.image_url) ||
+                  (typeof d?.imageUrl  === 'string' && d.imageUrl)  || null;
+    _lrMetaCache.set(uri, { image, ts: Date.now() });
+    if (!_lrMetaLogged && image) {
+      _lrMetaLogged = true;
+      console.log('[lr-meta] image fallback live');
+    }
+    return image;
+  } catch (e) {
+    _lrMetaCache.set(uri, { image: null, ts: Date.now() });
+    if (!_lrMetaLogged) {
+      _lrMetaLogged = true;
+      console.warn('[lr-meta] fetch failed:', e?.message);
     }
     return null;
   }
@@ -431,15 +490,26 @@ app.get('/api/dex/launches', async (req, res) => {
     // WS arrival via _lrShape's pairCreatedAt assignment).
     tokens.sort((a, b) => Number(b.pairCreatedAt || 0) - Number(a.pairCreatedAt || 0));
 
-    // Pump.fun enrichment: holders + on-curve liquidity (strict mint match).
-    // Runs in parallel for all tokens. Per-mint 30s cache keeps load low.
-    // Fails silently if pump.fun is unreachable — DexScreener values remain.
+    // Enrichment — holders, on-curve liquidity, and token image.
+    //   1. Pump.fun frontend API   (holders + liquidity + image, strict mint match)
+    //   2. Metaplex JSON via WS uri (image only, fresh-token fallback)
+    // Runs in parallel for all tokens. Per-source caches keep load low.
+    // Fails silently if a source is unreachable — DexScreener values remain.
     const _solP = await fetchSolPriceUsd().catch(() => 0);
     await Promise.all(tokens.map(async (t) => {
       const pf = await _lrFetchPumpInfo(t.mint, _solP);
-      if (!pf) return;
-      t.holders = pf.holders;
-      if (!(t.liquidity > 0) && pf.liquidityUsd > 0) t.liquidity = pf.liquidityUsd;
+      if (pf) {
+        t.holders = pf.holders;
+        if (!(t.liquidity > 0) && pf.liquidityUsd > 0) t.liquidity = pf.liquidityUsd;
+        if (!t.icon && pf.imageUrl)                    t.icon      = pf.imageUrl;
+      }
+      // Deeper image fallback — the WS-stored uri is keyed on the VERBATIM mint,
+      // so this can never bleed across tokens. Image is the only field consumed.
+      if (!t.icon) {
+        const wsMeta = _lrBuf.get(t.mint);
+        const img    = wsMeta?.uri ? await _lrFetchMetaImage(wsMeta.uri) : null;
+        if (img) t.icon = img;
+      }
     }));
 
     const payload = { tokens, wsConnected: !!_lrWsConnectedAt, bufferSize: _lrBuf.size };
