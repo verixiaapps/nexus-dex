@@ -124,7 +124,7 @@ export function useFlipsy(wallet) {
         connection, dummyWallet,
         { commitment: 'confirmed', preflightCommitment: 'confirmed' },
       );
-      return new anchor.Program(idl, PROGRAM_ID, provider);
+      return new anchor.Program(idl, provider);
     } catch (e) {
       console.error('[flipsy] readProgram init failed:', e);
       queueMicrotask(() => setChainError(`IDL load failed: ${e?.message || e}`));
@@ -149,7 +149,7 @@ export function useFlipsy(wallet) {
         connection, wrappedWallet,
         { commitment: 'confirmed', preflightCommitment: 'confirmed' },
       );
-      return new anchor.Program(idl, PROGRAM_ID, provider);
+      return new anchor.Program(idl, provider);
     } catch (e) {
       console.error('[flipsy] writeProgram init failed:', e);
       queueMicrotask(() => setChainError(`Wallet init failed: ${e?.message || e}`));
