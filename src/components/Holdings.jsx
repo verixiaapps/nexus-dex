@@ -6,6 +6,12 @@
 //   • pumpfun route  → from LaunchRadar.jsx executeSwap
 //
 // SOL row "Swap" → SOL → USDC via jupiter route (mode forced to 'sell').
+//
+// ENDPOINTS: every quote/build/trade call matches the working files exactly
+// (/api/jupiter/build, /api/jupiter/quote, /api/jupiter/swap-instructions,
+//  /api/pumpfun/trade, /api/jupiter/tokens/search, lite-api.jup.ag price).
+// Execution RPC routes through the SAME /api/solana-rpc proxy the working
+// Stocks swap flow uses — NOT a public endpoint that rate-limits send/simulate.
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Buffer } from 'buffer';
@@ -104,6 +110,11 @@ const HP_CSS = `
 .hp-bal-label{font-size:10px;color:var(--ink-2);font-weight:700;letter-spacing:1.8px;margin-bottom:6px;position:relative;z-index:2}
 .hp-bal-value{font-family:"Instrument Serif",serif;font-size:48px;font-weight:400;line-height:0.95;letter-spacing:-.025em;color:var(--ink);margin-bottom:4px;font-variant-numeric:tabular-nums;position:relative;z-index:2}
 .hp-bal-sub{font-size:11px;color:var(--ink-2);font-weight:600;letter-spacing:.4px;position:relative;z-index:2}
+
+.hp-search-wrap{margin:14px 22px 0;position:relative;z-index:2}
+.hp-search{width:100%;padding:13px 16px;border-radius:16px;background:var(--glass-strong);border:1.5px solid var(--border);color:var(--ink);font-family:"Space Grotesk",sans-serif;font-size:14px;font-weight:500;outline:none;transition:border-color .15s,box-shadow .15s}
+.hp-search:focus{border-color:var(--lav);box-shadow:0 0 0 4px rgba(183,148,246,.10)}
+.hp-search::placeholder{color:var(--ink-3)}
 
 .hp-sort-head{display:flex;justify-content:space-between;align-items:center;padding:24px 26px 12px;position:relative;z-index:2}
 .hp-sort-label{font-size:10px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;background:linear-gradient(90deg,#FF8FBE,#B794F6);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
@@ -255,11 +266,14 @@ const ATA_PROGRAM_ID         = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25ef
 // Pump.fun route (LaunchRadar)
 const SOL_RESERVE = 0.01;
 
+// Execution RPC — same /api/solana-rpc proxy the working Stocks swap flow uses.
+// Keeps the original env-var precedence; only the final fallback changes from a
+// public endpoint (rate-limits simulate/send in-browser) to the proven proxy.
 const RPC_URL =
   (typeof process !== 'undefined' && process.env && process.env.REACT_APP_SOLANA_RPC) ||
   ((typeof process !== 'undefined' && process.env && process.env.REACT_APP_HELIUS_API_KEY)
     ? 'https://mainnet.helius-rpc.com/?api-key=' + encodeURIComponent(process.env.REACT_APP_HELIUS_API_KEY)
-    : 'https://api.mainnet-beta.solana.com');
+    : ((typeof window !== 'undefined' ? window.location.origin : '') + '/api/solana-rpc'));
 
 const BRAND_TOKENS = {
   'XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB': { isBrand: true },
@@ -774,11 +788,15 @@ function TradeDrawer({
   solBalance,
   tokenBalance,
   solPrice,
+  publicKey,
+  signTransaction,
+  connected,
   onClose,
   onConnectWallet,
   onTradeComplete,
 }) {
-  const { publicKey, signTransaction, connected } = useWallet();
+  // Wallet is passed in from the page (Holdings) so there is a single wallet
+  // source — no second useWallet() here that could disagree with the page.
   const connection = useMemo(() => new Connection(RPC_URL, 'confirmed'), []);
 
   const isSol = token.mint === SOL_MINT;
@@ -1648,12 +1666,15 @@ export default function Holdings({ onConnectWallet }) {
   useHpCSS();
 
   const { isConnected, walletAddress } = useNexusWallet();
+  // Single signing wallet for the whole page; passed down to TradeDrawer.
+  const { publicKey, signTransaction, connected } = useWallet();
 
   const [portfolio, setPortfolio]   = useState(null);
   const [loading, setLoading]       = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError]           = useState('');
   const [sortBy, setSortBy]         = useState('value');
+  const [query, setQuery]           = useState('');
   const [drawer, setDrawer]         = useState(null);
   const [seenMap, setSeenMap]       = useState({});
   const inFlightRef = useRef(false);
@@ -1808,6 +1829,24 @@ export default function Holdings({ onConnectWallet }) {
     return tokens.find(t => t.mint === mint) || null;
   };
 
+  // SEARCH — by symbol, name (case-insensitive) or contract address (mint,
+  // base58 is case-sensitive, so match the raw query exactly or as a prefix,
+  // same anchored pattern the working TokenPicker uses).
+  const qRaw = query.trim();
+  const q    = qRaw.toLowerCase();
+  const matchHolding = (t) => {
+    if (!qRaw) return true;
+    if (t.mint && (t.mint === qRaw || t.mint.startsWith(qRaw))) return true;
+    const m = t.meta || {};
+    return (
+      (m.symbol || '').toLowerCase().includes(q) ||
+      (m.name   || '').toLowerCase().includes(q)
+    );
+  };
+  const showSol       = matchHolding(solHolding);
+  const visibleTokens = tokens.filter(matchHolding);
+  const noMatches     = !showSol && visibleTokens.length === 0;
+
   return (
     <div className="hp-root">
       <div className="hp-blob" style={{ width: 380, height: 380, background: '#FF8FBE', top: -80, left: -120 }}/>
@@ -1822,6 +1861,17 @@ export default function Holdings({ onConnectWallet }) {
               wallet<span className="slash">//</span><span className="grad">holdings</span>
             </span>
           </div>
+        </div>
+
+        <div className="hp-search-wrap">
+          <input
+            className="hp-search"
+            type="text"
+            inputMode="search"
+            placeholder="Search name, symbol, or contract address"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
         </div>
 
         <div className="hp-balance-card">
@@ -1863,18 +1913,27 @@ export default function Holdings({ onConnectWallet }) {
         {error && (<div className="hp-error">{error}</div>)}
 
         <div className="hp-list">
-          <HoldingRow
-            token={solHolding}
-            idx={0}
-            onBuy={openBuy}
-            onSell={openSell}
-          />
-          {tokens.length === 0 ? (
+          {showSol && (
+            <HoldingRow
+              token={solHolding}
+              idx={0}
+              onBuy={openBuy}
+              onSell={openSell}
+            />
+          )}
+          {!qRaw && tokens.length === 0 && (
             <div className="hp-empty">
               <div className="hp-empty-title">No other holdings yet.</div>
               <div className="hp-empty-sub">Tokens under ${MIN_TOKEN_VALUE_USD} are hidden.</div>
             </div>
-          ) : tokens.map((t, i) => (
+          )}
+          {qRaw && noMatches && (
+            <div className="hp-empty">
+              <div className="hp-empty-title">No matches.</div>
+              <div className="hp-empty-sub">Try a different name, symbol, or contract address.</div>
+            </div>
+          )}
+          {visibleTokens.map((t, i) => (
             <HoldingRow
               key={t.mint}
               token={t}
@@ -1900,6 +1959,9 @@ export default function Holdings({ onConnectWallet }) {
           solBalance={solBalance}
           tokenBalance={tokenBalanceFor(drawer.token.mint)}
           solPrice={solPriceUsd}
+          publicKey={publicKey}
+          signTransaction={signTransaction}
+          connected={connected}
           onClose={closeDrawer}
           onConnectWallet={onConnectWallet}
           onTradeComplete={() => { handleRefresh(); }}
