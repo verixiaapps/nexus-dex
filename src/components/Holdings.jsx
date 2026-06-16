@@ -292,8 +292,17 @@ function getTokenRoute(token) {
   if (!token?.mint) return 'jupiter';
   if (BRAND_TOKENS[token.mint]) return 'xstock';
   if (isPumpFunMint(token.mint)) return 'pumpfun';
+  // No Jupiter price → almost certainly an ungraduated pump.fun bonding-curve
+  // token whose mint doesn't end in "pump". Route through PumpPortal.
+  if (token.hasPrice === false) return 'pumpfun';
   return 'jupiter';
 }
+
+// Known logos for SOL + USDC (Jupiter's token-list mirrors).
+const KNOWN_ICONS = {
+  [SOL_MINT]:    'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png',
+  [USDC_SOLANA]: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png',
+};
 
 // =====================================================================
 // UTILS
@@ -664,6 +673,51 @@ function deserializeJupInstructionX(ix) {
   });
 }
 
+// Renders a token icon for a given mint. Resolves SOL/USDC to known logos,
+// uses token meta for others, falls back to a colored letter badge.
+function MintIcon({ mint, meta, size = 22 }) {
+  const [errored, setErrored] = useState(false);
+  useEffect(() => { setErrored(false); }, [mint]);
+
+  const url = KNOWN_ICONS[mint] || meta?.icon || null;
+  const radius = Math.round(size * 0.5);
+
+  if (url && !errored) {
+    return (
+      <img
+        src={url}
+        alt=""
+        onError={() => setErrored(true)}
+        style={{
+          width: size, height: size, borderRadius: radius,
+          objectFit: 'cover', flexShrink: 0,
+          background: 'rgba(255,255,255,.5)',
+        }}
+      />
+    );
+  }
+  const sym = mint === SOL_MINT ? 'S'
+            : mint === USDC_SOLANA ? '$'
+            : ((meta?.symbol || '?').replace(/x$/, '').charAt(0) || '?').toUpperCase();
+  const bg = mint === SOL_MINT
+    ? 'linear-gradient(135deg,#B794F6,#7FFFD4)'
+    : mint === USDC_SOLANA
+      ? 'linear-gradient(135deg,#2775CA,#A0E7FF)'
+      : (() => {
+          const c = meta?.color || colorFromMint(mint);
+          return `linear-gradient(135deg, ${c}, ${c}cc)`;
+        })();
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: radius,
+      flexShrink: 0, display: 'grid', placeItems: 'center',
+      background: bg, color: '#fff',
+      fontFamily: '"Instrument Serif", serif',
+      fontSize: Math.round(size * 0.55), lineHeight: 1,
+    }}>{sym}</div>
+  );
+}
+
 // =====================================================================
 // HOLDING ROW
 // =====================================================================
@@ -675,31 +729,13 @@ function HoldingRow({ token, onBuy, onSell, idx }) {
   const isStable = !!meta.isStable;
   const isPump   = !!meta.isPump;
   const hasPrice = !!token.hasPrice || isSol;
-  const [iconErrored, setIconErrored] = useState(false);
-  const showImg = meta.icon && !iconErrored;
-  const letter  = ((meta.symbol || '?').replace(/x$/, '').charAt(0) || '?').toUpperCase();
-  const bgColor = meta.color || colorFromMint(token.mint);
-
-  const solGradient = 'linear-gradient(135deg,#B794F6,#9D7BE0)';
-  const badgeStyle = isSol
-    ? { background: solGradient, boxShadow: '0 4px 12px rgba(183,148,246,.35)' }
-    : { background: `linear-gradient(135deg, ${bgColor}, ${bgColor}cc)`, boxShadow: `0 4px 12px ${bgColor}33` };
 
   return (
     <div
       className={'hp-row' + (isSol ? ' hp-row-sol' : '')}
       style={{ animationDelay: (idx * 0.03) + 's' }}
     >
-      {showImg ? (
-        <img
-          src={meta.icon}
-          alt={meta.symbol || ''}
-          className="hp-h-badge-img"
-          onError={() => setIconErrored(true)}
-        />
-      ) : (
-        <div className="hp-h-badge" style={badgeStyle}>{letter}</div>
-      )}
+      <MintIcon mint={token.mint} meta={meta} size={42} />
       <div className="hp-h-mid">
         <div className="hp-h-head">
           <span className="hp-h-sym">{meta.symbol}</span>
@@ -1396,9 +1432,6 @@ function TradeDrawer({
 
   // Visual
   const meta = tokenMeta;
-  const letter = ((meta.symbol || '?').replace(/x$/, '').charAt(0) || '?').toUpperCase();
-  const bgColor = meta.color || colorFromMint(token.mint);
-  const showImg = !!meta.icon;
 
   const routeBadge = isXstock ? { label: 'xSTOCK', cls: 'hp-route-xstock' }
                   : isPump    ? { label: 'PUMP.FUN', cls: 'hp-route-pump' }
@@ -1416,16 +1449,7 @@ function TradeDrawer({
         <div className="hp-grabber" />
 
         <div className="hp-sheet-head">
-          {showImg ? (
-            <img src={meta.icon} alt="" className="hp-sheet-badge-img"
-              onError={(e) => { e.target.style.display = 'none'; }} />
-          ) : (
-            <div className="hp-sheet-badge" style={{
-              background: isSol
-                ? 'linear-gradient(135deg,#B794F6,#9D7BE0)'
-                : `linear-gradient(135deg, ${bgColor}, ${bgColor}cc)`,
-            }}>{letter}</div>
-          )}
+          <MintIcon mint={token.mint} meta={meta} size={46} />
           <div className="hp-sheet-title-wrap">
             <div className="hp-sheet-title">{meta.symbol}</div>
             <div className="hp-sheet-sub">
@@ -1476,7 +1500,9 @@ function TradeDrawer({
 
           <div className="hp-amount-wrap">
             <div className="hp-amount-chip">
-              <div className="hp-amount-chip-icon" />
+              {isPump && mode === 'sell'
+                ? <div className="hp-amount-chip-icon" />
+                : <MintIcon mint={inputMint} meta={tokenMeta} size={22} />}
               {inputChipLabel}
             </div>
             <input
