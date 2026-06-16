@@ -254,6 +254,24 @@ function _lrAddMint(msg) {
     _lrBuf.delete(oldestKey);
     _lrTradeStats.delete(oldestKey);
   }
+  // Seed _lrTradeStats from the create event itself so LIQ + HOLDERS render
+  // at t=0 — before any organic trade arrives. vSolInBondingCurve is the
+  // bonding curve's initial virtual SOL reserve (SOL units, not lamports);
+  // traderPublicKey on a 'create' frame is the dev wallet.
+  // Safe to .set() unconditionally: this mint just passed the _lrBuf.has()
+  // dedupe gate above, so _lrTradeStats can't already hold an entry for it
+  // (_lrTrackTrade requires _lrBuf.has(mint), which only becomes true on the
+  // _lrBuf.set above — single-threaded, no race).
+  const initVSol = Number(msg.vSolInBondingCurve);
+  const creator  = msg.traderPublicKey;
+  const hasVSol  = Number.isFinite(initVSol) && initVSol > 0;
+  const hasDev   = typeof creator === 'string' && _LR_BASE58_RE.test(creator);
+  if (hasVSol || hasDev) {
+    const s = { traders: new Set(), vSol: 0, lastUpdate: Date.now() };
+    if (hasVSol) s.vSol = initVSol;
+    if (hasDev)  s.traders.add(creator);
+    _lrTradeStats.set(mint, s);
+  }
   // Subscribe to trade events for this newly-tracked mint so we can fill
   // holders + on-curve liquidity even when pump.fun's frontend API is down.
   _lrSubTrades([mint]);
