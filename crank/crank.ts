@@ -91,6 +91,8 @@ async function main() {
   const wallet = new anchor.Wallet(cranker);
   const provider = new anchor.AnchorProvider(connection, wallet, { commitment: "confirmed" });
   anchor.setProvider(provider);
+
+  if (!(idl as any).address) (idl as any).address = PROGRAM_ID.toBase58();
   const program = new anchor.Program(idl as any, provider);
 
   const [configPda] = PublicKey.findProgramAddressSync([Buffer.from("config")], PROGRAM_ID);
