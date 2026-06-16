@@ -2,9 +2,11 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import * as anchor from '@coral-xyz/anchor';
 import { Connection, PublicKey, SystemProgram } from '@solana/web3.js';
 import idl from '../idl/flipsy.json';
-   
+
 const PROGRAM_ID = new PublicKey('71bEAUToad7j8k8As9LwsGWBYTLxVJoP2SBNB3S3RLHs');
-const FLIPSY_RPC = 'https://api.devnet.solana.com';
+const FLIPSY_RPC =
+  process.env.REACT_APP_ALCHEMY_SOLANA_RPC ||
+  'https://api.devnet.solana.com';
 const PRICE_URL = 'https://api.coinbase.com/v2/prices/SOL-USD/spot';
 const POLL_PRICE_MS = 2_500;
 const POLL_CHAIN_MS = 5_000;
@@ -122,7 +124,7 @@ export function useFlipsy(wallet) {
         connection, dummyWallet,
         { commitment: 'confirmed', preflightCommitment: 'confirmed' },
       );
-      return new anchor.Program(idl, provider);
+      return new anchor.Program(idl, PROGRAM_ID, provider);
     } catch (e) {
       console.error('[flipsy] readProgram init failed:', e);
       queueMicrotask(() => setChainError(`IDL load failed: ${e?.message || e}`));
@@ -147,7 +149,7 @@ export function useFlipsy(wallet) {
         connection, wrappedWallet,
         { commitment: 'confirmed', preflightCommitment: 'confirmed' },
       );
-      return new anchor.Program(idl, provider);
+      return new anchor.Program(idl, PROGRAM_ID, provider);
     } catch (e) {
       console.error('[flipsy] writeProgram init failed:', e);
       queueMicrotask(() => setChainError(`Wallet init failed: ${e?.message || e}`));
