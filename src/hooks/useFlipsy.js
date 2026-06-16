@@ -15,6 +15,8 @@ const DEFAULT_GAP_DURATION = 30;
 const DEFAULT_CLAIM_FORFEIT_DELAY = 21_600;
 const RECENT_ROUNDS_COUNT = 10;
 
+if (!idl.address) idl.address = PROGRAM_ID.toBase58();
+
 const u64Buf = (n) => new anchor.BN(n).toArrayLike(Buffer, 'le', 8);
 const findConfigPda = () =>
   PublicKey.findProgramAddressSync([Buffer.from('config')], PROGRAM_ID)[0];
