@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "@chainflip/sdk": "^2.1.1",
-    "@coral-xyz/anchor": "^0.32.1",
+    "@coral-xyz/anchor": "0.29.0",
     "@pump-fun/pump-sdk": "^1.35.0",
     "@reown/appkit": "^1.8.20",
     "@reown/appkit-adapter-solana": "^1.8.20",
@@ -66,8 +66,14 @@
     "dev": "concurrently \"react-app-rewired start\" \"node server.js\""
   },
   "browserslist": {
-    "production": [">0.2%", "not dead", "not op_mini all"],
-    "development": ["last 1 chrome version"]
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version"
+    ]
   },
   "engines": {
     "node": ">=22.12"
