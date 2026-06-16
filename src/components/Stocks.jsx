@@ -202,6 +202,13 @@ body.nexus-scroll-locked{overflow:hidden}
 .st-badge.st-sec-crypto{background:linear-gradient(135deg,#FF8FBE,#B794F6)}
 .st-badge.st-sec-index{background:linear-gradient(135deg,#FFD46B,#FFB088);color:var(--ink)}
 
+/* Real Jupiter token icon — drop-in replacement for .st-badge */
+.st-badge-img{
+  flex-shrink:0;object-fit:cover;
+  background:#fff;
+  box-shadow:0 4px 12px rgba(26,27,78,.10);
+}
+
 /* FOOTER */
 .st-foot{
   display:flex;align-items:center;justify-content:center;gap:9px;
@@ -581,6 +588,33 @@ async function fetchBrandPrices(mints) {
   }
 }
 
+// Brand icons via Jupiter token search — mirrors Holdings.jsx pattern.
+// Same /api/jupiter/tokens/search?query=<mints> endpoint as elsewhere.
+async function fetchBrandIcons(mints) {
+  if (!mints.length) return {};
+  try {
+    const r = await fetchWithTimeout(
+      `/api/jupiter/tokens/search?query=${encodeURIComponent(mints.join(','))}`,
+      { headers: { Accept: 'application/json' } },
+      8_000,
+    );
+    if (!r.ok) return {};
+    const data = await r.json();
+    const arr = Array.isArray(data) ? data : (data?.tokens || []);
+    const out = {};
+    for (const t of arr) {
+      const id = t?.id || t?.address;
+      if (!id) continue;
+      const url = t.icon || t.logoURI || null;
+      if (url) out[id] = url;
+    }
+    return out;
+  } catch (e) {
+    console.warn('[brand icons]', e?.message || e);
+    return {};
+  }
+}
+
 // ───────────────── JUPITER ROUTING — UNCHANGED ─────────────────
 async function getJupiterQuote({ inputMint, outputMint, amountAtomic, slippageBps }) {
   const params = new URLSearchParams({
@@ -850,27 +884,46 @@ function useStocksCSS() {
 // =====================================================================
 // SUB-COMPONENTS
 // =====================================================================
-function BrandBadge({ brand, size = 42 }) {
+// BrandBadge now accepts an optional `icon` (Jupiter token icon URL). If
+// provided, we render the real image and fall back to the sector-letter
+// gradient on load error. Same shape & size in both modes.
+function BrandBadge({ brand, icon, size = 42 }) {
   const letter = (brand.ticker || brand.symbol || '?').charAt(0).toUpperCase();
   const fontSize = Math.round(size * 0.52);
+  const radius   = Math.round(size * 0.31);
+  const [errored, setErrored] = useState(false);
+  // Reset error when the icon URL changes (different brand opened).
+  useEffect(() => { setErrored(false); }, [icon]);
+
+  if (icon && !errored) {
+    return (
+      <img
+        src={icon}
+        alt={brand.symbol || ''}
+        onError={() => setErrored(true)}
+        className="st-badge-img"
+        style={{ width: size, height: size, borderRadius: radius }}
+      />
+    );
+  }
   return (
     <div
       className={'st-badge ' + sectorClass(brand.sector)}
-      style={{ width: size, height: size, fontSize, borderRadius: Math.round(size * 0.31) }}
+      style={{ width: size, height: size, fontSize, borderRadius: radius }}
     >
       {letter}
     </div>
   );
 }
 
-function BrandTile({ brand, price, onClick, idx }) {
+function BrandTile({ brand, icon, price, onClick, idx }) {
   return (
     <button
       onClick={onClick}
       className="st-tile"
       style={{ animationDelay: (idx * 0.03) + 's' }}
     >
-      <BrandBadge brand={brand} size={42}/>
+      <BrandBadge brand={brand} icon={icon} size={42}/>
       <div className="st-tile-mid">
         <div className="st-tile-row">
           <span className="st-tile-sym">{brand.symbol}</span>
@@ -888,7 +941,7 @@ function BrandTile({ brand, price, onClick, idx }) {
   );
 }
 
-function TradeModal({ open, brand, price, onClose, walletPubkey, onConnectWallet }) {
+function TradeModal({ open, brand, icon, price, onClose, walletPubkey, onConnectWallet }) {
   const { signTransaction, connected } = useWallet();
   const wcon = connected;
 
@@ -1106,7 +1159,7 @@ function TradeModal({ open, brand, price, onClose, walletPubkey, onConnectWallet
         <div className="st-grabber"/>
         <div className="st-sheet-head">
           <div className="st-sheet-head-row">
-            <BrandBadge brand={brand} size={48}/>
+            <BrandBadge brand={brand} icon={icon} size={48}/>
             <div className="st-sheet-title-wrap">
               <div className="st-sheet-title-row">
                 <span className="st-sheet-title">{brand.symbol}</span>
@@ -1284,11 +1337,13 @@ function BrandsInner({ onConnectWallet }) {
 
   const [filter, setFilter] = useState('All');
   const [prices, setPrices] = useState({});
+  const [icons,  setIcons]  = useState({});
   const [active, setActive] = useState(null);
 
   const { publicKey: solPk } = useWallet();
   const walletPubkey = useMemo(() => solPk ? solPk.toString() : null, [solPk]);
 
+  // PRICES — poll every 30s.
   useEffect(() => {
     let alive = true;
     const mints = BRANDS.map(s => s.mint);
@@ -1300,6 +1355,18 @@ function BrandsInner({ onConnectWallet }) {
     tick();
     const id = setInterval(tick, 30_000);
     return () => { alive = false; clearInterval(id); };
+  }, []);
+
+  // ICONS — one-shot fetch on mount. xStocks icons come from Backed Finance
+  // via Jupiter's token search; falls back to letter badge if any fail.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const mints = BRANDS.map(s => s.mint);
+      const result = await fetchBrandIcons(mints);
+      if (alive && Object.keys(result).length > 0) setIcons(result);
+    })();
+    return () => { alive = false; };
   }, []);
 
   const filtered = useMemo(() => {
@@ -1360,7 +1427,14 @@ function BrandsInner({ onConnectWallet }) {
             {filtered.length === 0 ? (
               <div className="st-empty">No brands in this category.</div>
             ) : filtered.map((s, i) => (
-              <BrandTile key={s.mint} brand={s} price={prices[s.mint] || 0} onClick={() => setActive(s)} idx={i}/>
+              <BrandTile
+                key={s.mint}
+                brand={s}
+                icon={icons[s.mint]}
+                price={prices[s.mint] || 0}
+                onClick={() => setActive(s)}
+                idx={i}
+              />
             ))}
           </div>
 
@@ -1376,6 +1450,7 @@ function BrandsInner({ onConnectWallet }) {
       <TradeModal
         open={!!active}
         brand={active}
+        icon={active ? icons[active.mint] : null}
         price={active ? prices[active.mint] || 0 : 0}
         onClose={() => setActive(null)}
         walletPubkey={walletPubkey}
