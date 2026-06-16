@@ -10,7 +10,7 @@ const bs58: any = (bs58module as any).default || bs58module;
 
 const PROGRAM_ID = new PublicKey("71bEAUToad7j8k8As9LwsGWBYTLxVJoP2SBNB3S3RLHs");
 const SUPER_ADMIN = new PublicKey("GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA");
-const RPC_URL = process.env.RPC_URL || "https://api.devnet.solana.com";
+const RPC_URL = process.env.RPC_URL || "https://solana-devnet.drpc.org";
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || "10000");
 const GAP_SECONDS = 30;
 const PRICE_URL = "https://api.coinbase.com/v2/prices/SOL-USD/spot";
@@ -91,7 +91,7 @@ async function main() {
   const wallet = new anchor.Wallet(cranker);
   const provider = new anchor.AnchorProvider(connection, wallet, { commitment: "confirmed" });
   anchor.setProvider(provider);
-  const program = new anchor.Program(idl as any, PROGRAM_ID, provider);
+  const program = new anchor.Program(idl as any, provider);
 
   const [configPda] = PublicKey.findProgramAddressSync([Buffer.from("config")], PROGRAM_ID);
   console.log("[crank] Config PDA:", configPda.toBase58());
