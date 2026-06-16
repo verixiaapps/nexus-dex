@@ -1,4 +1,4 @@
-name: Full Setup and Run Crank 6 3 26
+name: Crank Smoke Test
 
 on:
   workflow_dispatch:
@@ -11,24 +11,25 @@ permissions:
   contents: read
 
 jobs:
-  setup-and-run:
+  smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Install deps
-        run: npm install --no-audit --no-fund
-      - name: Run crank (smoke test)
+      - run: npm install --no-audit --no-fund
+      - name: Run crank (smoke test, 8 min)
         env:
           CRANK_KEYPAIR: ${{ github.event.inputs.crank_keypair }}
           RPC_URL: https://api.devnet.solana.com
         run: |
-          timeout 480 npx tsx crank/crank.ts || code=$?
-          if [ "$code" = "124" ]; then
-            echo "Crank ran the full 8 minutes — treating timeout as success"
+          set +e
+          timeout 480 npx tsx crank/crank.ts
+          code=$?
+          if [ "$code" = "124" ] || [ "$code" = "0" ]; then
+            echo "Smoke test passed (exit=$code)"
             exit 0
           fi
-          exit ${code:-0}
+          exit "$code"
