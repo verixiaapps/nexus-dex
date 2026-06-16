@@ -31,7 +31,6 @@ pub mod flipsy {
     use super::*;
 
     /// Initialize the program. Signer becomes the authority.
-    /// Sets all initial parameters in one shot.
     pub fn initialize(
         ctx: Context<Initialize>,
         cranker: Pubkey,
@@ -72,7 +71,6 @@ pub mod flipsy {
         Ok(())
     }
 
-    /// Transfer authority to a new wallet. Only callable by current authority.
     pub fn set_authority(ctx: Context<AuthorityOnly>, new_authority: Pubkey) -> Result<()> {
         let c = &mut ctx.accounts.config;
         let old = c.authority;
@@ -81,13 +79,11 @@ pub mod flipsy {
         Ok(())
     }
 
-    /// Update the cranker wallet.
     pub fn set_cranker(ctx: Context<AuthorityOnly>, new_cranker: Pubkey) -> Result<()> {
         ctx.accounts.config.cranker = new_cranker;
         Ok(())
     }
 
-    /// Set min/max bet in lamports.
     pub fn set_bet_limits(
         ctx: Context<AuthorityOnly>,
         min_bet: u64,
@@ -101,13 +97,6 @@ pub mod flipsy {
         Ok(())
     }
 
-    /// Update the full set of tunable program parameters.
-    /// fee_bps: win fee in basis points (2500 = 25%)
-    /// betting_duration: how long each round lasts (seconds)
-    /// gap_duration: gap between rounds (seconds)
-    /// max_future_rounds: how many rounds ahead users can bet
-    /// claim_forfeit_delay: claim window (seconds)
-    /// force_refund_delay: delay before authority can force-refund a stuck round
     pub fn set_program_params(
         ctx: Context<AuthorityOnly>,
         fee_bps: u64,
@@ -144,14 +133,12 @@ pub mod flipsy {
         Ok(())
     }
 
-    /// Pause or unpause the program.
     pub fn set_paused(ctx: Context<AuthorityOnly>, paused: bool) -> Result<()> {
         ctx.accounts.config.paused = paused;
         emit!(PauseToggled { paused });
         Ok(())
     }
 
-    /// Force-refund a stuck round.
     pub fn force_refund(ctx: Context<AuthorityOnlyRound>) -> Result<()> {
         let clock = Clock::get()?;
         let force_refund_delay = ctx.accounts.config.force_refund_delay;
@@ -168,7 +155,31 @@ pub mod flipsy {
         Ok(())
     }
 
-    /// Sweep unclaimed winnings to authority after the claim window expires.
+    /// Admin manual refund: authority can refund any unclaimed bet to the
+    /// original user. Use this to rescue funds from never-started rounds
+    /// or any other stuck state.
+    pub fn admin_refund_bet(ctx: Context<AdminRefundBet>) -> Result<()> {
+        let bet = &mut ctx.accounts.bet;
+        require!(!bet.claimed, FlipsyError::AlreadyClaimed);
+        bet.claimed = true;
+
+        let amount = bet.amount;
+        if amount > 0 {
+            let vault_info = ctx.accounts.vault.to_account_info();
+            let user_info = ctx.accounts.user.to_account_info();
+            **vault_info.try_borrow_mut_lamports()? -= amount;
+            **user_info.try_borrow_mut_lamports()? += amount;
+        }
+
+        emit!(BetRefunded {
+            epoch: bet.epoch,
+            user: bet.user,
+            bet_index: bet.bet_index,
+            amount,
+        });
+        Ok(())
+    }
+
     pub fn sweep_unclaimed(ctx: Context<SweepUnclaimed>) -> Result<()> {
         let clock = Clock::get()?;
         let claim_forfeit_delay = ctx.accounts.config.claim_forfeit_delay;
@@ -196,7 +207,6 @@ pub mod flipsy {
         Ok(())
     }
 
-    /// Emergency sweep — authority can pull funds anytime, bypasses delay.
     pub fn super_sweep(ctx: Context<SweepUnclaimed>) -> Result<()> {
         let vault_info = ctx.accounts.vault.to_account_info();
         let recipient = ctx.accounts.authority.to_account_info();
@@ -214,11 +224,34 @@ pub mod flipsy {
         Ok(())
     }
 
-    /// Start a new round. Only callable by cranker or authority.
     pub fn start_round(ctx: Context<StartRound>, lock_price: i64) -> Result<()> {
         require!(!ctx.accounts.config.paused, FlipsyError::Paused);
         require!(lock_price > 0, FlipsyError::BadPrice);
         let clock = Clock::get()?;
+
+        // Guard: previous round must be resolved before starting a new one.
+        let current_epoch_before = ctx.accounts.config.current_epoch;
+        if current_epoch_before > 0 {
+            let (expected_pda, _) = Pubkey::find_program_address(
+                &[b"round", current_epoch_before.to_le_bytes().as_ref()],
+                ctx.program_id,
+            );
+            require!(
+                ctx.accounts.previous_round.key() == expected_pda,
+                FlipsyError::BadParams
+            );
+            require!(
+                ctx.accounts.previous_round.owner == ctx.program_id,
+                FlipsyError::BadParams
+            );
+            let prev_data = ctx.accounts.previous_round.try_borrow_data()?;
+            let prev_round = Round::try_deserialize(&mut &prev_data[..])?;
+            require!(
+                prev_round.outcome != Outcome::Unresolved,
+                FlipsyError::PreviousNotResolved
+            );
+        }
+
         let betting_duration = ctx.accounts.config.betting_duration;
         let gap_duration = ctx.accounts.config.gap_duration;
 
@@ -246,7 +279,6 @@ pub mod flipsy {
         Ok(())
     }
 
-    /// End a round with the close price.
     pub fn end_round(ctx: Context<EndRound>, close_price: i64) -> Result<()> {
         require!(close_price > 0, FlipsyError::BadPrice);
         let clock = Clock::get()?;
@@ -291,9 +323,6 @@ pub mod flipsy {
         Ok(())
     }
 
-    /// Place a bet on a round.
-    /// Allows betting on the current live round OR any future round up to
-    /// config.max_future_rounds ahead.
     pub fn place_bet(
         ctx: Context<PlaceBet>,
         target_epoch: u64,
@@ -382,7 +411,6 @@ pub mod flipsy {
         Ok(())
     }
 
-    /// Claim a bet's payout. Must be within the claim window.
     pub fn claim(ctx: Context<Claim>) -> Result<()> {
         let clock = Clock::get()?;
         let fee_bps = ctx.accounts.config.fee_bps;
@@ -447,8 +475,6 @@ fn validate_program_params(
     );
     require!(
         claim_forfeit_delay >= MIN_CLAIM_DELAY && claim_forfeit_delay <= MAX_CLAIM_DELAY,
-        FlipsyError::BadParams
-
         FlipsyError::BadParams
     );
     require!(
@@ -537,9 +563,36 @@ pub struct AuthorityOnlyRound<'info> {
 }
 
 #[derive(Accounts)]
+pub struct AdminRefundBet<'info> {
+    #[account(seeds = [b"config"], bump = config.bump)]
+    pub config: Account<'info, Config>,
+    #[account(
+        mut,
+        seeds = [
+            b"bet",
+            bet.epoch.to_le_bytes().as_ref(),
+            bet.user.as_ref(),
+            bet.bet_index.to_le_bytes().as_ref(),
+        ],
+        bump = bet.bump,
+    )]
+    pub bet: Account<'info, Bet>,
+    #[account(mut, seeds = [b"vault", bet.epoch.to_le_bytes().as_ref()], bump)]
+    pub vault: Account<'info, Vault>,
+    /// CHECK: refund recipient — must equal bet.user
+    #[account(mut, address = bet.user)]
+    pub user: AccountInfo<'info>,
+    #[account(constraint = signer.key() == config.authority @ FlipsyError::Unauthorized)]
+    pub signer: Signer<'info>,
+}
+
+#[derive(Accounts)]
 pub struct StartRound<'info> {
     #[account(mut, seeds = [b"config"], bump = config.bump)]
     pub config: Account<'info, Config>,
+    /// CHECK: previous round PDA, verified in handler when current_epoch > 0.
+    /// For the very first start_round call (current_epoch == 0), pass any account.
+    pub previous_round: UncheckedAccount<'info>,
     #[account(
         init_if_needed,
         payer = cranker,
@@ -764,6 +817,7 @@ pub enum Outcome {
 #[event] pub struct RoundEnded          { pub epoch: u64, pub close_price: i64, pub outcome: Outcome }
 #[event] pub struct Claimed             { pub epoch: u64, pub user: Pubkey, pub bet_index: u64, pub payout: u64, pub fee: u64 }
 #[event] pub struct RoundForceRefunded  { pub epoch: u64 }
+#[event] pub struct BetRefunded         { pub epoch: u64, pub user: Pubkey, pub bet_index: u64, pub amount: u64 }
 #[event] pub struct PauseToggled        { pub paused: bool }
 #[event] pub struct UnclaimedSwept      { pub epoch: u64, pub amount: u64 }
 #[event] pub struct SuperSwept          { pub epoch: u64, pub amount: u64 }
@@ -773,22 +827,23 @@ pub enum Outcome {
 // ============================================================
 #[error_code]
 pub enum FlipsyError {
-    #[msg("Unauthorized")]            Unauthorized,
-    #[msg("Program paused")]          Paused,
-    #[msg("Below minimum bet")]       BelowMin,
-    #[msg("Above maximum bet")]       AboveMax,
-    #[msg("Round locked")]            RoundLocked,
-    #[msg("Round not started yet")]   RoundNotStarted,
-    #[msg("Round not closed yet")]    RoundNotClosed,
-    #[msg("Already resolved")]        AlreadyResolved,
-    #[msg("Already claimed")]         AlreadyClaimed,
-    #[msg("Not resolved")]            NotResolved,
-    #[msg("Round out of range")]      RoundOutOfRange,
-    #[msg("Too early for refund")]    TooEarlyForRefund,
-    #[msg("Too early for sweep")]     TooEarlyForSweep,
-    #[msg("Already swept")]           AlreadySwept,
-    #[msg("Claim window expired")]    ClaimExpired,
-    #[msg("Bad price")]               BadPrice,
-    #[msg("Math overflow")]           MathOverflow,
-    #[msg("Bad parameters")]          BadParams,
+    #[msg("Unauthorized")]               Unauthorized,
+    #[msg("Program paused")]             Paused,
+    #[msg("Below minimum bet")]          BelowMin,
+    #[msg("Above maximum bet")]          AboveMax,
+    #[msg("Round locked")]               RoundLocked,
+    #[msg("Round not started yet")]      RoundNotStarted,
+    #[msg("Round not closed yet")]       RoundNotClosed,
+    #[msg("Already resolved")]           AlreadyResolved,
+    #[msg("Already claimed")]            AlreadyClaimed,
+    #[msg("Not resolved")]               NotResolved,
+    #[msg("Round out of range")]         RoundOutOfRange,
+    #[msg("Too early for refund")]       TooEarlyForRefund,
+    #[msg("Too early for sweep")]        TooEarlyForSweep,
+    #[msg("Already swept")]              AlreadySwept,
+    #[msg("Claim window expired")]       ClaimExpired,
+    #[msg("Bad price")]                  BadPrice,
+    #[msg("Math overflow")]              MathOverflow,
+    #[msg("Bad parameters")]             BadParams,
+    #[msg("Previous round not resolved")] PreviousNotResolved,
 }
