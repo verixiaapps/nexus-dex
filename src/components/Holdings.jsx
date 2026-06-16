@@ -2222,3 +2222,4 @@ export default function Holdings({ onConnectWallet }) {
     </div>
   );
 }
+ 
