@@ -10,6 +10,7 @@ import MemeWonderland      from './components/MemeWonderland.jsx';
 import LaunchRadar         from './components/LaunchRadar.jsx';
 import Flipsy              from './components/Flipsy.jsx';
 import GetStarted          from './components/GetStarted.jsx';
+import Holdings            from './components/Holdings.jsx';
 
 // =====================================================================
 // Wonderland-light design tokens (used across the shell)
@@ -533,12 +534,14 @@ const PATH_TO_TAB = {
   '/markets': 'markets', '/tokenized': 'markets',
   '/flipsy': 'flipsy', '/predict': 'flipsy',
   '/get-started': 'getstarted', '/wallet': 'getstarted',
+  '/holdings': 'holdings', '/portfolio': 'holdings', '/bags': 'holdings',
   '/stack': 'swap', '/vip': 'swap', '/perps': 'swap', '/call': 'swap',
 };
 const TAB_TO_PATH = {
   swap: '/swap', bridge: '/bridge', solbtc: '/sol-btc',
   wonderland: '/wonderland', launchradar: '/radar', markets: '/markets', flipsy: '/flipsy',
   getstarted: '/get-started',
+  holdings: '/holdings',
 };
 function tabFromPathname(pathname) { return PATH_TO_TAB[pathname] || 'swap'; }
 export function useAppWallet() { return useNexusWallet(); }
@@ -897,11 +900,13 @@ function IconWonderland() { return <svg width="18" height="18" viewBox="0 0 24 2
 function IconFlipsy()     { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 10l4-4 4 4"/><path d="M8 14l4 4 4-4"/></svg>; }
 function IconLaunchRadar() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><path d="M12 3v3"/><path d="M12 18v3"/><path d="M3 12h3"/><path d="M18 12h3"/></svg>; }
 function IconGetStarted() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="7" width="18" height="13" rx="2.5"/><path d="M3 10h18"/><path d="M7 7V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v2"/><circle cx="17" cy="15" r="1.5" fill="currentColor" stroke="none"/></svg>; }
+function IconHoldings()   { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7h18l-2 13H5L3 7z"/><path d="M8 7V5a4 4 0 0 1 8 0v2"/><circle cx="12" cy="13" r="1.5" fill="currentColor" stroke="none"/></svg>; }
 
-const NAV_ICONS = { swap: IconSwap, launchradar: IconLaunchRadar, bridge: IconBridge, wonderland: IconWonderland, markets: IconMarkets, flipsy: IconFlipsy, getstarted: IconGetStarted };
+const NAV_ICONS = { swap: IconSwap, launchradar: IconLaunchRadar, bridge: IconBridge, wonderland: IconWonderland, markets: IconMarkets, flipsy: IconFlipsy, holdings: IconHoldings, getstarted: IconGetStarted };
 const NAV_TABS = [
   { id: 'swap', label: 'Swap' }, { id: 'launchradar', label: 'Radar' }, { id: 'bridge', label: 'Bridge' },
   { id: 'wonderland', label: 'Wonder' }, { id: 'markets', label: 'Markets' }, { id: 'flipsy', label: 'Flipsy' },
+  { id: 'holdings', label: 'Bags' },
   { id: 'getstarted', label: 'Wallet' },
 ];
 
@@ -1044,6 +1049,7 @@ function AppInner() {
         {tab === 'wonderland'  && <MemeWonderland onConnectWallet={openWallet} />}
         {tab === 'markets'     && <Stocks {...sharedProps} />}
         {tab === 'flipsy'      && <Flipsy onConnectWallet={openWallet} />}
+        {tab === 'holdings'    && <Holdings {...sharedProps} />}
         {tab === 'getstarted'  && <GetStarted onConnectWallet={openWallet} onSwitchTab={switchTab} />}
       </main>
 
