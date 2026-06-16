@@ -220,6 +220,19 @@ let _lrWs = null;
 let _lrWsReconnect = null;
 let _lrWsConnectedAt = 0;
 
+// Per-mint live stats derived from PumpPortal `subscribeTokenTrade` events.
+//   mint → { traders: Set<string>, vSol: number, lastUpdate: number }
+// vSol is the bonding curve's virtual SOL reserves IN SOL UNITS (not lamports).
+// traders is the set of every wallet that has bought or sold this mint while
+// we've been subscribed — a tight upper bound on holders for fresh tokens
+// (most fresh-launch traders still hold). For mature tokens it overstates,
+// but for the radar's "Just Hatched" focus this is close to truth.
+// CONTRACT-ADDRESS GATE: the map key is the canonical mint string from the
+// WS message, identical to _lrBuf's key. Entries are only created for mints
+// already in _lrBuf — wrong/spoofed mints from the trade stream are dropped.
+const _lrTradeStats   = new Map();
+const _LR_TRADERS_MAX = 5_000;   // per-mint memory cap on the Set
+
 function _lrAddMint(msg) {
   const mint = msg?.mint;
   if (!mint || typeof mint !== 'string') return;
@@ -239,7 +252,48 @@ function _lrAddMint(msg) {
     const oldestKey = _lrBuf.keys().next().value;
     if (oldestKey == null) break;
     _lrBuf.delete(oldestKey);
+    _lrTradeStats.delete(oldestKey);
   }
+  // Subscribe to trade events for this newly-tracked mint so we can fill
+  // holders + on-curve liquidity even when pump.fun's frontend API is down.
+  _lrSubTrades([mint]);
+}
+
+// Send a subscribeTokenTrade frame for one or more mints. PumpPortal accepts
+// a batch in `keys`. Silent no-op if the WS isn't open — re-subscription is
+// handled by ws.on('open') when the connection reopens.
+function _lrSubTrades(keys) {
+  if (!_lrWs || _lrWs.readyState !== _LR_WebSocket.OPEN) return;
+  if (!Array.isArray(keys) || keys.length === 0) return;
+  try { _lrWs.send(JSON.stringify({ method: 'subscribeTokenTrade', keys })); }
+  catch (e) { console.warn('[lr-ws] subscribeTokenTrade send failed:', e?.message); }
+}
+
+// Update per-mint trade stats from a PumpPortal trade event.
+// Strict mint gate: only mints already in _lrBuf are tracked, so a trade
+// arriving for some other mint (rogue or stale subscription) is ignored.
+function _lrTrackTrade(msg) {
+  const mint = msg?.mint;
+  if (!mint || typeof mint !== 'string' || !_LR_BASE58_RE.test(mint)) return;
+  if (!_lrBuf.has(mint)) return;                       // contract-address gate
+
+  let s = _lrTradeStats.get(mint);
+  if (!s) {
+    s = { traders: new Set(), vSol: 0, lastUpdate: 0 };
+    _lrTradeStats.set(mint, s);
+  }
+
+  const trader = msg.traderPublicKey;
+  if (typeof trader === 'string' && _LR_BASE58_RE.test(trader)
+      && s.traders.size < _LR_TRADERS_MAX) {
+    s.traders.add(trader);
+  }
+
+  // vSolInBondingCurve is reported in SOL (NOT lamports).
+  const vSol = Number(msg.vSolInBondingCurve);
+  if (Number.isFinite(vSol) && vSol > 0) s.vSol = vSol;
+
+  s.lastUpdate = Date.now();
 }
 
 function _lrConnectWs() {
@@ -259,11 +313,24 @@ function _lrConnectWs() {
     console.log('[lr-ws] connected → subscribeNewToken');
     try { ws.send(JSON.stringify({ method: 'subscribeNewToken' })); }
     catch (e) { console.warn('[lr-ws] subscribe send failed:', e?.message); }
+    // Re-subscribe to trades for everything already in the buffer. On a fresh
+    // boot _lrBuf is empty; this only does work on reconnects.
+    const existing = [..._lrBuf.keys()];
+    if (existing.length > 0) {
+      try { ws.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: existing })); }
+      catch (e) { console.warn('[lr-ws] re-sub trades failed:', e?.message); }
+    }
   });
 
   ws.on('message', (raw) => {
-    try { _lrAddMint(JSON.parse(raw.toString())); }
-    catch { /* malformed frame — ignore */ }
+    try {
+      const m = JSON.parse(raw.toString());
+      const tx = m?.txType;
+      // PumpPortal sends 'create' frames from subscribeNewToken and
+      // 'buy' / 'sell' frames from subscribeTokenTrade. Route accordingly.
+      if (!tx || tx === 'create')        _lrAddMint(m);
+      else if (tx === 'buy' || tx === 'sell') _lrTrackTrade(m);
+    } catch { /* malformed frame — ignore */ }
   });
 
   ws.on('close', () => {
@@ -491,8 +558,10 @@ app.get('/api/dex/launches', async (req, res) => {
     tokens.sort((a, b) => Number(b.pairCreatedAt || 0) - Number(a.pairCreatedAt || 0));
 
     // Enrichment — holders, on-curve liquidity, and token image.
-    //   1. Pump.fun frontend API   (holders + liquidity + image, strict mint match)
-    //   2. Metaplex JSON via WS uri (image only, fresh-token fallback)
+    //   1. Pump.fun frontend API     (holders + liquidity + image, strict mint match)
+    //   2. PumpPortal trade-stats    (live holders + liquidity from WS — fills in
+    //                                 when pump.fun is Cloudflare-blocked)
+    //   3. Metaplex JSON via WS uri  (image only, fresh-token fallback)
     // Runs in parallel for all tokens. Per-source caches keep load low.
     // Fails silently if a source is unreachable — DexScreener values remain.
     const _solP = await fetchSolPriceUsd().catch(() => 0);
@@ -502,6 +571,13 @@ app.get('/api/dex/launches', async (req, res) => {
         t.holders = pf.holders;
         if (!(t.liquidity > 0) && pf.liquidityUsd > 0) t.liquidity = pf.liquidityUsd;
         if (!t.icon && pf.imageUrl)                    t.icon      = pf.imageUrl;
+      }
+      // PumpPortal trade-stats fallback. Map key is the verbatim mint, set in
+      // _lrTrackTrade only when _lrBuf already has the mint → no cross-token leak.
+      const ts = _lrTradeStats.get(t.mint);
+      if (ts) {
+        if (!(t.holders   > 0) && ts.traders.size > 0)            t.holders   = ts.traders.size;
+        if (!(t.liquidity > 0) && ts.vSol > 0 && _solP > 0)       t.liquidity = ts.vSol * _solP * 2;
       }
       // Deeper image fallback — the WS-stored uri is keyed on the VERBATIM mint,
       // so this can never bleed across tokens. Image is the only field consumed.
