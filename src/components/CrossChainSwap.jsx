@@ -17,7 +17,7 @@
  *   1. /api/cf/quote    → REGULAR quote (egressAmount in dest atomic units)
  *   2. /api/cf/channel  → server opens deposit channel via SDK
  *   3. Two txs, signed atomically:
- *        Tx-A: 5% input-USD platform fee in SOL → FEE_WALLET
+ *        Tx-A: 3% input-USD platform fee in SOL → FEE_WALLET
  *        Tx-B: bridge transfer to channel.depositAddress
  *   4. Send Tx-A, await confirm, then Tx-B. Status polls on depositChannelId.
  */
@@ -280,7 +280,7 @@ function useCcCSS() {
 
 /* ─── CONFIG ─── */
 const FEE_WALLET       = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
-const FEE_BPS          = 500;            // 5% of input USD value, paid in SOL
+const FEE_BPS          = 300;            // 3% of input USD value, paid in SOL
 const MIN_FEE_LAMPORTS = 1_000_000;      // floor: 0.001 SOL
 const SOL_RESERVE      = 1_500_000;      // ~0.0015 SOL kept for tx fees
 const QUOTE_DEBOUNCE   = 500;
@@ -925,13 +925,19 @@ export default function CrossChainSwap({ onConnectWallet }) {
     return () => clearTimeout(t);
   }, [fetchQuote]);
 
-  // MAX.
+  // MAX — account for the FEE_BPS surcharge so total spend fits inside balance.
+  // For native SOL: total = input + fee + reserve, where fee = input * FEE_BPS/10000.
+  //   → input_max = (balance - reserve) / (1 + FEE_BPS/10000)
+  // For SPL: fee is paid in SOL separately, so MAX is just the token balance.
   const onMax = useCallback(() => {
     if (fbd == null || fbd <= 0) return;
     const dec = Math.min(fromToken.decimals, 9);
     if (fromToken.isNative) {
       const reserveLamports = SOL_RESERVE + MIN_FEE_LAMPORTS;
-      setFromAmt(fmtInput(Math.max(0, (solBalance - reserveLamports)) / LAMPORTS_PER_SOL, dec));
+      const usableLamports  = Math.max(0, solBalance - reserveLamports);
+      const feeMultiplier   = 1 + (FEE_BPS / 10000);
+      const maxInputSol     = (usableLamports / LAMPORTS_PER_SOL) / feeMultiplier;
+      setFromAmt(fmtInput(maxInputSol, dec));
     } else {
       setFromAmt(fmtInput(fbd, dec));
     }
