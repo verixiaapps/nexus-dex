@@ -7,11 +7,11 @@
 //
 // SOL row "Swap" → SOL → USDC via jupiter route (mode forced to 'sell').
 //
-// ENDPOINTS: every quote/build/trade call matches the working files exactly
-// (/api/jupiter/build, /api/jupiter/quote, /api/jupiter/swap-instructions,
-//  /api/pumpfun/trade, /api/jupiter/tokens/search, lite-api.jup.ag price).
-// Execution RPC routes through the SAME /api/solana-rpc proxy the working
-// Stocks swap flow uses — NOT a public endpoint that rate-limits send/simulate.
+// RPC: matches the LaunchRadar / SwapWidget pattern — public Solana RPC
+// nodes used directly by `new Connection(...)`. The `/api/solana-rpc`
+// proxy is only used for the portfolio batch read (Stocks pattern).
+// Connection needs a real RPC URL because `confirmTransaction` opens a
+// WebSocket subscription that the proxy can't serve.
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Buffer } from 'buffer';
@@ -266,14 +266,24 @@ const ATA_PROGRAM_ID         = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25ef
 // Pump.fun route (LaunchRadar)
 const SOL_RESERVE = 0.01;
 
-// Execution RPC — same /api/solana-rpc proxy the working Stocks swap flow uses.
-// Keeps the original env-var precedence; only the final fallback changes from a
-// public endpoint (rate-limits simulate/send in-browser) to the proven proxy.
-const RPC_URL =
-  (typeof process !== 'undefined' && process.env && process.env.REACT_APP_SOLANA_RPC) ||
-  ((typeof process !== 'undefined' && process.env && process.env.REACT_APP_HELIUS_API_KEY)
-    ? 'https://mainnet.helius-rpc.com/?api-key=' + encodeURIComponent(process.env.REACT_APP_HELIUS_API_KEY)
-    : ((typeof window !== 'undefined' ? window.location.origin : '') + '/api/solana-rpc'));
+// =====================================================================
+// RPC — matches LaunchRadar / SwapWidget exactly. `new Connection(...)`
+// must point at a real public RPC node, not the `/api/solana-rpc` proxy,
+// because `confirmTransaction` opens a WebSocket subscription. The proxy
+// is still used for the portfolio batch read (`fetchPortfolio`), which
+// is fine since that's a one-shot HTTP POST.
+// =====================================================================
+const RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
+const RPC_POOL = [
+  RUNTIME_CFG.rpc,
+  (typeof process !== 'undefined' && process.env && process.env.REACT_APP_SOLANA_RPC) || '',
+  (typeof process !== 'undefined' && process.env && process.env.REACT_APP_ALCHEMY_RPC) || '',
+  'https://solana-rpc.publicnode.com',
+  'https://solana.drpc.org',
+  'https://rpc.ankr.com/solana',
+  'https://api.mainnet-beta.solana.com',
+].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
+const RPC_URL = RPC_POOL[0];
 
 const BRAND_TOKENS = {
   'XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB': { isBrand: true },
