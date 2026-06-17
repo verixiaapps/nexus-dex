@@ -1,57 +1,31 @@
 /** 
  * NEXUS DEX — CrossChainSwap.jsx
- * (Chainflip native, two-tx atomic, fee in SOL)
+ * Chainflip native, two-tx atomic, fee in SOL.
  *
- * ─────────────────────────────────────────────────────────────────────────
- * Replaces LI.FI with Chainflip. Same Wonderland-lite identity preserved
- * (cc- class prefix, Instrument Serif headlines, cream surface, blue→violet
- * accents, step bar). Class CSS is byte-identical to the LI.FI version.
+ * SOLANA-SIDE = pure public + free.
+ *   • RPC: race of publicnode / drpc / ankr / mainnet-beta (Promise.any)
+ *   • SOL price: lite-api.jup.ag/price/v3 (no key, no backend)
+ *   • Honest balance state: per-source 'idle'|'loading'|'ok'|'fail'.
+ *     UI shows '…' or 'RPC down' — never silent zero.
+ *   • Sends broadcast to ALL public RPCs in parallel (more inclusion paths).
  *
- * Why Chainflip:
- *   - Single bridge protocol (no aggregator) → one failure surface
- *   - fillOrKillParams refund: dest swap that can't execute in slippage
- *     window auto-refunds to the Solana refund address. No stuck funds.
- *   - Observable state machine (WAITING → … → COMPLETED | FAILED)
- *   - Threshold-signed vaults on every chain; validators slashed for
- *     non-signing → cannot stall mid-swap like Wormhole/relayer-based aggs
+ * CHAINFLIP-SIDE: still backed by /api/cf/* because the broker channel-open
+ * step requires a registered on-chain broker (1000 FLIP bond + tx signing).
+ * That cannot be done purely client-side without leaking broker keys.
  *
- * Flow:
- *   1. /api/cf/quote        → REGULAR quote (egressAmount in dest atomic units)
- *   2. /api/cf/channel      → server opens deposit channel via SDK,
- *                              returns depositAddress + depositChannelId
- *   3. Build two txs, signAllTransactions atomically:
- *        Tx-A: fee in SOL → FEE_WALLET (5% of input USD value)
+ * Flow (unchanged):
+ *   1. /api/cf/quote    → REGULAR quote (egressAmount in dest atomic units)
+ *   2. /api/cf/channel  → server opens deposit channel via SDK
+ *   3. Two txs, signed atomically:
+ *        Tx-A: 5% input-USD platform fee in SOL → FEE_WALLET
  *        Tx-B: bridge transfer to channel.depositAddress
- *               · SOL source  → SystemProgram.transfer
- *               · SPL source  → SPL TransferChecked (depositAddress IS the
- *                               channel's ATA — Chainflip pre-creates it)
- *   4. Send Tx-A, await confirm, then Tx-B. Start status polling on
- *      depositChannelId (every 6s, friendly state labels in the UI).
- *
- * Source assets (Solana wallet origin):
- *   - SOL  (System / native)
- *   - USDC (EPjFW…D2v, 6 dec)
- *   - USDT (Es9vM…NYB, 6 dec)
- *
- * Destinations (filtered same-chain Solana out of UI):
- *   - Ethereum: ETH, USDC, USDT, WBTC, FLIP
- *   - Arbitrum: ETH, USDC, USDT
- *   - Bitcoin:  BTC
- *   - Polkadot: DOT
- *   - Assethub: SOL, USDC, USDT
- *   - Tron:     TRX, USDT
- *
- * Default route: SOL on Solana → ETH on Ethereum.
- *
- * CRITICAL: Chainflip permanently absorbs deposits outside per-asset
- * min/max bounds. We rely on the server's quote endpoint to fail with a
- * friendly "Amount below/above minimum" before the user can submit, and
- * re-quote freshly on submit so stale-quote drift can't slip past the gate.
+ *   4. Send Tx-A, await confirm, then Tx-B. Status polls on depositChannelId.
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useWallet, useConnection } from '@solana/wallet-adapter-react';
+import { useWallet } from '@solana/wallet-adapter-react';
 import {
+  Connection,
   PublicKey,
   LAMPORTS_PER_SOL,
   VersionedTransaction,
@@ -66,7 +40,40 @@ import {
 } from '@solana/spl-token';
 
 // =====================================================================
-// INLINE CSS — Wonderland-lite (byte-identical to LI.FI version)
+// PUBLIC RPC POOL — no env vars, no proxy
+// =====================================================================
+const RPC_POOL = [
+  'https://solana-rpc.publicnode.com',
+  'https://solana.drpc.org',
+  'https://rpc.ankr.com/solana',
+  'https://api.mainnet-beta.solana.com',
+];
+const CONNECTIONS = RPC_POOL.map(url => new Connection(url, { commitment: 'confirmed' }));
+
+// Race a Connection-level call across the pool. `fn(conn)` is invoked once
+// per pool entry; whichever resolves first wins. Rejects only if ALL fail.
+async function raceConn(label, fn) {
+  return Promise.any(CONNECTIONS.map(c => fn(c))).catch((agg) => {
+    console.warn('[cc-rpc] ' + label + ' all RPCs failed', agg?.errors?.[0]?.message);
+    const e = new Error(label + ': all public RPCs failed');
+    e.aggregateErrors = agg?.errors;
+    throw e;
+  });
+}
+
+// Broadcast a signed raw tx to every RPC in parallel; resolve with the
+// first accepted signature. More inclusion paths = better confirm odds on
+// public infra. Rejects only if every RPC rejects.
+async function raceSend(rawTx, sendOpts) {
+  return Promise.any(CONNECTIONS.map(c => c.sendRawTransaction(rawTx, sendOpts)))
+    .catch((agg) => {
+      console.warn('[cc-rpc] send all RPCs rejected', agg?.errors?.[0]?.message);
+      throw new Error(agg?.errors?.[0]?.message || 'All public RPCs rejected the transaction');
+    });
+}
+
+// =====================================================================
+// INLINE CSS — unchanged
 // =====================================================================
 const CC_CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
@@ -115,352 +122,143 @@ body.nexus-scroll-locked{overflow:hidden}
 
 .cc-head{display:flex;align-items:center;justify-content:space-between;padding:18px 22px 4px}
 .cc-brand{display:flex;align-items:center;gap:10px}
-.cc-brand-dot{
-  width:28px;height:28px;border-radius:50%;
-  background:linear-gradient(135deg,#4f7dff,#a87fff 60%,#7FFFD4);
-  box-shadow:0 0 14px rgba(79,125,255,0.5);
-}
+.cc-brand-dot{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#4f7dff,#a87fff 60%,#7FFFD4);box-shadow:0 0 14px rgba(79,125,255,0.5)}
 .cc-wordmark{font-family:"Instrument Serif",serif;font-style:italic;font-size:20px;line-height:1}
 .cc-wordmark .slash{opacity:0.4;margin:0 3px;font-style:normal}
-.cc-wordmark .grad{
-  background:linear-gradient(90deg,#4f7dff,#a87fff,#7FFFD4);
-  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
-}
-.cc-head-live{
-  display:flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;
-  background:var(--glass);backdrop-filter:blur(10px);border:1px solid var(--border);
-  font-family:"JetBrains Mono",monospace;font-size:9px;font-weight:700;color:var(--blue);letter-spacing:1.2px;
-}
+.cc-wordmark .grad{background:linear-gradient(90deg,#4f7dff,#a87fff,#7FFFD4);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.cc-head-live{display:flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;background:var(--glass);backdrop-filter:blur(10px);border:1px solid var(--border);font-family:"JetBrains Mono",monospace;font-size:9px;font-weight:700;color:var(--blue);letter-spacing:1.2px}
 .cc-head-live .d{width:5px;height:5px;border-radius:50%;background:var(--blue);box-shadow:0 0 8px var(--blue);animation:cc-pulse 1.6s ease-in-out infinite}
 
 .cc-mini-hero{padding:18px 22px 8px}
-.cc-mh-eyebrow{
-  display:inline-flex;align-items:center;gap:7px;
-  font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:700;
-  color:var(--blue);letter-spacing:1.6px;margin-bottom:8px;
-}
-.cc-mh-title{
-  font-family:"Instrument Serif",serif;font-weight:400;
-  font-size:34px;line-height:1;letter-spacing:-.02em;margin:0 0 6px;color:var(--ink);
-}
-.cc-mh-title em{
-  font-style:italic;
-  background:linear-gradient(120deg,#4f7dff,#a87fff);
-  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
-}
+.cc-mh-eyebrow{display:inline-flex;align-items:center;gap:7px;font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:700;color:var(--blue);letter-spacing:1.6px;margin-bottom:8px}
+.cc-mh-title{font-family:"Instrument Serif",serif;font-weight:400;font-size:34px;line-height:1;letter-spacing:-.02em;margin:0 0 6px;color:var(--ink)}
+.cc-mh-title em{font-style:italic;background:linear-gradient(120deg,#4f7dff,#a87fff);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
 .cc-mh-sub{font-size:13px;color:var(--ink-2);font-weight:500;line-height:1.45}
 
-.cc-card{
-  margin:14px 22px 0;padding:18px;border-radius:24px;
-  background:var(--glass);backdrop-filter:blur(14px);
-  border:1px solid rgba(255,255,255,.85);
-  box-shadow:0 12px 40px rgba(79,125,255,.10);
-}
+.cc-card{margin:14px 22px 0;padding:18px;border-radius:24px;background:var(--glass);backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,.85);box-shadow:0 12px 40px rgba(79,125,255,.10)}
 
 .cc-steps{display:flex;align-items:flex-start;gap:0;margin:0 -2px 16px}
 .cc-step{display:flex;flex-direction:column;align-items:center;flex:0 0 auto;width:48px}
-.cc-step-num{
-  width:44px;height:44px;border-radius:16px;
-  background:var(--glass-strong);border:1.5px solid var(--hairline);
-  display:grid;place-items:center;
-  font-family:"Instrument Serif",serif;font-style:italic;font-size:20px;line-height:1;
-  color:var(--ink-3);transition:all .3s;
-}
-.cc-step.cc-step-active .cc-step-num{
-  background:linear-gradient(135deg,#4f7dff,#a87fff);
-  border-color:#4f7dff;color:#fff;
-  animation:cc-glow 2s ease-in-out infinite;
-}
-.cc-step.cc-step-done .cc-step-num{
-  background:linear-gradient(135deg,#7FFFD4,#A0E7FF);
-  border-color:#7FFFD4;color:var(--ink);
-}
-.cc-step-label{
-  margin-top:7px;
-  font-family:"JetBrains Mono",monospace;font-size:9px;font-weight:700;
-  color:var(--ink-3);letter-spacing:0.8px;text-transform:uppercase;transition:color .3s;
-}
+.cc-step-num{width:44px;height:44px;border-radius:16px;background:var(--glass-strong);border:1.5px solid var(--hairline);display:grid;place-items:center;font-family:"Instrument Serif",serif;font-style:italic;font-size:20px;line-height:1;color:var(--ink-3);transition:all .3s}
+.cc-step.cc-step-active .cc-step-num{background:linear-gradient(135deg,#4f7dff,#a87fff);border-color:#4f7dff;color:#fff;animation:cc-glow 2s ease-in-out infinite}
+.cc-step.cc-step-done .cc-step-num{background:linear-gradient(135deg,#7FFFD4,#A0E7FF);border-color:#7FFFD4;color:var(--ink)}
+.cc-step-label{margin-top:7px;font-family:"JetBrains Mono",monospace;font-size:9px;font-weight:700;color:var(--ink-3);letter-spacing:0.8px;text-transform:uppercase;transition:color .3s}
 .cc-step.cc-step-active .cc-step-label{color:var(--blue)}
 .cc-step.cc-step-done .cc-step-label{color:var(--green)}
-.cc-step-line{
-  flex:1;height:2px;margin-top:21px;
-  background:var(--hairline);border-radius:2px;transition:background .3s;
-}
+.cc-step-line{flex:1;height:2px;margin-top:21px;background:var(--hairline);border-radius:2px;transition:background .3s}
 .cc-step-line.cc-step-line-done{background:linear-gradient(90deg,#7FFFD4,#A0E7FF)}
 
-.cc-io-box{
-  background:var(--glass-strong);border:1.5px solid rgba(255,255,255,.85);
-  border-radius:18px;padding:14px 16px;
-  transition:border-color .15s,box-shadow .15s;
-}
+.cc-io-box{background:var(--glass-strong);border:1.5px solid rgba(255,255,255,.85);border-radius:18px;padding:14px 16px;transition:border-color .15s,box-shadow .15s}
 .cc-io-box:focus-within{border-color:var(--border-hi);box-shadow:0 0 0 4px rgba(79,125,255,.08)}
 .cc-io-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap}
 .cc-io-label{font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:700;color:var(--ink-2);letter-spacing:1.4px;text-transform:uppercase}
 .cc-io-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .cc-io-bal{font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--ink-2);font-weight:500}
 .cc-io-bal-val{color:var(--ink);font-weight:700}
+.cc-io-bal-val.cc-bal-loading{color:var(--ink-3)}
+.cc-io-bal-val.cc-bal-fail{color:var(--red);font-weight:700}
 
 .cc-io-row{display:flex;align-items:center;gap:10px}
-.cc-token-btn{
-  display:flex;align-items:center;gap:8px;padding:8px 12px;
-  background:#fff;border:1px solid var(--border);border-radius:999px;
-  color:var(--ink);font-family:inherit;font-size:13px;font-weight:700;
-  cursor:pointer;flex-shrink:0;transition:all .15s;
-  box-shadow:0 2px 8px rgba(26,27,78,.06);
-}
+.cc-token-btn{display:flex;align-items:center;gap:8px;padding:8px 12px;background:#fff;border:1px solid var(--border);border-radius:999px;color:var(--ink);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;flex-shrink:0;transition:all .15s;box-shadow:0 2px 8px rgba(26,27,78,.06)}
 .cc-token-btn:hover:not(:disabled){border-color:var(--blue);box-shadow:0 2px 12px rgba(79,125,255,.18)}
 .cc-token-btn:active:not(:disabled){transform:translateY(1px)}
 .cc-token-btn:disabled{cursor:not-allowed;opacity:.6}
 .cc-token-sym{font-family:"Instrument Serif",serif;font-size:17px;font-style:italic;letter-spacing:-.01em;color:var(--ink)}
 .cc-token-caret{font-size:10px;color:var(--ink-3);margin-left:-2px}
 
-.cc-io-input{
-  flex:1;background:transparent;border:none;outline:none;
-  font-family:"Instrument Serif",serif;font-size:34px;line-height:1;
-  color:var(--ink);text-align:right;font-variant-numeric:tabular-nums;
-  min-width:0;width:100%;
-}
+.cc-io-input{flex:1;background:transparent;border:none;outline:none;font-family:"Instrument Serif",serif;font-size:34px;line-height:1;color:var(--ink);text-align:right;font-variant-numeric:tabular-nums;min-width:0;width:100%}
 .cc-io-input:disabled{opacity:.5}
 .cc-io-input::placeholder{color:var(--ink-3)}
-.cc-io-output{
-  flex:1;text-align:right;
-  font-family:"Instrument Serif",serif;font-size:34px;line-height:1;
-  color:var(--ink);font-variant-numeric:tabular-nums;
-  min-width:0;overflow:hidden;text-overflow:ellipsis;
-}
+.cc-io-output{flex:1;text-align:right;font-family:"Instrument Serif",serif;font-size:34px;line-height:1;color:var(--ink);font-variant-numeric:tabular-nums;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .cc-io-output-loading{color:var(--ink-3);font-size:24px}
 .cc-io-output-empty{color:var(--ink-3)}
 
-.cc-max-btn{
-  background:rgba(79,125,255,.10);border:1px solid var(--border);color:var(--blue);
-  padding:6px 10px;border-radius:10px;
-  font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:700;cursor:pointer;
-  letter-spacing:0.8px;flex-shrink:0;transition:all .15s;
-}
+.cc-max-btn{background:rgba(79,125,255,.10);border:1px solid var(--border);color:var(--blue);padding:6px 10px;border-radius:10px;font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:700;cursor:pointer;letter-spacing:0.8px;flex-shrink:0;transition:all .15s}
 .cc-max-btn:hover{background:rgba(79,125,255,.18)}
 .cc-io-usd{text-align:right;margin-top:6px;font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--ink-2);font-weight:500}
 
-.cc-route-meta{
-  margin-top:10px;padding-top:10px;border-top:1px dashed var(--hairline);
-  display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;
-  font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--ink-2);font-weight:600;
-  letter-spacing:0.6px;
-}
+.cc-route-meta{margin-top:10px;padding-top:10px;border-top:1px dashed var(--hairline);display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--ink-2);font-weight:600;letter-spacing:0.6px}
 .cc-route-meta b{color:var(--ink);font-weight:700}
 .cc-route-via{display:flex;align-items:center;gap:6px}
-.cc-route-tag{
-  padding:2px 7px;border-radius:5px;
-  background:rgba(79,125,255,.10);border:1px solid var(--border);
-  color:var(--blue);font-weight:700;letter-spacing:0.4px;text-transform:uppercase;
-}
+.cc-route-tag{padding:2px 7px;border-radius:5px;background:rgba(79,125,255,.10);border:1px solid var(--border);color:var(--blue);font-weight:700;letter-spacing:0.4px;text-transform:uppercase}
 
 .cc-flip-wrap{display:flex;justify-content:center;margin:-12px 0;position:relative;z-index:3}
-.cc-flip-arrow{
-  width:42px;height:42px;border-radius:14px;
-  background:linear-gradient(135deg,#fff,#F5F8FF);border:3px solid #EEF3FF;
-  display:grid;place-items:center;
-  font-family:"Instrument Serif",serif;font-style:italic;font-size:22px;color:var(--violet);line-height:1;
-  box-shadow:0 6px 18px rgba(168,127,255,.18);transition:transform .3s;
-}
+.cc-flip-arrow{width:42px;height:42px;border-radius:14px;background:linear-gradient(135deg,#fff,#F5F8FF);border:3px solid #EEF3FF;display:grid;place-items:center;font-family:"Instrument Serif",serif;font-style:italic;font-size:22px;color:var(--violet);line-height:1;box-shadow:0 6px 18px rgba(168,127,255,.18);transition:transform .3s}
 
-.cc-chain-badge{
-  display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:7px;
-  font-family:"Space Grotesk",sans-serif;font-size:10px;font-weight:700;
-  letter-spacing:0.4px;text-transform:uppercase;
-}
+.cc-chain-badge{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:7px;font-family:"Space Grotesk",sans-serif;font-size:10px;font-weight:700;letter-spacing:0.4px;text-transform:uppercase}
 .cc-chain-badge-sm{padding:2px 7px;font-size:9px}
 .cc-chain-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
 .cc-chain-badge-sm .cc-chain-dot{width:5px;height:5px}
 
 .cc-dest{margin-top:12px}
-.cc-dest-label{
-  display:flex;align-items:center;gap:6px;
-  font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:700;
-  color:var(--ink-2);letter-spacing:1.4px;text-transform:uppercase;margin-bottom:8px;
-}
+.cc-dest-label{display:flex;align-items:center;gap:6px;font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:700;color:var(--ink-2);letter-spacing:1.4px;text-transform:uppercase;margin-bottom:8px}
 .cc-dest-chain{font-weight:700}
 .cc-dest-input-wrap{position:relative}
-.cc-dest-input{
-  width:100%;padding:13px 42px 13px 14px;
-  background:var(--glass-strong);border:1.5px solid rgba(255,255,255,.85);
-  border-radius:12px;color:var(--ink);
-  font-family:"JetBrains Mono",monospace;font-size:12px;font-weight:600;
-  outline:none;transition:border-color .15s,box-shadow .15s;
-}
+.cc-dest-input{width:100%;padding:13px 42px 13px 14px;background:var(--glass-strong);border:1.5px solid rgba(255,255,255,.85);border-radius:12px;color:var(--ink);font-family:"JetBrains Mono",monospace;font-size:12px;font-weight:600;outline:none;transition:border-color .15s,box-shadow .15s}
 .cc-dest-input:focus{border-color:var(--blue);box-shadow:0 0 0 4px rgba(79,125,255,.10)}
 .cc-dest-input:disabled{opacity:.55}
 .cc-dest-input::placeholder{color:var(--ink-3);font-weight:500}
 .cc-dest-err{border-color:rgba(209,75,106,.5)}
 .cc-dest-ok{border-color:rgba(127,255,212,.6)}
-.cc-dest-check{
-  position:absolute;right:12px;top:50%;transform:translateY(-50%);
-  width:22px;height:22px;border-radius:50%;
-  background:linear-gradient(135deg,#7FFFD4,#A0E7FF);color:var(--ink);
-  display:grid;place-items:center;font-size:13px;font-weight:800;
-}
+.cc-dest-check{position:absolute;right:12px;top:50%;transform:translateY(-50%);width:22px;height:22px;border-radius:50%;background:linear-gradient(135deg,#7FFFD4,#A0E7FF);color:var(--ink);display:grid;place-items:center;font-size:13px;font-weight:800}
 .cc-dest-err-msg{margin-top:6px;font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--red);font-weight:600}
 
-.cc-status{
-  margin-top:14px;padding:12px 14px;border-radius:14px;
-  background:rgba(79,125,255,.08);border:1px solid var(--border);
-  display:flex;align-items:center;gap:10px;
-  font-size:12px;font-weight:600;color:var(--blue);font-family:"Space Grotesk",sans-serif;
-}
-.cc-spinner{
-  width:14px;height:14px;border-radius:50%;flex-shrink:0;
-  border:2px solid rgba(79,125,255,.20);border-top-color:var(--blue);
-  animation:cc-spin .8s linear infinite;
-}
-.cc-warn{
-  margin-top:14px;padding:12px 14px;border-radius:14px;
-  background:rgba(255,176,136,.14);border:1px solid rgba(255,176,136,.45);
-  font-size:12px;font-weight:600;color:#8a4a1d;font-family:"Space Grotesk",sans-serif;
-}
-.cc-error{
-  margin-top:14px;padding:12px 14px;border-radius:14px;
-  background:rgba(209,75,106,.10);border:1px solid rgba(209,75,106,.35);
-  font-size:12px;font-weight:600;color:var(--red);font-family:"Space Grotesk",sans-serif;
-}
+.cc-status{margin-top:14px;padding:12px 14px;border-radius:14px;background:rgba(79,125,255,.08);border:1px solid var(--border);display:flex;align-items:center;gap:10px;font-size:12px;font-weight:600;color:var(--blue);font-family:"Space Grotesk",sans-serif}
+.cc-spinner{width:14px;height:14px;border-radius:50%;flex-shrink:0;border:2px solid rgba(79,125,255,.20);border-top-color:var(--blue);animation:cc-spin .8s linear infinite}
+.cc-warn{margin-top:14px;padding:12px 14px;border-radius:14px;background:rgba(255,176,136,.14);border:1px solid rgba(255,176,136,.45);font-size:12px;font-weight:600;color:#8a4a1d;font-family:"Space Grotesk",sans-serif}
+.cc-error{margin-top:14px;padding:12px 14px;border-radius:14px;background:rgba(209,75,106,.10);border:1px solid rgba(209,75,106,.35);font-size:12px;font-weight:600;color:var(--red);font-family:"Space Grotesk",sans-serif}
 
-.cc-success{
-  margin-top:14px;padding:16px;border-radius:18px;text-align:center;
-  background:linear-gradient(135deg,rgba(127,255,212,.18),rgba(160,231,255,.18));
-  border:1px solid rgba(127,255,212,.45);animation:cc-rise .4s;
-}
-.cc-success-pending{
-  background:linear-gradient(135deg,rgba(255,205,107,.18),rgba(255,176,136,.18));
-  border-color:rgba(255,205,107,.45);
-}
-.cc-success-fail{
-  background:linear-gradient(135deg,rgba(209,75,106,.14),rgba(255,143,190,.14));
-  border-color:rgba(209,75,106,.4);
-}
+.cc-success{margin-top:14px;padding:16px;border-radius:18px;text-align:center;background:linear-gradient(135deg,rgba(127,255,212,.18),rgba(160,231,255,.18));border:1px solid rgba(127,255,212,.45);animation:cc-rise .4s}
+.cc-success-pending{background:linear-gradient(135deg,rgba(255,205,107,.18),rgba(255,176,136,.18));border-color:rgba(255,205,107,.45)}
+.cc-success-fail{background:linear-gradient(135deg,rgba(209,75,106,.14),rgba(255,143,190,.14));border-color:rgba(209,75,106,.4)}
 .cc-success-icon{font-size:24px;margin-bottom:4px;line-height:1}
 .cc-success-title{font-family:"Instrument Serif",serif;font-size:18px;color:var(--ink);letter-spacing:-.01em;line-height:1.1}
 .cc-success-pending .cc-success-title{color:#7a5400}
 .cc-success-fail .cc-success-title{color:var(--red)}
 .cc-success-sub{margin-top:4px;font-size:12px;color:var(--ink-2);font-weight:500}
 
-.cc-cta{
-  width:100%;margin-top:14px;padding:18px;border-radius:18px;border:none;
-  font-family:"Instrument Serif",serif;font-size:19px;letter-spacing:-.01em;
-  color:#fff;cursor:pointer;
-  background:linear-gradient(135deg,#4f7dff,#a87fff);
-  box-shadow:0 10px 28px rgba(79,125,255,.32),inset 0 1px 0 rgba(255,255,255,.25);
-  transition:transform .15s,box-shadow .15s,opacity .15s;position:relative;overflow:hidden;min-height:56px;
-}
+.cc-cta{width:100%;margin-top:14px;padding:18px;border-radius:18px;border:none;font-family:"Instrument Serif",serif;font-size:19px;letter-spacing:-.01em;color:#fff;cursor:pointer;background:linear-gradient(135deg,#4f7dff,#a87fff);box-shadow:0 10px 28px rgba(79,125,255,.32),inset 0 1px 0 rgba(255,255,255,.25);transition:transform .15s,box-shadow .15s,opacity .15s;position:relative;overflow:hidden;min-height:56px}
 .cc-cta em{font-style:italic;opacity:.9;margin:0 4px}
 .cc-cta:hover:not(.cc-cta-disabled){transform:translateY(-1px)}
 .cc-cta:active:not(.cc-cta-disabled){transform:translateY(1px)}
 .cc-cta-spinner{display:inline-block;margin-right:8px;animation:cc-spin .8s linear infinite}
-.cc-cta-success{
-  background:linear-gradient(135deg,#7FFFD4,#A0E7FF);color:var(--ink);
-  box-shadow:0 10px 28px rgba(127,255,212,.32),inset 0 1px 0 rgba(255,255,255,.25);
-}
-.cc-cta-error{
-  background:rgba(209,75,106,.14);color:var(--red);
-  border:1.5px solid rgba(209,75,106,.40);box-shadow:none;
-}
-.cc-cta-disabled{
-  background:rgba(26,27,78,.06);color:var(--ink-3);
-  border:1.5px solid var(--hairline);box-shadow:none;cursor:not-allowed;
-}
-.cc-cta-reset{
-  background:rgba(79,125,255,.10);color:var(--blue);
-  border:1.5px solid var(--border);box-shadow:none;
-}
+.cc-cta-success{background:linear-gradient(135deg,#7FFFD4,#A0E7FF);color:var(--ink);box-shadow:0 10px 28px rgba(127,255,212,.32),inset 0 1px 0 rgba(255,255,255,.25)}
+.cc-cta-error{background:rgba(209,75,106,.14);color:var(--red);border:1.5px solid rgba(209,75,106,.40);box-shadow:none}
+.cc-cta-disabled{background:rgba(26,27,78,.06);color:var(--ink-3);border:1.5px solid var(--hairline);box-shadow:none;cursor:not-allowed}
+.cc-cta-reset{background:rgba(79,125,255,.10);color:var(--blue);border:1.5px solid var(--border);box-shadow:none}
 .cc-cta-reset:hover{background:rgba(79,125,255,.18)}
 
-.cc-solscan-link{
-  display:block;text-align:center;margin-top:10px;
-  font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--blue);
-  font-weight:700;text-decoration:none;letter-spacing:0.6px;
-}
+.cc-solscan-link{display:block;text-align:center;margin-top:10px;font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--blue);font-weight:700;text-decoration:none;letter-spacing:0.6px}
 .cc-solscan-link:hover{text-decoration:underline}
-.cc-footer-note{
-  margin-top:14px;text-align:center;
-  font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:500;color:var(--ink-3);
-  letter-spacing:0.6px;
-}
+.cc-footer-note{margin-top:14px;text-align:center;font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:500;color:var(--ink-3);letter-spacing:0.6px}
 
 .cc-token-img{border-radius:50%;flex-shrink:0;object-fit:cover;background:rgba(79,125,255,.06)}
-.cc-token-fallback{
-  border-radius:50%;flex-shrink:0;
-  background:linear-gradient(135deg,rgba(79,125,255,.18),rgba(168,127,255,.18));
-  border:1px solid var(--border);
-  display:grid;place-items:center;
-  font-family:"Instrument Serif",serif;font-style:italic;color:var(--blue);
-}
+.cc-token-fallback{border-radius:50%;flex-shrink:0;background:linear-gradient(135deg,rgba(79,125,255,.18),rgba(168,127,255,.18));border:1px solid var(--border);display:grid;place-items:center;font-family:"Instrument Serif",serif;font-style:italic;color:var(--blue)}
 
-.cc-modal-backdrop{
-  position:fixed;inset:0;z-index:499;
-  background:rgba(26,27,78,0.35);
-  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
-}
-.cc-modal{
-  position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:500;
-  width:94vw;max-width:440px;max-height:85dvh;
-  display:flex;flex-direction:column;
-  background:
-    radial-gradient(ellipse at 20% 0%,#E4F2FF 0%,transparent 50%),
-    radial-gradient(ellipse at 80% 0%,#F0E7FF 0%,transparent 50%),
-    linear-gradient(180deg,#F5F8FF 0%,#EEF3FF 100%);
-  border:1px solid rgba(255,255,255,.85);border-radius:24px;
-  box-shadow:0 24px 80px rgba(26,27,78,.25);
-  animation:cc-modal-in .25s cubic-bezier(.2,1.2,.4,1);
-  overflow:hidden;
-}
+.cc-modal-backdrop{position:fixed;inset:0;z-index:499;background:rgba(26,27,78,0.35);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+.cc-modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:500;width:94vw;max-width:440px;max-height:85dvh;display:flex;flex-direction:column;background:radial-gradient(ellipse at 20% 0%,#E4F2FF 0%,transparent 50%),radial-gradient(ellipse at 80% 0%,#F0E7FF 0%,transparent 50%),linear-gradient(180deg,#F5F8FF 0%,#EEF3FF 100%);border:1px solid rgba(255,255,255,.85);border-radius:24px;box-shadow:0 24px 80px rgba(26,27,78,.25);animation:cc-modal-in .25s cubic-bezier(.2,1.2,.4,1);overflow:hidden}
 .cc-modal-to{max-width:460px;max-height:88dvh}
 .cc-modal-head{padding:18px 18px 12px;border-bottom:1px solid var(--hairline)}
 .cc-modal-head-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
 .cc-modal-title{font-family:"Instrument Serif",serif;font-size:22px;letter-spacing:-.015em;color:var(--ink);line-height:1}
-.cc-modal-title em{
-  font-style:italic;
-  background:linear-gradient(120deg,#4f7dff,#a87fff);
-  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
-}
+.cc-modal-title em{font-style:italic;background:linear-gradient(120deg,#4f7dff,#a87fff);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
 .cc-modal-sub{font-size:11px;color:var(--ink-2);font-weight:500;margin-left:6px}
-.cc-modal-close{
-  width:34px;height:34px;border-radius:50%;
-  background:var(--glass-strong);border:1px solid var(--border);
-  color:var(--ink);font-size:18px;cursor:pointer;font-family:inherit;
-  display:grid;place-items:center;transition:all .15s;
-}
+.cc-modal-close{width:34px;height:34px;border-radius:50%;background:var(--glass-strong);border:1px solid var(--border);color:var(--ink);font-size:18px;cursor:pointer;font-family:inherit;display:grid;place-items:center;transition:all .15s}
 .cc-modal-close:hover{background:#fff;border-color:var(--blue)}
 
-.cc-modal-search{
-  width:100%;padding:11px 13px;
-  background:var(--glass-strong);border:1.5px solid var(--border);
-  border-radius:12px;color:var(--ink);
-  font-family:inherit;font-size:13px;font-weight:500;
-  outline:none;transition:border-color .15s,box-shadow .15s;
-}
+.cc-modal-search{width:100%;padding:11px 13px;background:var(--glass-strong);border:1.5px solid var(--border);border-radius:12px;color:var(--ink);font-family:inherit;font-size:13px;font-weight:500;outline:none;transition:border-color .15s,box-shadow .15s}
 .cc-modal-search:focus{border-color:var(--blue);box-shadow:0 0 0 4px rgba(79,125,255,.10)}
 .cc-modal-search::placeholder{color:var(--ink-3)}
 
 .cc-chain-chips{display:flex;gap:6px;overflow-x:auto;padding:10px 0 2px;scrollbar-width:none}
 .cc-chain-chips::-webkit-scrollbar{display:none}
-.cc-chain-chip{
-  flex-shrink:0;padding:6px 12px;border-radius:999px;
-  background:var(--glass);border:1px solid var(--border);
-  color:var(--ink-2);font-family:inherit;font-size:11px;font-weight:700;letter-spacing:0.4px;
-  cursor:pointer;white-space:nowrap;transition:all .15s;
-}
+.cc-chain-chip{flex-shrink:0;padding:6px 12px;border-radius:999px;background:var(--glass);border:1px solid var(--border);color:var(--ink-2);font-family:inherit;font-size:11px;font-weight:700;letter-spacing:0.4px;cursor:pointer;white-space:nowrap;transition:all .15s}
 .cc-chain-chip:hover{border-color:var(--blue);color:var(--ink)}
 
 .cc-modal-body{overflow-y:auto;-webkit-overflow-scrolling:touch;flex:1;padding-bottom:env(safe-area-inset-bottom)}
 .cc-modal-loading,.cc-modal-empty{padding:28px;text-align:center;color:var(--ink-2);font-size:12.5px;font-weight:500}
-.cc-modal-section{
-  padding:12px 18px 6px;
-  font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--ink-2);font-weight:700;
-  letter-spacing:1.4px;text-transform:uppercase;
-}
-.cc-modal-row{
-  padding:12px 18px;cursor:pointer;
-  display:flex;align-items:center;gap:12px;
-  border-bottom:1px solid var(--hairline);
-  transition:background .15s;
-}
+.cc-modal-section{padding:12px 18px 6px;font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--ink-2);font-weight:700;letter-spacing:1.4px;text-transform:uppercase}
+.cc-modal-row{padding:12px 18px;cursor:pointer;display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--hairline);transition:background .15s}
 .cc-modal-row:last-child{border-bottom:none}
 .cc-modal-row:hover{background:rgba(255,255,255,.5)}
 .cc-modal-row-info{flex:1;min-width:0}
@@ -491,9 +289,6 @@ const SOL_NATIVE_MINT  = 'So11111111111111111111111111111111111111112';
 const USDC_SOL_MINT    = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const USDT_SOL_MINT    = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
 
-// Source tokens (Solana wallet origin only). Order = display order in modal.
-// uiMin is the soft UI floor — Chainflip's protocol min for Solana sources
-// is 0, but very small swaps are eaten by fees so we discourage them.
 const CF_SOURCES = [
   {
     asset:'SOL', chain:'Solana', symbol:'SOL', name:'Solana',
@@ -512,9 +307,6 @@ const CF_SOURCES = [
   },
 ];
 
-// Chainflip destinations (Solana excluded — same-chain swaps go through
-// Jupiter, not Chainflip). Order = display order, chainType drives the
-// address validator.
 const CF_DESTS = [
   { chain:'Ethereum', name:'Ethereum', chainType:'EVM', color:'#627eea',
     assets:[
@@ -557,7 +349,6 @@ const CF_DESTS = [
   },
 ];
 
-// Flatten dest assets into a searchable list, attaching chain metadata.
 const ALL_DESTS = CF_DESTS.flatMap(c =>
   c.assets.map(a => ({
     ...a,
@@ -567,10 +358,10 @@ const ALL_DESTS = CF_DESTS.flatMap(c =>
 );
 const DEST_BY_KEY = Object.fromEntries(ALL_DESTS.map(d => [d.key, d]));
 
-const DEFAULT_FROM = CF_SOURCES[0];                        // SOL
-const DEFAULT_TO   = DEST_BY_KEY['Ethereum:ETH'];          // ETH on Ethereum
+const DEFAULT_FROM = CF_SOURCES[0];
+const DEFAULT_TO   = DEST_BY_KEY['Ethereum:ETH'];
 
-/* ─── FORMATTERS ─── */
+/* ─── FORMATTERS (unchanged) ─── */
 const trimZeros = v => String(v).replace(/(\.\d*?[1-9])0+$/, '$1').replace(/\.0+$/, '').replace(/\.$/, '');
 const decsForDisplay = n => {
   const v = +n;
@@ -630,7 +421,6 @@ const toRaw = (s, dec) => {
 const isValidSolAddr = s =>
   !!s && s.length >= 32 && s.length <= 44 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(s);
 
-// Per-chain address validation.
 const validateDest = (addr, chainType) => {
   const a = String(addr || '').trim();
   if (!a) return 'Destination address required';
@@ -639,7 +429,6 @@ const validateDest = (addr, chainType) => {
   } else if (chainType === 'BTC') {
     if (!/^(bc1[a-z0-9]{20,87}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})$/.test(a)) return 'Invalid Bitcoin address';
   } else if (chainType === 'DOT') {
-    // SS58 — base58 (no 0/O/I/l), starts with 1 for Polkadot/Assethub, 47-48 chars
     if (!/^1[1-9A-HJ-NP-Za-km-z]{46,47}$/.test(a)) return 'Invalid Polkadot/Assethub address (SS58)';
   } else if (chainType === 'TRX') {
     if (!/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(a)) return 'Invalid Tron address (T + 33 chars)';
@@ -657,7 +446,6 @@ const destInputPlaceholder = (chainType) =>
 : chainType === 'SVM'  ? 'Solana address'
 :                        'Destination address';
 
-// Destination chain explorer for the egress tx.
 const destExplorerUrl = (chain, txRef) => {
   if (!txRef) return null;
   const clean = String(txRef).replace(/^0x/, '');
@@ -673,7 +461,6 @@ const destExplorerUrl = (chain, txRef) => {
   }
 };
 
-// Friendly state mapping for the Chainflip v2 status response.
 const deriveStatusLabel = (status) => {
   if (!status?.state) return { label: 'Waiting for Chainflip to observe deposit…', done: false, failed: false };
   switch (String(status.state).toUpperCase()) {
@@ -688,9 +475,9 @@ const deriveStatusLabel = (status) => {
   }
 };
 
-/* ─── ERRORS ─── */
 const friendlyError = err => {
   const m = String(err?.message || err || '').toLowerCase();
+  if (m.includes('all public rpcs failed'))             return 'All public Solana RPCs are unreachable. Try again in a moment.';
   if (m.includes('below') && m.includes('minimum'))     return 'Amount below Chainflip minimum for this asset.';
   if (m.includes('above') && m.includes('maximum'))     return 'Amount above Chainflip maximum for this asset.';
   if (m.includes('insufficient sol') || m.includes('not enough sol')) return 'Not enough SOL in your wallet (need SOL for fees + reserve).';
@@ -706,7 +493,7 @@ const friendlyError = err => {
   return err?.message || 'Swap failed. Please try again.';
 };
 
-/* ─── CHAINFLIP API CALLS ─── */
+/* ─── CHAINFLIP API ─── */
 async function cfQuote({ src, dest, atomicAmount, signal }) {
   const p = new URLSearchParams({
     srcChain:  src.chain,
@@ -743,13 +530,13 @@ async function cfStatus(id) {
   } catch { return null; }
 }
 
-/* ─── SOL PRICE (for fee USD calc) ─── */
+/* ─── SOL PRICE (public Jupiter lite-api) ─── */
 let _solPriceCache = { p: 0, ts: 0 };
 async function fetchSolPriceUsd() {
   const now = Date.now();
   if (now - _solPriceCache.ts < 30_000 && _solPriceCache.p > 0) return _solPriceCache.p;
   try {
-    const r = await fetch(`https://lite-api.jup.ag/price/v3?ids=${SOL_NATIVE_MINT}`);
+    const r = await fetch('https://lite-api.jup.ag/price/v3?ids=' + SOL_NATIVE_MINT);
     if (!r.ok) return _solPriceCache.p || 0;
     const j = await r.json();
     const p = Number(j?.[SOL_NATIVE_MINT]?.usdPrice || 0);
@@ -758,8 +545,6 @@ async function fetchSolPriceUsd() {
   } catch { return _solPriceCache.p || 0; }
 }
 
-// Convert input value to USD for fee math.
-// SOL → multiply by live SOL/USD. USDC/USDT → pin to $1.
 function inputAmountUsd(src, inputAmount) {
   const v = Number(inputAmount);
   if (!Number.isFinite(v) || v <= 0) return 0;
@@ -768,7 +553,6 @@ function inputAmountUsd(src, inputAmount) {
   return 0;
 }
 
-// Platform fee: FEE_BPS of input USD, paid in SOL. Floor at MIN_FEE_LAMPORTS.
 function computeSolFeeLamports(fromAmountUsd, solPriceUsd) {
   if (!fromAmountUsd || !solPriceUsd || fromAmountUsd <= 0 || solPriceUsd <= 0) return MIN_FEE_LAMPORTS;
   const feeUsd = fromAmountUsd * (FEE_BPS / 10000);
@@ -801,6 +585,7 @@ const useEscape = (open, h) => {
 /* ─── UI BITS ─── */
 const TokenIcon = ({ token, size = 32 }) => {
   const [err, setErr] = useState(false);
+  useEffect(() => { setErr(false); }, [token?.logoURI]);
   if (token?.logoURI && !err) {
     return (
       <img
@@ -862,7 +647,6 @@ const StepProgress = ({ step }) => {
   );
 };
 
-/* ─── FROM MODAL (Solana sources only) ─── */
 const FromTokenModal = ({ open, onClose, onSelect }) => {
   const close = useCallback(() => onClose(), [onClose]);
   useBodyScrollLock(open);
@@ -899,7 +683,6 @@ const FromTokenModal = ({ open, onClose, onSelect }) => {
   );
 };
 
-/* ─── TO MODAL ─── */
 const ToTokenModal = ({ open, onClose, onSelect }) => {
   const [q, setQ]     = useState('');
   const [sel, setSel] = useState('all');
@@ -984,8 +767,8 @@ const ToTokenModal = ({ open, onClose, onSelect }) => {
 export default function CrossChainSwap({ onConnectWallet }) {
   useCcCSS();
 
+  // useConnection() removed — we own a public RPC pool above (CONNECTIONS).
   const { publicKey, signAllTransactions, connected } = useWallet();
-  const { connection } = useConnection();
   const pubkey = publicKey || null;
   const wcon   = !!connected && !!pubkey;
 
@@ -1008,14 +791,13 @@ export default function CrossChainSwap({ onConnectWallet }) {
   const [channelId,    setChannelId]    = useState(null);
   const [bridgeStatus, setBridgeStatus] = useState(null);
   const [egressTxRef,  setEgressTxRef]  = useState(null);
-  // Snapshot of the destination token taken at submit time. Used by the
-  // success card and the dest-explorer link so that if the user changes
-  // toToken while a bridge is in flight, those references stay consistent
-  // with the actual in-flight swap.
   const [bridgeMeta,   setBridgeMeta]   = useState(null);
 
   const [solBalance,   setSolBalance]   = useState(null);   // lamports
   const [tokenBalance, setTokenBalance] = useState(null);   // ui units of fromToken (when SPL)
+  // Per-balance honesty: 'idle' | 'loading' | 'ok' | 'fail'.
+  const [solBalStatus,   setSolBalStatus]   = useState('idle');
+  const [tokenBalStatus, setTokenBalStatus] = useState('idle');
   const [solPrice,     setSolPrice]     = useState(0);
 
   const [fromOpen, setFromOpen] = useState(false);
@@ -1035,32 +817,46 @@ export default function CrossChainSwap({ onConnectWallet }) {
     return () => { alive = false; clearInterval(id); };
   }, []);
 
-  // Wallet balances.
+  // Wallet balances — raced across the public RPC pool, honest per-call status.
   useEffect(() => {
-    if (!pubkey || !connection) { setSolBalance(null); setTokenBalance(null); return; }
+    if (!pubkey) {
+      setSolBalance(null); setTokenBalance(null);
+      setSolBalStatus('idle'); setTokenBalStatus('idle');
+      return;
+    }
     let cancelled = false;
-    connection.getBalance(pubkey)
-      .then(b => { if (!cancelled) setSolBalance(b); })
-      .catch(() => {});
+
+    setSolBalStatus('loading');
+    raceConn('getBalance', c => c.getBalance(pubkey, 'confirmed'))
+      .then(b => { if (!cancelled) { setSolBalance(b); setSolBalStatus('ok'); } })
+      .catch(() => { if (!cancelled) { setSolBalance(null); setSolBalStatus('fail'); } });
+
     if (fromToken?.mint && !fromToken.isNative) {
-      connection.getParsedTokenAccountsByOwner(pubkey, { mint: new PublicKey(fromToken.mint) })
+      setTokenBalStatus('loading');
+      const mintPk = new PublicKey(fromToken.mint);
+      raceConn('tokenAccs', c => c.getParsedTokenAccountsByOwner(pubkey, { mint: mintPk }, 'confirmed'))
         .then(a => {
           if (cancelled) return;
-          setTokenBalance(a.value.length ? a.value[0].account.data.parsed.info.tokenAmount.uiAmount : 0);
+          const ui = a.value.length ? Number(a.value[0].account.data.parsed.info.tokenAmount.uiAmount || 0) : 0;
+          setTokenBalance(ui);
+          setTokenBalStatus('ok');
         })
-        .catch(() => setTokenBalance(0));
+        .catch(() => { if (!cancelled) { setTokenBalance(null); setTokenBalStatus('fail'); } });
     } else {
       setTokenBalance(null);
+      setTokenBalStatus('idle');
     }
     return () => { cancelled = true; };
-  }, [pubkey, connection, fromToken, step]);
+  }, [pubkey, fromToken, step]);
 
-  // Display balance for the FROM token.
+  // Display balance for the FROM token + its status.
   const fbd = useMemo(() => {
     if (!fromToken) return null;
     if (fromToken.isNative) return solBalance != null ? solBalance / LAMPORTS_PER_SOL : null;
     return tokenBalance;
   }, [fromToken, solBalance, tokenBalance]);
+
+  const fbdStatus = fromToken?.isNative ? solBalStatus : tokenBalStatus;
 
   // Live address validation.
   useEffect(() => {
@@ -1068,7 +864,7 @@ export default function CrossChainSwap({ onConnectWallet }) {
     setAddrErr(validateDest(destAddr, toToken.chainType) || '');
   }, [destAddr, toToken]);
 
-  // Persist destination address per dest chain — typing once per chain is enough.
+  // Persist destination address per dest chain.
   const destLsKey = useMemo(() => 'cf:cc:dest:' + (toToken?.chainType || ''), [toToken]);
   useEffect(() => {
     try {
@@ -1134,7 +930,6 @@ export default function CrossChainSwap({ onConnectWallet }) {
     if (fbd == null || fbd <= 0) return;
     const dec = Math.min(fromToken.decimals, 9);
     if (fromToken.isNative) {
-      // Keep enough for fee + reserve.
       const reserveLamports = SOL_RESERVE + MIN_FEE_LAMPORTS;
       setFromAmt(fmtInput(Math.max(0, (solBalance - reserveLamports)) / LAMPORTS_PER_SOL, dec));
     } else {
@@ -1142,9 +937,10 @@ export default function CrossChainSwap({ onConnectWallet }) {
     }
   }, [fbd, fromToken, solBalance]);
 
-  // Check SOL has enough for tx fees + platform fee + (if SOL source) the bridge amount.
+  // SOL shortfall — only meaningful when we KNOW the SOL balance.
   const solShortfall = useMemo(() => {
-    if (!quote || solBalance == null) return null;
+    if (!quote) return null;
+    if (solBalStatus !== 'ok' || solBalance == null) return null;
     const need = quote.feeLamports + SOL_RESERVE;
     if (fromToken.isNative) {
       const inputLamports = Math.floor(Number(fromAmt) * LAMPORTS_PER_SOL);
@@ -1152,7 +948,7 @@ export default function CrossChainSwap({ onConnectWallet }) {
       return solBalance < total ? (total - solBalance) : 0;
     }
     return solBalance < need ? (need - solBalance) : 0;
-  }, [quote, solBalance, fromToken, fromAmt]);
+  }, [quote, solBalance, solBalStatus, fromToken, fromAmt]);
 
   // Status polling once channel is open.
   useEffect(() => {
@@ -1201,8 +997,7 @@ export default function CrossChainSwap({ onConnectWallet }) {
     setBridgeMeta(null);
 
     try {
-      // Fresh quote — stale quotes can drift past slippage tolerance, and
-      // Chainflip absorbs out-of-bound deposits. Re-quote on submit.
+      // Fresh quote — stale quotes can drift past slippage tolerance.
       const freshQuote = await cfQuote({
         src:          fromToken,
         dest:         toToken,
@@ -1213,12 +1008,15 @@ export default function CrossChainSwap({ onConnectWallet }) {
       const channel = await cfChannel({
         quote:         freshQuote,
         destAddress:   destAddr.trim(),
-        refundAddress: pubkey.toString(),                                                     // refund lands back on Solana
+        refundAddress: pubkey.toString(),
       });
       const depositAddress = new PublicKey(channel.depositAddress);
 
       setStatusMsg('Building transactions…');
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+      const { blockhash, lastValidBlockHeight } = await raceConn(
+        'getLatestBlockhash',
+        c => c.getLatestBlockhash('confirmed'),
+      );
 
       const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 });
       const priorityIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 });
@@ -1241,32 +1039,25 @@ export default function CrossChainSwap({ onConnectWallet }) {
       // Tx B: bridge transfer to Chainflip deposit address.
       let bridgeIx;
       if (fromToken.isNative) {
-        // SOL source: plain SystemProgram.transfer.
         bridgeIx = SystemProgram.transfer({
           fromPubkey: pubkey,
           toPubkey:   depositAddress,
           lamports:   Number(quote.atomicAmount),
         });
       } else {
-        // SPL source (USDC/USDT on Solana): TransferChecked from user ATA
-        // to Chainflip's deposit channel account.
-        //
-        // Chainflip's SDK may return `depositAddress` as one of two things,
-        // depending on internal implementation choice for this asset:
-        //   (a) the pre-created ATA for the deposit channel (token account)
-        //   (b) the owner PDA (we derive the ATA from it ourselves)
-        //
-        // We detect at runtime — a token account is owned by the SPL Token
-        // Program and has data.length === 165. Anything else is treated as
-        // an owner pubkey and we derive its ATA (PDAs are off-curve, so
-        // allowOwnerOffCurve must be true).
+        // SPL source: TransferChecked from user ATA → Chainflip's deposit
+        // channel token account. depositAddress may be the token account
+        // itself or an owner pubkey — detect at runtime via getAccountInfo.
         const mint    = new PublicKey(fromToken.mint);
         const userAta = getAssociatedTokenAddressSync(mint, pubkey);
 
         setStatusMsg('Resolving Chainflip deposit account…');
         let destTokenAccount = depositAddress;
         try {
-          const info = await connection.getAccountInfo(depositAddress, 'confirmed');
+          const info = await raceConn(
+            'getAccountInfo(deposit)',
+            c => c.getAccountInfo(depositAddress, 'confirmed'),
+          );
           const isAta =
             info &&
             info.owner.equals(TOKEN_PROGRAM_ID) &&
@@ -1275,18 +1066,17 @@ export default function CrossChainSwap({ onConnectWallet }) {
             destTokenAccount = getAssociatedTokenAddressSync(mint, depositAddress, true);
           }
         } catch {
-          // If account-info lookup fails, fall back to deriving the ATA —
-          // safer assumption since wallets do the same thing when sending
-          // SPL tokens to a "wallet address".
+          // If all RPCs fail to return account info, fall back to deriving
+          // the ATA — safe assumption matching wallet UX.
           destTokenAccount = getAssociatedTokenAddressSync(mint, depositAddress, true);
         }
 
         bridgeIx = createTransferCheckedInstruction(
-          userAta,                       // source ATA (user's)
-          mint,                          // mint (for decimals check)
-          destTokenAccount,              // destination ATA (Chainflip's)
-          pubkey,                        // owner / authority
-          BigInt(quote.atomicAmount),    // atomic amount
+          userAta,
+          mint,
+          destTokenAccount,
+          pubkey,
+          BigInt(quote.atomicAmount),
           fromToken.decimals,
           [],
           TOKEN_PROGRAM_ID,
@@ -1305,26 +1095,26 @@ export default function CrossChainSwap({ onConnectWallet }) {
 
       setStep(3);
       setStatusMsg('Sending fee transaction…');
-      const feeSig = await connection.sendRawTransaction(signedFee.serialize(), {
+      // Race-send: broadcast to all RPCs in parallel, first accepted wins.
+      const feeSig = await raceSend(signedFee.serialize(), {
         skipPreflight: false, maxRetries: 3,
       });
 
       setStatusMsg('Confirming fee…');
-      const feeConfirm = await connection.confirmTransaction(
-        { signature: feeSig, blockhash, lastValidBlockHeight },
-        'confirmed',
+      const feeConfirm = await raceConn(
+        'confirmTransaction(fee)',
+        c => c.confirmTransaction({ signature: feeSig, blockhash, lastValidBlockHeight }, 'confirmed'),
       );
       if (feeConfirm?.value?.err) throw new Error('Fee transaction failed — bridge not sent.');
 
       setStatusMsg('Sending bridge transaction…');
-      const bridgeSig = await connection.sendRawTransaction(signedBridge.serialize(), {
+      const bridgeSig = await raceSend(signedBridge.serialize(), {
         skipPreflight: false, maxRetries: 3,
       });
       setTxSig(bridgeSig);
 
       // Don't wait for full bridge confirmation — Chainflip status polling
-      // takes over from here. The bridge tx confirming is just "deposit
-      // detected on Solana"; the swap then plays out over the next minutes.
+      // takes over from here.
       setChannelId(channel.depositChannelId);
       setBridgeMeta({
         chain:     toToken.chain,
@@ -1345,7 +1135,7 @@ export default function CrossChainSwap({ onConnectWallet }) {
       setTimeout(() => { setStep(0); setSwapErr(''); }, 6000);
     }
   }, [
-    wcon, destAddr, toToken, fromToken, quote, signAllTransactions, connection,
+    wcon, destAddr, toToken, fromToken, quote, signAllTransactions,
     pubkey, onConnectWallet, solShortfall,
   ]);
 
@@ -1366,14 +1156,9 @@ export default function CrossChainSwap({ onConnectWallet }) {
   const solscan    = txSig ? 'https://solscan.io/tx/' + txSig : null;
   const destExplorer = destExplorerUrl(bridgeMeta?.chain || toToken.chain, egressTxRef);
 
-  // Dest USD (egress * destination price). For non-stable assets we don't
-  // have on-page pricing — show only if quote includes it. Chainflip quote
-  // includes ingressFee USD values but not destination USD; we approximate
-  // by comparing to input USD minus fees for stable→stable, else skip.
   const destUsd = useMemo(() => {
     if (!quote) return 0;
     if (toToken.asset === 'USDC' || toToken.asset === 'USDT') return quote.egressUi;
-    // For non-stable dest, rough estimate via input USD - protocol fees.
     return null;
   }, [quote, toToken]);
 
@@ -1393,13 +1178,15 @@ export default function CrossChainSwap({ onConnectWallet }) {
     return null;
   };
 
+  // Block the button only when we KNOW there's a shortfall or balance issue.
+  // If balance status is loading/fail, let the user try — chain will decide.
   const btnDisabled = busy ||
     (wcon && (!fromAmt
       || n < (fromToken.uiMin || 0)
       || !destAddr.trim()
       || !!addrErr
       || (!quote && !isError && !isSuccess)
-      || !!solShortfall
+      || (solShortfall != null && solShortfall > 0)
     ));
 
   const btnClass = () => {
@@ -1410,6 +1197,20 @@ export default function CrossChainSwap({ onConnectWallet }) {
   };
 
   const labelOverride = btnLabel();
+
+  // Honest balance display.
+  const renderBal = () => {
+    if (fbdStatus === 'loading' || fbdStatus === 'idle') {
+      return <span className="cc-io-bal">Bal: <span className="cc-io-bal-val cc-bal-loading">…</span></span>;
+    }
+    if (fbdStatus === 'fail') {
+      return <span className="cc-io-bal" title="All public Solana RPCs declined the balance lookup">Bal: <span className="cc-io-bal-val cc-bal-fail">RPC down</span></span>;
+    }
+    if (fbd != null) {
+      return <span className="cc-io-bal">Bal: <span className="cc-io-bal-val">{fmtTok(fbd)}</span></span>;
+    }
+    return null;
+  };
 
   return (
     <div className="cc-page">
@@ -1441,9 +1242,7 @@ export default function CrossChainSwap({ onConnectWallet }) {
               <span className="cc-io-label">You Send</span>
               <div className="cc-io-meta">
                 <ChainBadge chain="Solana" name="Solana" color="#14f195" small/>
-                {fbd != null && (
-                  <span className="cc-io-bal">Bal: <span className="cc-io-bal-val">{fmtTok(fbd)}</span></span>
-                )}
+                {renderBal()}
               </div>
             </div>
             <div className="cc-io-row">
@@ -1464,7 +1263,7 @@ export default function CrossChainSwap({ onConnectWallet }) {
                 disabled={busy}
                 className="cc-io-input"
               />
-              {fbd > 0 && !busy && (<button onClick={onMax} className="cc-max-btn">MAX</button>)}
+              {fbdStatus === 'ok' && fbd > 0 && !busy && (<button onClick={onMax} className="cc-max-btn">MAX</button>)}
             </div>
             {inputUsd > 0 && (<div className="cc-io-usd">≈ {fmtUsd(inputUsd)}</div>)}
           </div>
@@ -1535,14 +1334,19 @@ export default function CrossChainSwap({ onConnectWallet }) {
             </div>
           )}
 
+          {/* Surface RPC-down for source balance — important before signing. */}
+          {wcon && fbdStatus === 'fail' && (
+            <div className="cc-warn">
+              Couldn't fetch your {fromToken.symbol} balance — all public Solana RPCs declined the lookup. You can still try the swap; the chain will reject if balance is insufficient.
+            </div>
+          )}
+
           {statusMsg && busy && (
             <div className="cc-status"><div className="cc-spinner"/>{statusMsg}</div>
           )}
 
           {swapErr && (<div className="cc-error">{swapErr}</div>)}
 
-          {/* Chainflip status banner — shows live state until terminal.
-              Once done (COMPLETED or FAILED), the success card below takes over. */}
           {channelId && bridgeStatus && !bridgeStatus.done && (
             <div className="cc-status" style={{ marginTop: 14 }}>
               <div className="cc-spinner"/>
@@ -1550,9 +1354,6 @@ export default function CrossChainSwap({ onConnectWallet }) {
             </div>
           )}
 
-          {/* Success card — uses bridgeMeta (snapshot at submit) instead of
-              live toToken, so it stays correct if the user changes the dest
-              dropdown while the swap is still mid-flight. */}
           {isSuccess && (
             <div className={
               'cc-success' +
@@ -1578,7 +1379,6 @@ export default function CrossChainSwap({ onConnectWallet }) {
             </div>
           )}
 
-          {/* CTA */}
           {!isSuccess ? (
             <button
               onClick={isError ? reset : (!wcon ? () => onConnectWallet?.() : execute)}
@@ -1594,7 +1394,6 @@ export default function CrossChainSwap({ onConnectWallet }) {
             <button onClick={reset} className="cc-cta cc-cta-reset">New Bridge</button>
           )}
 
-          {/* Links */}
           {txSig && solscan && (
             <a href={solscan} target="_blank" rel="noreferrer" className="cc-solscan-link">View deposit on Solscan ↗</a>
           )}
