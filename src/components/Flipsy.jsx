@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useFlipsy } from '../hooks/useFlipsy';
-   
+
 // ============================================================
 // INLINE CSS — Wonderland with Solana-tinted accents · injected once
 // ============================================================
@@ -140,6 +140,9 @@ const FLIPSY_CSS = `
 }
 .fp-bal-l{font-family:"JetBrains Mono",monospace;font-size:9px;font-weight:700;color:var(--ink-3);letter-spacing:1.4px}
 .fp-bal-v{font-family:"JetBrains Mono",monospace;font-size:12px;font-weight:700;color:var(--green);font-variant-numeric:tabular-nums}
+.fp-bal-v.fp-bal-loading{color:rgba(26,27,78,0.45)}
+.fp-bal-v.fp-bal-fail{color:var(--red);font-family:"Space Grotesk",sans-serif;font-size:10px;letter-spacing:0.6px;font-weight:800}
+.fp-bal.fp-bal-warn{border-color:rgba(209,75,106,.35)}
 .fp-bal-connect{cursor:pointer}
 .fp-bal-connect .fp-bal-v{color:var(--sol-purple);font-family:"Space Grotesk",sans-serif;font-size:11px;font-weight:800;letter-spacing:0.6px}
 
@@ -1176,6 +1179,7 @@ export default function Flipsy({ onConnectWallet }) {
 
   const {
     livePrice = 0, liveRound = null, upcomingRounds = [], recentRounds = [], userBets = {}, balance = 0,
+    balanceStatus = 'idle',
     placeBet = async () => { throw new Error('Hook not ready'); },
     claim = async () => { throw new Error('Hook not ready'); },
     loading = true,
@@ -1284,6 +1288,30 @@ export default function Flipsy({ onConnectWallet }) {
   const liveEpoch = liveRound?.epoch ?? upcomingRounds[0]?.epoch ?? null;
   const nothingToShow = !liveRound && upcomingRounds.length === 0 && recentRounds.length === 0;
 
+  // Honest balance pill rendering — never silent zero.
+  const renderBalancePill = () => {
+    if (!wallet.connected) {
+      return (
+        <div className="fp-bal fp-bal-connect" onClick={() => onConnectWallet?.()}>
+          <span className="fp-bal-v">Connect</span>
+        </div>
+      );
+    }
+    const isLoading = balanceStatus === 'loading' || balanceStatus === 'idle';
+    const isFail    = balanceStatus === 'fail';
+    return (
+      <div
+        className={'fp-bal' + (isFail ? ' fp-bal-warn' : '')}
+        title={isFail ? 'All public devnet RPCs declined the balance lookup' : undefined}
+      >
+        <span className="fp-bal-l">BAL</span>
+        <span className={'fp-bal-v' + (isLoading ? ' fp-bal-loading' : '') + (isFail ? ' fp-bal-fail' : '')}>
+          {isFail ? 'RPC DOWN' : isLoading ? '…' : '$' + balance.toFixed(2)}
+        </span>
+      </div>
+    );
+  };
+
   return (
     <div className="fp-page">
       <div className="fp-blob" style={{ width: 380, height: 380, background: '#FFE8F4', top: -100, left: -120 }}/>
@@ -1322,16 +1350,7 @@ export default function Flipsy({ onConnectWallet }) {
               {hasClaim && (<span className="fp-rounds-btn-count">{claimableRounds.length}</span>)}
             </button>
 
-            {wallet.connected ? (
-              <div className="fp-bal">
-                <span className="fp-bal-l">BAL</span>
-                <span className="fp-bal-v">${balance.toFixed(2)}</span>
-              </div>
-            ) : (
-              <div className="fp-bal fp-bal-connect" onClick={() => onConnectWallet?.()}>
-                <span className="fp-bal-v">Connect</span>
-              </div>
-            )}
+            {renderBalancePill()}
           </div>
         </header>
 
