@@ -295,7 +295,7 @@ function useSwCSS() {
   }, []);
 }
 
-/* ─── CONFIG — UNCHANGED ──────────────────────────────────────────── */
+/* ─── CONFIG ──────────────────────────────────────────── */
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
 const FEE_BPS    = 300;
 const SOL_MINT   = 'So11111111111111111111111111111111111111112';
@@ -304,14 +304,13 @@ const USDC_MINT  = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const PRIORITY_FEE_MICROLAMPORTS = 50_000;
 const SLIPPAGE_BPS = 500;
 
-const RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
+// PUBLIC FREE RPCs ONLY — no runtime override, no paid endpoints.
 const RPC_POOL = [
-  RUNTIME_CFG.rpc,
   'https://solana-rpc.publicnode.com',
   'https://solana.drpc.org',
   'https://rpc.ankr.com/solana',
   'https://api.mainnet-beta.solana.com',
-].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
+];
 
 const BAL_COMMITMENT = 'processed';
 
