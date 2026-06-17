@@ -258,6 +258,7 @@ const MW_CSS = `
 .mw-amount-label{font-size:10px;color:var(--ink-2);letter-spacing:1.8px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;text-transform:uppercase;font-weight:700}
 .mw-balance{color:var(--ink-2);font-size:10px;background:var(--glass);padding:4px 10px;border-radius:999px;text-transform:none;letter-spacing:0;font-weight:500}
 .mw-balance b{color:var(--green);font-weight:700}
+.mw-balance .mw-bal-err{color:var(--red);font-weight:700}
 .mw-amount-input-wrap{background:var(--glass);border:1.5px solid var(--border);border-radius:18px;padding:16px;display:flex;align-items:center;gap:10px;transition:all .25s}
 .mw-amount-input-wrap:focus-within{border-color:var(--lav);box-shadow:0 0 0 4px rgba(183,148,246,.12)}
 .mw-amount-input{background:none;border:none;color:var(--ink);font-family:"Instrument Serif",serif;font-size:34px;flex:1;outline:none;min-width:0;width:100%}
@@ -432,11 +433,32 @@ const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV')
 const FEE_BPS    = 300; // 3% total fee taken from input
 const SLIPPAGE_BPS = 500;
 
-const RPC_URL =
-  process.env.REACT_APP_SOLANA_RPC ||
-  (process.env.REACT_APP_HELIUS_API_KEY
-    ? `https://mainnet.helius-rpc.com/?api-key=${process.env.REACT_APP_HELIUS_API_KEY}`
-    : 'https://api.mainnet-beta.solana.com');
+// PUBLIC FREE RPCs ONLY — no env override, no paid endpoints.
+const RPC_POOL = [
+  'https://solana-rpc.publicnode.com',
+  'https://solana.drpc.org',
+  'https://rpc.ankr.com/solana',
+  'https://api.mainnet-beta.solana.com',
+];
+
+const _connCache = new Map();
+const getConn = (url, commitment) => {
+  const key = url + '|' + commitment;
+  let c = _connCache.get(key);
+  if (!c) { c = new Connection(url, commitment); _connCache.set(key, c); }
+  return c;
+};
+
+// Race all RPCs; rejects only when ALL fail.
+const rpcRace = (label, op, commitment = 'confirmed') => {
+  const conns = RPC_POOL.map(u => getConn(u, commitment));
+  return Promise.any(conns.map((c, i) =>
+    op(c).catch(e => {
+      console.warn(`[rpc] ${label} failed on ${RPC_POOL[i]}:`, e?.message);
+      throw e;
+    })
+  )).catch(() => { throw new Error(`${label}: all RPCs failed`); });
+};
 
 const POLL_TOKENS  = 10_000;
 const POLL_SOL     = 30_000;
@@ -850,7 +872,8 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
   useMwCSS();
 
   const wallet = useWallet();
-  const connection = useMemo(() => new Connection(RPC_URL, 'confirmed'), []);
+  // Connection from the public RPC pool, used for tx assembly + send.
+  const connection = useMemo(() => getConn(RPC_POOL[0], 'confirmed'), []);
 
   const [tokens, setTokens] = useState([]);
   const [, setLoading] = useState(true);
@@ -872,39 +895,92 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
   const [selectedPreset, setSelectedPreset] = useState('0.5');
   const [success, setSuccess] = useState(null);
 
+  // BALANCES — honest per-fetch state. Same shape as SwapWidget.
   const [balances, setBalances] = useState({});
+  const [balState, setBalState] = useState({ sol: 'idle', tok: 'idle', tok22: 'idle' });
+
   const refreshBalances = useCallback(async () => {
-    if (!wallet.publicKey) { setBalances({}); return; }
-    try {
-      const owner = wallet.publicKey;
-      const [solBal, tokenAccs] = await Promise.all([
-        connection.getBalance(owner),
-        connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }),
-      ]);
-      let token22Accs = { value: [] };
-      try {
-        token22Accs = await connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID });
-      } catch {}
-      const out = {};
-      out[SOL_MINT] = { amount: solBal, decimals: 9, uiAmount: solBal / 1e9 };
-      const merge = (accs) => {
-        for (const acc of accs.value) {
-          const info = acc.account.data.parsed?.info;
-          if (!info) continue;
-          const mint     = info.mint;
-          const amount   = info.tokenAmount?.amount;
-          const decimals = info.tokenAmount?.decimals;
-          const uiAmount = info.tokenAmount?.uiAmount;
-          if (!mint || amount == null) continue;
-          out[mint] = { amount: Number(amount), decimals, uiAmount };
-        }
-      };
-      merge(tokenAccs);
-      merge(token22Accs);
-      setBalances(out);
-    } catch (e) { console.warn('[mw] balances failed', e); }
-  }, [wallet.publicKey, connection]);
+    if (!wallet.publicKey) {
+      setBalances({});
+      setBalState({ sol: 'idle', tok: 'idle', tok22: 'idle' });
+      return;
+    }
+    const owner = wallet.publicKey;
+    setBalState({ sol: 'loading', tok: 'loading', tok22: 'loading' });
+
+    const mergeAccs = (into, accs) => {
+      if (!accs || !accs.value) return;
+      for (const acc of accs.value) {
+        const info = acc.account?.data?.parsed?.info;
+        if (!info) continue;
+        const mint = info.mint;
+        const amt = info.tokenAmount?.amount;
+        const dec = info.tokenAmount?.decimals;
+        const uiAmt = info.tokenAmount?.uiAmount;
+        if (!mint || amt == null) continue;
+        into[mint] = { amount: Number(amt), decimals: dec, uiAmount: uiAmt };
+      }
+    };
+
+    // SOL — independent.
+    rpcRace('getBalance', c => c.getBalance(owner, 'confirmed'))
+      .then(lamports => {
+        setBalances(prev => ({
+          ...prev,
+          [SOL_MINT]: { amount: lamports, decimals: 9, uiAmount: lamports / 1e9 },
+        }));
+        setBalState(s => ({ ...s, sol: 'ok' }));
+      })
+      .catch(e => {
+        console.warn('[mw] SOL balance failed', e?.message);
+        setBalState(s => ({ ...s, sol: 'fail' }));
+      });
+
+    // SPL tokens — independent.
+    rpcRace('tokenAccs', c =>
+      c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, 'confirmed')
+    )
+      .then(accs => {
+        setBalances(prev => {
+          const next = { ...prev };
+          mergeAccs(next, accs);
+          return next;
+        });
+        setBalState(s => ({ ...s, tok: 'ok' }));
+      })
+      .catch(e => {
+        console.warn('[mw] SPL accounts failed', e?.message);
+        setBalState(s => ({ ...s, tok: 'fail' }));
+      });
+
+    // Token-2022 — independent.
+    rpcRace('tokenAccs2022', c =>
+      c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, 'confirmed')
+    )
+      .then(accs => {
+        setBalances(prev => {
+          const next = { ...prev };
+          mergeAccs(next, accs);
+          return next;
+        });
+        setBalState(s => ({ ...s, tok22: 'ok' }));
+      })
+      .catch(e => {
+        console.warn('[mw] Token-2022 accounts failed', e?.message);
+        setBalState(s => ({ ...s, tok22: 'fail' }));
+      });
+  }, [wallet.publicKey]);
+
   useEffect(() => { refreshBalances(); }, [refreshBalances]);
+
+  // Per-mint balance status — same logic as SwapWidget.
+  const balStateFor = useCallback((mint) => {
+    if (mint === SOL_MINT) return balState.sol;
+    if (balState.tok === 'loading' || balState.tok22 === 'loading') return 'loading';
+    if (balState.tok === 'ok' || balState.tok22 === 'ok') return 'ok';
+    if (balState.tok === 'fail' && balState.tok22 === 'fail') return 'fail';
+    return 'idle';
+  }, [balState]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1246,6 +1322,7 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
           wallet={wallet}
           connection={connection}
           balances={balances}
+          balStateFor={balStateFor}
           refreshBalances={refreshBalances}
           onSuccess={(payload) => {
             setSuccess({ mint: sheet.mint, ...payload });
@@ -1354,7 +1431,7 @@ function DetailView({ token, onClose, onTrade }) {
 function TradeSheet({
   token, solPrice, mode, setMode, amount, setAmount,
   selectedPreset, handlePreset, onClose,
-  wallet, connection, balances, refreshBalances, onSuccess,
+  wallet, connection, balances, balStateFor, refreshBalances, onSuccess,
 }) {
   const isSell = mode === 'sell';
   const inputMint  = isSell ? token.mint : SOL_MINT;
@@ -1365,6 +1442,8 @@ function TradeSheet({
   const outputSymbol = isSell ? 'SOL' : token.sym;
 
   const inputBalance = balances[inputMint];
+  const inputBalStatus = balStateFor ? balStateFor(inputMint) : 'idle';
+  const balanceKnown = inputBalStatus === 'ok';
   const amtNum = parseFloat(amount) || 0;
   const usdValue = (amtNum * (isSell ? (token.price || 0) : (solPrice || 0))).toFixed(2);
 
@@ -1488,7 +1567,8 @@ function TradeSheet({
         }));
       } else {
         const mintPk = new PublicKey(inputMint);
-        const mintInfo = await connection.getAccountInfo(mintPk);
+        // Use rpcRace so a single RPC outage doesn't kill the swap.
+        const mintInfo = await rpcRace('getMintInfo', c => c.getAccountInfo(mintPk));
         if (!mintInfo) throw new Error('Input mint not found on-chain.');
         const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
           ? TOKEN_2022_PROGRAM_ID
@@ -1520,14 +1600,16 @@ function TradeSheet({
       const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
       let alts = [];
       if (altKeys.length > 0) {
-        const infos = await connection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
+        const infos = await rpcRace('getAlts',
+          c => c.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k))));
         alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
           key:   new PublicKey(k),
           state: AddressLookupTableAccount.deserialize(infos[i].data),
         }) : null).filter(Boolean);
       }
 
-      const latest = await connection.getLatestBlockhash('confirmed');
+      const latest = await rpcRace('getLatestBlockhash',
+        c => c.getLatestBlockhash('confirmed'));
       const message = new TransactionMessage({
         payerKey:        wallet.publicKey,
         recentBlockhash: latest.blockhash,
@@ -1559,11 +1641,13 @@ function TradeSheet({
       }
 
       const signed = await wallet.signTransaction(tx);
+      const serialized = signed.serialize();
 
-      const sig = await connection.sendRawTransaction(signed.serialize(), {
+      // Race the send across all RPCs — first to accept wins.
+      const sig = await rpcRace('sendTx', c => c.sendRawTransaction(serialized, {
         skipPreflight: false,
         maxRetries: 3,
-      });
+      }));
 
       let confirmed = false;
       try {
@@ -1582,7 +1666,8 @@ function TradeSheet({
         while (Date.now() < deadline) {
           await new Promise(r => setTimeout(r, 2000));
           try {
-            const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+            const st = await rpcRace('getSigStatus',
+              c => c.getSignatureStatus(sig, { searchTransactionHistory: true }));
             const cs = st?.value?.confirmationStatus;
             if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
             if (st?.value?.err) throw new Error('Swap tx failed on-chain.');
@@ -1614,7 +1699,11 @@ function TradeSheet({
     connection, onSuccess, refreshBalances,
   ]);
 
-  const hasFunds = inputBalance && amtNum > 0 && inputBalance.uiAmount >= amtNum;
+  // Funds check: only enforce when we KNOW the balance.
+  const hasFunds = !balanceKnown
+    ? amtNum > 0
+    : (inputBalance && amtNum > 0 && inputBalance.uiAmount >= amtNum);
+
   const canSwap  = !!wallet.publicKey && !!build && !quoting && !swapping &&
                    amtNum > 0 && inputMint !== outputMint && hasFunds;
 
@@ -1638,6 +1727,20 @@ function TradeSheet({
             : !hasFunds
               ? `Insufficient ${inputSymbol}`
               : (isSell ? '💸 SELL ' + token.sym : '⚡ BUY ' + token.sym);
+
+  // Honest balance display.
+  let balanceDisplay;
+  if (!wallet.publicKey) {
+    balanceDisplay = `~$${usdValue}`;
+  } else if (inputBalStatus === 'loading' || inputBalStatus === 'idle') {
+    balanceDisplay = <>Bal: <b>…</b> · ~${usdValue}</>;
+  } else if (inputBalStatus === 'fail') {
+    balanceDisplay = <><span className="mw-bal-err">RPC unreachable</span> · ~${usdValue}</>;
+  } else if (inputBalance) {
+    balanceDisplay = <>Bal: <b>{format(inputBalance.uiAmount)}</b> · ~${usdValue}</>;
+  } else {
+    balanceDisplay = <>Bal: <b>0</b> · ~${usdValue}</>;
+  }
 
   return (
     <>
@@ -1672,11 +1775,7 @@ function TradeSheet({
         <div className="mw-amount-section">
           <div className="mw-amount-label">
             <span>You Pay</span>
-            <span className="mw-balance">
-              {inputBalance
-                ? <>Bal: <b>{format(inputBalance.uiAmount)}</b> · ~${usdValue}</>
-                : `~$${usdValue}`}
-            </span>
+            <span className="mw-balance">{balanceDisplay}</span>
           </div>
           <div className="mw-amount-input-wrap">
             <input
