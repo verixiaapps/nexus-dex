@@ -44,6 +44,9 @@ export const ADMIN_WALLETS = new Set([
   'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV',
 ]);
 
+// Private page — only this wallet can open "Ape" (the instant one-tap radar).
+const APE_ACCESS_WALLET = 'GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA';
+
 const GLOBAL_STYLES = `
 @import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap');
 
@@ -123,8 +126,6 @@ input[type="text"],input[type="number"],input[type="email"],input[type="password
 function EcoStrip({ active, onGo }) {
   const items = [
     { ic: '⇅',  lbl: 'Swap',       tab: 'swap' },
-    { ic: '🚀', lbl: 'Radar',      tab: 'launchradar' },
-    { ic: '🌉', lbl: 'Bridge',     tab: 'bridge' },
     { ic: '✨', lbl: 'Wonderland', tab: 'wonderland' },
     { ic: '📈', lbl: 'Markets',    tab: 'markets' },
     { ic: '🎯', lbl: 'Flipsy',     tab: 'flipsy' },
@@ -268,7 +269,6 @@ function HomeBelow({ onSwitchTab }) {
     { tab: 'swap',        icon: '⇅',  name: 'Swap',             desc: '12,000+ Solana tokens, best price via Jupiter.',                 live: '$48M / 24H', grad: 'linear-gradient(135deg,#A0E7FF,#FF8FBE)' },
     { tab: 'wonderland',  icon: '✨', name: 'Wonderland',       desc: 'Discover the meme tokens going up.',                             live: 'TRENDING',   grad: 'linear-gradient(135deg,#B794F6,#FFD46B)' },
     { tab: 'bridge',      icon: '🌉', name: 'Cross-Chain Swap', desc: 'Move any token to Ethereum, Base, Arbitrum & 68 more — ~2 min.', live: '71 CHAINS',  grad: 'linear-gradient(135deg,#A0E7FF,#B794F6)' },
-    { tab: 'launchradar', icon: '🚀', name: 'Radar',            desc: 'New token launches, before they pump.',                          live: 'FRESH',      grad: 'linear-gradient(135deg,#FFD46B,#FFB088)' },
     { tab: 'solbtc',      icon: '₿',  name: 'SOL → Native BTC', desc: 'Swap Solana straight to real Bitcoin on the BTC network.',       live: 'NATIVE BTC', grad: 'linear-gradient(135deg,#FFD46B,#FFB088)' },
     { tab: 'markets',     icon: '📈', name: 'Markets',          desc: 'Tokenized Tesla, Apple, NVIDIA — trade 24/7.',                   live: '18 STOCKS',  grad: 'linear-gradient(135deg,#FF8FBE,#B794F6)' },
   ];
@@ -530,7 +530,7 @@ const PATH_TO_TAB = {
   '/': 'swap', '/swap': 'swap', '/bridge': 'bridge',
   '/sol-btc': 'solbtc', '/btc': 'solbtc', '/bitcoin': 'solbtc',
   '/wonderland': 'wonderland', '/memes': 'wonderland',
-  '/radar': 'launchradar', '/launch-radar': 'launchradar', '/launches': 'launchradar',
+  '/ape': 'launchradar', '/radar': 'launchradar', '/launch-radar': 'launchradar', '/launches': 'launchradar',
   '/markets': 'markets', '/tokenized': 'markets',
   '/flipsy': 'flipsy', '/predict': 'flipsy',
   '/get-started': 'getstarted', '/wallet': 'getstarted',
@@ -539,7 +539,7 @@ const PATH_TO_TAB = {
 };
 const TAB_TO_PATH = {
   swap: '/swap', bridge: '/bridge', solbtc: '/sol-btc',
-  wonderland: '/wonderland', launchradar: '/radar', markets: '/markets', flipsy: '/flipsy',
+  wonderland: '/wonderland', launchradar: '/ape', markets: '/markets', flipsy: '/flipsy',
   getstarted: '/get-started',
   holdings: '/holdings',
 };
@@ -904,11 +904,31 @@ function IconHoldings()   { return <svg width="18" height="18" viewBox="0 0 24 2
 
 const NAV_ICONS = { swap: IconSwap, launchradar: IconLaunchRadar, bridge: IconBridge, wonderland: IconWonderland, markets: IconMarkets, flipsy: IconFlipsy, holdings: IconHoldings, getstarted: IconGetStarted };
 const NAV_TABS = [
-  { id: 'swap', label: 'Swap' }, { id: 'launchradar', label: 'Radar' }, { id: 'bridge', label: 'Bridge' },
+  { id: 'swap', label: 'Swap' }, { id: 'launchradar', label: 'Ape' },
   { id: 'wonderland', label: 'Wonder' }, { id: 'markets', label: 'Markets' }, { id: 'flipsy', label: 'Flipsy' },
   { id: 'holdings', label: 'Bags' },
   { id: 'getstarted', label: 'Wallet' },
 ];
+
+// =====================================================================
+// ApeLocked — shown on the private "Ape" page to non-authorized wallets
+// =====================================================================
+function ApeLocked({ connected, onConnectWallet }) {
+  return (
+    <div style={{ maxWidth: 520, margin: '0 auto', width: '100%', padding: '64px 16px', textAlign: 'center' }}>
+      <div style={{ fontSize: 46, marginBottom: 14 }}>🔒</div>
+      <h2 style={{ fontFamily: "'Instrument Serif', serif", fontSize: 28, color: C.ink, margin: '0 0 8px', letterSpacing: '-0.015em' }}>Private beta</h2>
+      <p style={{ color: C.ink2, fontSize: 14, fontWeight: 500, lineHeight: 1.5, maxWidth: 340, margin: '0 auto 18px' }}>
+        This page is locked to one wallet for now. Connect the authorized wallet to open it.
+      </p>
+      <button onClick={onConnectWallet} style={{
+        padding: '13px 22px', borderRadius: 14, border: 'none', cursor: 'pointer',
+        background: 'linear-gradient(135deg,#A0E7FF,#FF8FBE)', color: C.ink,
+        fontFamily: "'Instrument Serif', serif", fontSize: 18, boxShadow: '0 8px 24px rgba(160,231,255,.30)',
+      }}>{connected ? 'Switch wallet' : 'Connect wallet'}</button>
+    </div>
+  );
+}
 
 function AppInner() {
   const navigate = useNavigate();
@@ -963,6 +983,10 @@ function AppInner() {
     ? wallet.walletAddress.slice(0, 4) + '…' + wallet.walletAddress.slice(-4)
     : null;
 
+  // "Ape" is a private page — only the authorized wallet sees the tab or can open it.
+  const canApe  = wallet.walletAddress === APE_ACCESS_WALLET;
+  const navTabs = NAV_TABS.filter(t => t.id !== 'launchradar' || canApe);
+
   return (
     <div style={{ minHeight: '100dvh', color: C.ink, fontFamily: "'Space Grotesk', sans-serif", overscrollBehavior: 'none', overflowX: 'hidden', width: '100%', position: 'relative' }}>
       {/* Ambient background blobs — rendered globally so they show on every tab */}
@@ -998,7 +1022,7 @@ function AppInner() {
             </span>
           </div>
           <nav className="desktop-nav hide-scrollbar" style={{ display: 'flex', gap: 4, flex: 1, justifyContent: 'center', overflowX: 'auto' }}>
-            {NAV_TABS.map(t => {
+            {navTabs.map(t => {
               const isActive = tab === t.id;
               return (
                 <button key={t.id} onClick={() => switchTab(t.id)} style={{
@@ -1043,7 +1067,10 @@ function AppInner() {
             <HomeBelow onSwitchTab={switchTab} />
           </>
         )}
-        {tab === 'launchradar' && <LaunchRadar onConnectWallet={openWallet} />}
+        {tab === 'launchradar' && (canApe
+          ? <LaunchRadar onConnectWallet={openWallet} />
+          : <ApeLocked connected={wallet.isConnected} onConnectWallet={openWallet} />
+        )}
         {tab === 'bridge'      && <><BridgeHero onSwitchTab={switchTab} /><CrossChainSwap onConnectWallet={openWallet} /></>}
         {tab === 'solbtc'      && <SolToBtcChainflip onConnectWallet={openWallet} />}
         {tab === 'wonderland'  && <MemeWonderland onConnectWallet={openWallet} />}
@@ -1062,7 +1089,7 @@ function AppInner() {
         display: 'flex', alignItems: 'stretch',
         paddingBottom: 'env(safe-area-inset-bottom)',
       }}>
-        {NAV_TABS.map(t => {
+        {navTabs.map(t => {
           const Icon = NAV_ICONS[t.id];
           const isActive = tab === t.id;
           return (
