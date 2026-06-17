@@ -1,20 +1,11 @@
 {
-  "keywords_loaded": 1553,
+  "keywords_loaded": 1657,
   "hubs_built": 11,
-  "validation_warnings": 4,
+  "validation_warnings": 3,
   "validation_details": [
     {
       "hub_slug": "brand-tokens",
       "matched_keywords": 1,
-      "linked_pages": 0,
-      "errors": [
-        "no linked child pages",
-        "matched keywords exist but no child pages were found on disk"
-      ]
-    },
-    {
-      "hub_slug": "no-kyc-trading",
-      "matched_keywords": 4,
       "linked_pages": 0,
       "errors": [
         "no linked child pages",
