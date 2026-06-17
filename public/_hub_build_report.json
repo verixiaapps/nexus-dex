@@ -1,7 +1,7 @@
 {
-  "keywords_loaded": 1657,
+  "keywords_loaded": 1743,
   "hubs_built": 11,
-  "validation_warnings": 3,
+  "validation_warnings": 2,
   "validation_details": [
     {
       "hub_slug": "brand-tokens",
@@ -10,14 +10,6 @@
       "errors": [
         "no linked child pages",
         "matched keywords exist but no child pages were found on disk"
-      ]
-    },
-    {
-      "hub_slug": "whale-tracking",
-      "matched_keywords": 0,
-      "linked_pages": 0,
-      "errors": [
-        "no linked child pages"
       ]
     },
     {
