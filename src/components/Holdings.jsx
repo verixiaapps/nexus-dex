@@ -1,17 +1,14 @@
-// src/components/Holdings.jsx — wallet holdings page with per-token buy/sell drawer.
+// src/components/Holdings.jsx — wallet holdings page with per-token drawer.
 //
-// Three trade routes, each copied verbatim from the working reference files:
-//   • jupiter route  → from MemeWonderland.jsx TradeSheet.handleSwap
-//   • xstock route   → from Stocks.jsx TradeModal.handleSubmit
-//   • pumpfun route  → from LaunchRadar.jsx executeSwap
+// THREE INDEPENDENT DRAWERS, one per route, each a verbatim port of its
+// working reference file:
 //
-// SOL row "Swap" → SOL → USDC via jupiter route (mode forced to 'sell').
+//   JupiterDrawer → MemeWonderland.jsx TradeSheet
+//   XstockDrawer  → Stocks.jsx TradeModal
+//   PumpfunDrawer → LaunchRadar.jsx TradeModal + executeSwap
 //
-// RPC: matches the LaunchRadar / SwapWidget pattern — public Solana RPC
-// nodes used directly by `new Connection(...)`. The `/api/solana-rpc`
-// proxy is only used for the portfolio batch read (Stocks pattern).
-// Connection needs a real RPC URL because `confirmTransaction` opens a
-// WebSocket subscription that the proxy can't serve.
+// Holdings picks which drawer to mount based on getTokenRoute(token).
+// SOL row uses JupiterDrawer with mode forced to 'sell' → USDC.
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Buffer } from 'buffer';
@@ -252,7 +249,7 @@ function useHpCSS() {
 }
 
 // =====================================================================
-// CONSTANTS
+// SHARED CONSTANTS
 // =====================================================================
 const SOL_MINT    = 'So11111111111111111111111111111111111111112';
 const USDC_SOLANA = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
@@ -263,28 +260,12 @@ const SPL_TOKEN2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 
 const MIN_TOKEN_VALUE_USD = 1;
 
-// Jupiter route (MemeWonderland)
-const FEE_WALLET   = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
-const FEE_BPS      = 300;
-const SLIPPAGE_BPS = 500;
-
-// xStock route (Stocks.jsx)
-const USDC_DECIMALS          = 6;
-const XSTOCK_FEE_BPS         = 500;
-const XSTOCK_SLIPPAGE_BPS    = 500;
-const ATA_PROGRAM_ID         = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
-
-// Pump.fun route (LaunchRadar)
-const SOL_RESERVE = 0.01;
+const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
 
 // =====================================================================
-// RPC — matches the working files exactly:
-//   • jupiter route → `new Connection(RPC_POOL[0], 'confirmed')`, single
-//     RPC (same as SwapWidget.jsx / MemeWonderland TradeSheet.handleSwap).
-//   • pumpfun route → same single Connection (same as LaunchRadar.jsx
-//     executeSwap).
-//   • xstock route → raw fetch to /api/solana-rpc for every call (same
-//     as Stocks.jsx TradeModal.handleSubmit). See xstock helpers below.
+// RPC — matches the LaunchRadar / SwapWidget pattern: a single
+// `new Connection(RPC_POOL[0], 'confirmed')`. The xstock route never
+// touches Connection — it uses /api/solana-rpc directly.
 // =====================================================================
 const RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
 const RPC_POOL = [
@@ -298,25 +279,28 @@ const RPC_POOL = [
 ].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
 const RPC_URL = RPC_POOL[0];
 
+// =====================================================================
+// BRAND TOKENS (xStock route)
+// =====================================================================
 const BRAND_TOKENS = {
-  'XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB': { isBrand: true },
-  'XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp': { isBrand: true },
-  'Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh': { isBrand: true },
-  'Xsa62P5mvPszXL1krVUnU5ar38bBSVcWAB6fmPCo5Zu': { isBrand: true },
-  'XsCPL9dNWBMvFtTmwcCA5v3xWPSMEBCszbQdiLLq6aN': { isBrand: true },
-  'Xs3eBt7uRfJX8QUs4suhyU8p2M6DoUDrJyWBa8LLZsg': { isBrand: true },
-  'XspzcW1PRtgf6Wj92HCiZdjzKCyFekVD8P5Ueh3dRMX': { isBrand: true },
-  'XsEH7wWfJJu2ZT3UCFeVfALnVA6CP5ur7Ee11KmzVpL': { isBrand: true },
-  'XsoBhf2ufR8fTyNSjqfU71DYGaE6Z3SUGAidpzriAA4': { isBrand: true },
-  'XsgSaSvNSqLTtFuyWPBhK9196Xb9Bbdyjj4fH3cPJGo': { isBrand: true },
-  'Xs7ZdzSHLU9ftNJsii5fCeJhoRWSC32SQGzGQtePxNu': { isBrand: true },
-  'XsP7xzNPvEHS1m6qfanPUGjNmdnmsLKEoNAnHjdxxyZ': { isBrand: true },
-  'XsueG8BtpquVJX9LVLLEGuViXUungE6WmK5YZ3p3bd1': { isBrand: true },
-  'XsvNBAYkrDRNhA7wPHQfX3ZUXZyZLdnCQDfHZ56bzpg': { isBrand: true },
-  'XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W': { isBrand: true },
-  'Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ': { isBrand: true },
-  'Xsv9hRk1z5ystj9MhnA7Lq4vjSsLwzL2nxrwmwtD3re': { isBrand: true },
-  'XsqBC5tcVQLYt8wqGCHRnAUUecbRYXoJCReD6w7QEKp': { isBrand: true },
+  'XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB': true,
+  'XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp': true,
+  'Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh': true,
+  'Xsa62P5mvPszXL1krVUnU5ar38bBSVcWAB6fmPCo5Zu': true,
+  'XsCPL9dNWBMvFtTmwcCA5v3xWPSMEBCszbQdiLLq6aN': true,
+  'Xs3eBt7uRfJX8QUs4suhyU8p2M6DoUDrJyWBa8LLZsg': true,
+  'XspzcW1PRtgf6Wj92HCiZdjzKCyFekVD8P5Ueh3dRMX': true,
+  'XsEH7wWfJJu2ZT3UCFeVfALnVA6CP5ur7Ee11KmzVpL': true,
+  'XsoBhf2ufR8fTyNSjqfU71DYGaE6Z3SUGAidpzriAA4': true,
+  'XsgSaSvNSqLTtFuyWPBhK9196Xb9Bbdyjj4fH3cPJGo': true,
+  'Xs7ZdzSHLU9ftNJsii5fCeJhoRWSC32SQGzGQtePxNu': true,
+  'XsP7xzNPvEHS1m6qfanPUGjNmdnmsLKEoNAnHjdxxyZ': true,
+  'XsueG8BtpquVJX9LVLLEGuViXUungE6WmK5YZ3p3bd1': true,
+  'XsvNBAYkrDRNhA7wPHQfX3ZUXZyZLdnCQDfHZ56bzpg': true,
+  'XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W': true,
+  'Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ': true,
+  'Xsv9hRk1z5ystj9MhnA7Lq4vjSsLwzL2nxrwmwtD3re': true,
+  'XsqBC5tcVQLYt8wqGCHRnAUUecbRYXoJCReD6w7QEKp': true,
 };
 const STABLES = new Set([USDC_SOLANA, USDT_SOLANA]);
 
@@ -329,21 +313,16 @@ function getTokenRoute(token) {
   if (!token?.mint) return 'jupiter';
   if (BRAND_TOKENS[token.mint]) return 'xstock';
   if (isPumpFunMint(token.mint)) return 'pumpfun';
-  // Default everything else to jupiter. If a token genuinely has no
-  // Jupiter route, the quote endpoint returns a clear "no route"
-  // message — which is much better than blindly calling PumpPortal
-  // for non-pump tokens and getting "Bad Request".
   return 'jupiter';
 }
 
-// Known logos for SOL + USDC (Jupiter's token-list mirrors).
 const KNOWN_ICONS = {
   [SOL_MINT]:    'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png',
   [USDC_SOLANA]: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png',
 };
 
 // =====================================================================
-// UTILS
+// SHARED UTILS
 // =====================================================================
 function fmtUsd(n, d = 2) {
   if (n == null || !Number.isFinite(Number(n))) return '$0.00';
@@ -379,17 +358,6 @@ function buildFallbackMeta(mint) {
   };
 }
 
-// deserIx (Jupiter route — from MemeWonderland)
-const deserIx = (ix) => ({
-  programId: new PublicKey(ix.programId),
-  keys: ix.accounts.map(a => ({
-    pubkey:     new PublicKey(a.pubkey),
-    isSigner:   a.isSigner,
-    isWritable: a.isWritable,
-  })),
-  data: Buffer.from(ix.data, 'base64'),
-});
-
 const friendlyError = (err) => {
   const m = String(err?.message || err || '').toLowerCase();
   if (m.includes('insufficient'))      return 'Insufficient balance for this swap.';
@@ -404,20 +372,47 @@ const friendlyError = (err) => {
   return err?.message || 'Swap failed. Please try again.';
 };
 
-// pump.fun sim-error decoder (from LaunchRadar)
-function describeSimLogs(logs, fallbackMsg) {
-  const arr = Array.isArray(logs) ? logs : [];
-  const j = arr.join('\n').toLowerCase();
-  if (j.includes('slippage') || j.includes('toomuchsol') || j.includes('toolittlesol'))
-    return 'Price moved past slippage — try again.';
-  if (j.includes('insufficient') || j.includes('debit an account'))
-    return 'Not enough SOL for the trade + fees.';
-  if (j.includes('exceeded') && j.includes('compute')) return 'Hit the compute limit — retry.';
-  const ctx = (arr.filter(l => /program log:|error|0x/i.test(l)).pop() || '')
-    .replace(/^Program log:\s*/i, '').slice(0, 150);
-  if (ctx) return 'Sim failed → ' + ctx;
-  return fallbackMsg ? ('Sim failed → ' + String(fallbackMsg).slice(0, 160))
-                     : 'Sim failed (no logs returned).';
+function MintIcon({ mint, meta, size = 22 }) {
+  const [errored, setErrored] = useState(false);
+  useEffect(() => { setErrored(false); }, [mint]);
+
+  const url = KNOWN_ICONS[mint] || meta?.icon || null;
+  const radius = Math.round(size * 0.5);
+
+  if (url && !errored) {
+    return (
+      <img
+        src={url}
+        alt=""
+        onError={() => setErrored(true)}
+        style={{
+          width: size, height: size, borderRadius: radius,
+          objectFit: 'cover', flexShrink: 0,
+          background: 'rgba(255,255,255,.5)',
+        }}
+      />
+    );
+  }
+  const sym = mint === SOL_MINT ? 'S'
+            : mint === USDC_SOLANA ? '$'
+            : ((meta?.symbol || '?').replace(/x$/, '').charAt(0) || '?').toUpperCase();
+  const bg = mint === SOL_MINT
+    ? 'linear-gradient(135deg,#B794F6,#7FFFD4)'
+    : mint === USDC_SOLANA
+      ? 'linear-gradient(135deg,#2775CA,#A0E7FF)'
+      : (() => {
+          const c = meta?.color || colorFromMint(mint);
+          return `linear-gradient(135deg, ${c}, ${c}cc)`;
+        })();
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: radius,
+      flexShrink: 0, display: 'grid', placeItems: 'center',
+      background: bg, color: '#fff',
+      fontFamily: '"Instrument Serif", serif',
+      fontSize: Math.round(size * 0.55), lineHeight: 1,
+    }}>{sym}</div>
+  );
 }
 
 // =====================================================================
@@ -562,55 +557,558 @@ async function fetchPricesBatched(mints) {
 }
 
 // =====================================================================
-// PUMP.FUN HELPERS (copied verbatim from LaunchRadar.jsx)
+// HOLDING ROW
 // =====================================================================
-async function decodeBuiltTx(b64, connection) {
-  const txBytes = Buffer.from(b64, 'base64');
-  const tx      = VersionedTransaction.deserialize(txBytes);
-  const message = tx.message;
-  const lookupKeys = (message.addressTableLookups || []).map(l => l.accountKey);
-  const alts = [];
-  if (lookupKeys.length > 0) {
-    const infos = await connection.getMultipleAccountsInfo(lookupKeys);
-    for (let i = 0; i < lookupKeys.length; i++) {
-      if (!infos[i]) continue;
-      alts.push(new AddressLookupTableAccount({
-        key:   lookupKeys[i],
-        state: AddressLookupTableAccount.deserialize(infos[i].data),
-      }));
+function HoldingRow({ token, onBuy, onSell, idx }) {
+  const meta    = token.meta || buildFallbackMeta(token.mint);
+  const val     = token.value || 0;
+  const isSol   = token.mint === SOL_MINT;
+  const isBrand = !!meta.isBrand;
+  const isStable = !!meta.isStable;
+  const isPump   = !!meta.isPump;
+  const hasPrice = !!token.hasPrice || isSol;
+
+  return (
+    <div
+      className={'hp-row' + (isSol ? ' hp-row-sol' : '')}
+      style={{ animationDelay: (idx * 0.03) + 's' }}
+    >
+      <MintIcon mint={token.mint} meta={meta} size={42} />
+      <div className="hp-h-mid">
+        <div className="hp-h-head">
+          <span className="hp-h-sym">{meta.symbol}</span>
+          {isSol     && (<span className="hp-h-tag hp-tag-sol">NATIVE</span>)}
+          {isBrand   && (<span className="hp-h-tag">xSTOCK</span>)}
+          {isStable  && (<span className="hp-h-tag hp-tag-stable">STABLE</span>)}
+          {isPump    && (<span className="hp-h-tag hp-tag-pump">PUMP</span>)}
+        </div>
+        <div className="hp-h-sub">
+          {fmtTokenAmt(token.uiAmount)} {meta.symbol} · {hasPrice && token.price > 0 ? fmtUsd(token.price) : 'no price'}
+        </div>
+      </div>
+      <div className="hp-h-right">
+        <div className="hp-h-value">{val > 0 ? fmtUsd(val) : '—'}</div>
+        {!isSol && (
+          <div className="hp-h-actions">
+            <button type="button" className="hp-act-btn hp-act-buy" onClick={() => onBuy(token)}>
+              BUY
+            </button>
+            <button type="button" className="hp-act-btn hp-act-sell" onClick={() => onSell(token)}>
+              SELL
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// =====================================================================
+// JUPITER DRAWER  — verbatim port of MemeWonderland.jsx TradeSheet
+// =====================================================================
+const JUP_FEE_BPS      = 300;
+const JUP_SLIPPAGE_BPS = 500;
+
+const deserIx = (ix) => ({
+  programId: new PublicKey(ix.programId),
+  keys: ix.accounts.map(a => ({
+    pubkey:     new PublicKey(a.pubkey),
+    isSigner:   a.isSigner,
+    isWritable: a.isWritable,
+  })),
+  data: Buffer.from(ix.data, 'base64'),
+});
+
+function JupiterDrawer({
+  token, initialMode, isSol,
+  solBalance, tokenBalance, solPrice,
+  publicKey, signTransaction, connected,
+  onClose, onConnectWallet, onTradeComplete,
+}) {
+  const connection = useMemo(() => new Connection(RPC_URL, 'confirmed'), []);
+  const meta = token.meta || buildFallbackMeta(token.mint);
+
+  const [mode, setMode] = useState(isSol ? 'sell' : (initialMode || 'buy'));
+  useEffect(() => { if (isSol && mode !== 'sell') setMode('sell'); }, [isSol, mode]);
+
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, []);
+
+  // SOL row: always SOL → USDC.
+  // Token row: BUY  = SOL → token,  SELL = token → SOL.
+  const isSell = mode === 'sell' || isSol;
+  const inputMint  = isSol ? SOL_MINT  : (isSell ? token.mint : SOL_MINT);
+  const outputMint = isSol ? USDC_SOLANA : (isSell ? SOL_MINT  : token.mint);
+  const inputDecimals  = inputMint === SOL_MINT ? 9
+                       : inputMint === USDC_SOLANA ? 6
+                       : (meta.decimals ?? 6);
+  const outputDecimals = outputMint === SOL_MINT ? 9
+                       : outputMint === USDC_SOLANA ? 6
+                       : (meta.decimals ?? 6);
+  const inputSymbol  = inputMint === SOL_MINT ? 'SOL'
+                     : inputMint === USDC_SOLANA ? 'USDC'
+                     : meta.symbol;
+  const outputSymbol = outputMint === SOL_MINT ? 'SOL'
+                     : outputMint === USDC_SOLANA ? 'USDC'
+                     : meta.symbol;
+
+  const inputBalanceUi = inputMint === SOL_MINT ? (solBalance || 0)
+                       : inputMint === token.mint ? (tokenBalance?.uiAmount || 0)
+                       : 0;
+  const inputPriceUsd = inputMint === SOL_MINT ? (solPrice || 0)
+                      : inputMint === USDC_SOLANA ? 1
+                      : inputMint === token.mint ? (token.price || 0)
+                      : 0;
+
+  const [amount, setAmount] = useState('');
+  const [selectedPreset, setSelectedPreset] = useState(null);
+  useEffect(() => { setAmount(''); setSelectedPreset(null); }, [mode]);
+
+  const amtNum = parseFloat(amount) || 0;
+  const usdValue = amtNum * inputPriceUsd;
+
+  const rawAmount = useMemo(() => {
+    if (!amount) return '';
+    const n = Number(amount);
+    if (!Number.isFinite(n) || n <= 0) return '';
+    return Math.floor(n * Math.pow(10, inputDecimals)).toString();
+  }, [amount, inputDecimals]);
+
+  // ── QUOTE — verbatim from MemeWonderland TradeSheet ────────────────
+  const [build, setBuild] = useState(null);
+  const [quoting, setQuoting] = useState(false);
+  const [quoteError, setQuoteError] = useState(null);
+  const quoteAbortRef = useRef(null);
+
+  useEffect(() => {
+    if (!rawAmount || inputMint === outputMint) {
+      setBuild(null);
+      setQuoteError(null);
+      return;
     }
-  }
-  const decompiled = TransactionMessage.decompile(message, {
-    addressLookupTableAccounts: alts,
-  });
-  return { instructions: decompiled.instructions, alts };
-}
+    if (quoteAbortRef.current) quoteAbortRef.current.abort();
+    const ac = new AbortController();
+    quoteAbortRef.current = ac;
 
-async function getPumpRoute({ action, mint, user, amount, decimals, connection }) {
-  const body = {
-    action,
-    mint,
-    user:   user.toBase58(),
-    amount: String(amount),
+    setQuoting(true);
+    setQuoteError(null);
+
+    const t = setTimeout(async () => {
+      try {
+        const net = (BigInt(rawAmount) * BigInt(10000 - JUP_FEE_BPS)) / 10000n;
+        if (net <= 0n) {
+          setBuild(null);
+          setQuoting(false);
+          return;
+        }
+        const params = new URLSearchParams({
+          inputMint,
+          outputMint,
+          amount:      net.toString(),
+          slippageBps: String(JUP_SLIPPAGE_BPS),
+          taker:       publicKey
+            ? publicKey.toBase58()
+            : '11111111111111111111111111111111',
+        });
+        const r = await fetch(`/api/jupiter/build?${params}`, { signal: ac.signal });
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(body.error || `Quote failed (${r.status})`);
+        }
+        const data = await r.json();
+        if (!ac.signal.aborted) {
+          setBuild(data);
+          setQuoteError(null);
+        }
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        if (!ac.signal.aborted) {
+          setBuild(null);
+          setQuoteError(friendlyError(e));
+        }
+      } finally {
+        if (!ac.signal.aborted) setQuoting(false);
+      }
+    }, 350);
+
+    return () => { clearTimeout(t); ac.abort(); };
+  }, [rawAmount, inputMint, outputMint, publicKey]);
+
+  const outAmountUi = useMemo(() => {
+    if (!build) return null;
+    return Number(build.outAmount) / Math.pow(10, outputDecimals);
+  }, [build, outputDecimals]);
+
+  const rate = useMemo(() => {
+    if (!outAmountUi || !amtNum) return null;
+    return outAmountUi / amtNum;
+  }, [outAmountUi, amtNum]);
+
+  // ── EXECUTE — verbatim from MemeWonderland TradeSheet.handleSwap ───
+  const [swapping, setSwapping] = useState(false);
+  const [swapError, setSwapError] = useState(null);
+  const [swapResult, setSwapResult] = useState(null);
+
+  const handleSwap = useCallback(async () => {
+    if (!connected || !publicKey || !signTransaction) {
+      onConnectWallet?.();
+      return;
+    }
+    if (!build) {
+      setSwapError('No quote available — try again.');
+      return;
+    }
+
+    setSwapping(true);
+    setSwapError(null);
+    setSwapResult(null);
+
+    try {
+      const dec = inputDecimals;
+
+      const feeAmount = (BigInt(rawAmount) * BigInt(JUP_FEE_BPS)) / 10000n;
+      if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero — amount too small.');
+
+      const feeIxs = [];
+      if (inputMint === SOL_MINT) {
+        feeIxs.push(SystemProgram.transfer({
+          fromPubkey: publicKey,
+          toPubkey:   FEE_WALLET,
+          lamports:   Number(feeAmount),
+        }));
+      } else {
+        const mintPk = new PublicKey(inputMint);
+        const mintInfo = await connection.getAccountInfo(mintPk);
+        if (!mintInfo) throw new Error('Input mint not found on-chain.');
+        const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
+          ? TOKEN_2022_PROGRAM_ID
+          : TOKEN_PROGRAM_ID;
+
+        const sourceAta = getAssociatedTokenAddressSync(mintPk, publicKey, true, tokenProgram);
+        const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET, true, tokenProgram);
+
+        feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
+          publicKey, destAta, FEE_WALLET, mintPk, tokenProgram,
+        ));
+        feeIxs.push(createTransferCheckedInstruction(
+          sourceAta, mintPk, destAta, publicKey,
+          feeAmount, dec, [], tokenProgram,
+        ));
+      }
+
+      const ixs = [];
+      if (Array.isArray(build.computeBudgetInstructions))
+        for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
+      for (const ix of feeIxs) ixs.push(ix);
+      if (Array.isArray(build.setupInstructions))
+        for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
+      if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
+      if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
+      if (Array.isArray(build.otherInstructions))
+        for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
+
+      const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
+      let alts = [];
+      if (altKeys.length > 0) {
+        const infos = await connection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
+        alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
+          key:   new PublicKey(k),
+          state: AddressLookupTableAccount.deserialize(infos[i].data),
+        }) : null).filter(Boolean);
+      }
+
+      const latest = await connection.getLatestBlockhash('confirmed');
+      const message = new TransactionMessage({
+        payerKey:        publicKey,
+        recentBlockhash: latest.blockhash,
+        instructions:    ixs,
+      }).compileToV0Message(alts);
+      const tx = new VersionedTransaction(message);
+
+      const mapSimErr = (logs) => {
+        const j = (logs || []).join('\n').toLowerCase();
+        if (j.includes('insufficient') || j.includes('0x1')) return 'Insufficient balance for this swap.';
+        if (j.includes('slippage') || j.includes('0x1771'))  return 'Price moved — try a higher slippage or smaller amount.';
+        if (j.includes('account not') || j.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
+        if (j.includes('blockhash') || j.includes('expired')) return 'Quote expired. Please refresh and retry.';
+        return null;
+      };
+      try {
+        const sim = await connection.simulateTransaction(tx, {
+          replaceRecentBlockhash: true,
+          sigVerify: false,
+        });
+        if (sim.value.err) {
+          throw new Error(mapSimErr(sim.value.logs) || 'Swap simulation failed — the price may have moved.');
+        }
+      } catch (simErr) {
+        if (simErr?.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) {
+          throw simErr;
+        }
+        console.warn('[hp-jup sim non-fatal]', simErr);
+      }
+
+      const signed = await signTransaction(tx);
+
+      const sig = await connection.sendRawTransaction(signed.serialize(), {
+        skipPreflight: false,
+        maxRetries: 3,
+      });
+
+      let confirmed = false;
+      try {
+        const conf = await Promise.race([
+          connection.confirmTransaction({
+            signature: sig,
+            blockhash: latest.blockhash,
+            lastValidBlockHeight: latest.lastValidBlockHeight,
+          }, 'confirmed'),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
+        ]);
+        if (conf?.value?.err) throw new Error('Swap tx failed on-chain.');
+        confirmed = true;
+      } catch (cfErr) {
+        const deadline = Date.now() + 20_000;
+        while (Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 2000));
+          try {
+            const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+            const cs = st?.value?.confirmationStatus;
+            if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
+            if (st?.value?.err) throw new Error('Swap tx failed on-chain.');
+          } catch (e) {
+            if (/failed on-chain/i.test(String(e.message))) throw e;
+          }
+        }
+      }
+
+      setSwapResult({ signature: sig, pending: !confirmed });
+      if (confirmed) setTimeout(() => onTradeComplete?.(), 2000);
+    } catch (e) {
+      console.error('[hp-jup swap]', e);
+      setSwapError(friendlyError(e));
+    } finally {
+      setSwapping(false);
+    }
+  }, [
+    connected, publicKey, signTransaction, build,
+    inputMint, inputDecimals, rawAmount,
+    connection, onConnectWallet, onTradeComplete,
+  ]);
+
+  // ── PRESETS / MAX ──────────────────────────────────────────────────
+  const buyPresets = ['0.1', '0.5', '1', '2'];
+  const sellPresets = [
+    { label: '25%', pct: 25 },
+    { label: '50%', pct: 50 },
+    { label: '75%', pct: 75 },
+    { label: 'MAX', pct: 100 },
+  ];
+  const applyBuyPreset = (v) => { setAmount(v); setSelectedPreset(v); };
+  const applySellPercent = (pct) => {
+    if (!(inputBalanceUi > 0)) return;
+    let amt = (inputBalanceUi * pct) / 100;
+    if (inputMint === SOL_MINT && pct === 100) amt = Math.max(0, amt - 0.01);
+    const factor = Math.pow(10, Math.min(8, inputDecimals));
+    amt = Math.floor(amt * factor) / factor;
+    setAmount(String(amt));
+    setSelectedPreset('pct-' + pct);
   };
-  if (decimals != null) body.decimals = Number(decimals);
 
-  const r = await fetch('/api/pumpfun/trade', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data?.error || ('pump HTTP ' + r.status));
-  if (!data.tx) throw new Error('PumpPortal returned no tx.');
+  const hasFunds = amtNum > 0 && inputBalanceUi >= amtNum;
+  const canSwap = !!publicKey && !!build && !quoting && !swapping &&
+                  amtNum > 0 && inputMint !== outputMint && hasFunds;
 
-  const { instructions, alts } = await decodeBuiltTx(data.tx, connection);
-  return { instructions, alts, pool: data.pool, route: data.route };
+  const ctaLabel = swapping
+    ? (isSell ? 'Selling…' : 'Buying…')
+    : !publicKey
+      ? 'Connect Wallet'
+      : amtNum <= 0
+        ? 'Enter amount'
+        : quoting && !build
+          ? 'Getting quote…'
+          : !build
+            ? 'No route available'
+            : !hasFunds
+              ? `Insufficient ${inputSymbol}`
+              : isSell
+                ? `Swap ${inputSymbol} → ${outputSymbol}`
+                : `Buy ${meta.symbol}`;
+
+  return (
+    <>
+      <div className="hp-sheet-backdrop" onClick={swapping ? undefined : onClose} />
+      <div className="hp-sheet">
+        <div className="hp-grabber" />
+
+        <div className="hp-sheet-head">
+          <MintIcon mint={token.mint} meta={meta} size={46} />
+          <div className="hp-sheet-title-wrap">
+            <div className="hp-sheet-title">{meta.symbol}</div>
+            <div className="hp-sheet-sub">
+              {meta.name} · {token.price > 0 ? fmtUsd(token.price) : 'no price'}
+              <span className="hp-route-badge hp-route-jup">JUPITER</span>
+            </div>
+          </div>
+          <button type="button" className="hp-sheet-close" onClick={onClose} disabled={swapping}>×</button>
+        </div>
+
+        {!isSol && (
+          <div className="hp-side-switch">
+            {['buy', 'sell'].map(s => {
+              const active = mode === s;
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  className={'hp-side-btn' + (active ? ` hp-active hp-${s}` : '')}
+                  onClick={() => !swapping && setMode(s)}
+                  disabled={swapping}
+                >{s === 'buy' ? 'Buy with SOL' : 'Sell to SOL'}</button>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="hp-sheet-body">
+          <div className="hp-amount-label">
+            <span>{isSell ? 'YOU SELL' : 'YOU PAY'}</span>
+            <span className="hp-amount-bal">
+              Bal: <b>{fmtTokenAmt(inputBalanceUi)}</b> {inputSymbol}
+              {!isSell && inputBalanceUi > 0 && (
+                <button type="button" className="hp-max-btn"
+                  onClick={() => applySellPercent(100)}>MAX</button>
+              )}
+            </span>
+          </div>
+
+          <div className="hp-amount-wrap">
+            <div className="hp-amount-chip">
+              <MintIcon mint={inputMint} meta={meta} size={22} />
+              {inputSymbol}
+            </div>
+            <input
+              className="hp-amount-input"
+              type="text"
+              inputMode="decimal"
+              placeholder="0.00"
+              value={amount}
+              onChange={(e) => {
+                const v = e.target.value.replace(/[^\d.]/g, '');
+                const parts = v.split('.');
+                if (parts.length > 2) return;
+                setAmount(v);
+                setSelectedPreset(null);
+              }}
+              disabled={swapping}
+            />
+          </div>
+          {usdValue > 0 && (
+            <div className="hp-amount-equiv">≈ {fmtUsd(usdValue)}</div>
+          )}
+
+          {(mode === 'buy' && !isSol) ? (
+            <div className="hp-presets">
+              {buyPresets.map(v => (
+                <button key={v} type="button"
+                  className={'hp-preset' + (selectedPreset === v ? ' hp-preset-active' : '')}
+                  onClick={() => applyBuyPreset(v)}
+                  disabled={swapping}>
+                  {v} SOL
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="hp-presets">
+              {sellPresets.map(p => {
+                const k = 'pct-' + p.pct;
+                return (
+                  <button key={k} type="button"
+                    className={'hp-preset' + (selectedPreset === k ? ' hp-preset-active' : '')}
+                    onClick={() => applySellPercent(p.pct)}
+                    disabled={swapping || !(inputBalanceUi > 0)}>
+                    {p.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {(amtNum > 0 || quoting) && (
+            <div className="hp-receive">
+              <div className="hp-receive-head">
+                <span>YOU RECEIVE</span>
+                {quoting && <span className="hp-receive-loading">updating…</span>}
+              </div>
+              <div className={'hp-receive-val' + (outAmountUi != null && outAmountUi > 0 ? '' : ' hp-muted')}>
+                {outAmountUi != null && outAmountUi > 0
+                  ? `${fmtTokenAmt(outAmountUi)} ${outputSymbol}`
+                  : '—'}
+              </div>
+              {build && rate && (
+                <div className="hp-receive-meta">
+                  <div className="hp-receive-meta-row">
+                    <span>Rate</span>
+                    <span>1 {inputSymbol} ≈ {fmtTokenAmt(rate)} {outputSymbol}</span>
+                  </div>
+                  <div className="hp-receive-meta-row">
+                    <span>Platform fee</span>
+                    <span>3% · in {inputSymbol}</span>
+                  </div>
+                  <div className="hp-receive-meta-row">
+                    <span>Route</span>
+                    <span>Jupiter</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {quoteError && !swapping && !swapResult && (
+            <div className="hp-sheet-error">{quoteError}</div>
+          )}
+          {swapError && (
+            <div className="hp-sheet-error">{swapError}</div>
+          )}
+          {swapResult && (
+            <div className="hp-sheet-success">
+              {swapResult.pending ? 'Submitted but still confirming. ' : 'Swap confirmed. '}
+              <a href={`https://solscan.io/tx/${swapResult.signature}`} target="_blank" rel="noreferrer">
+                View on Solscan
+              </a>
+            </div>
+          )}
+        </div>
+
+        <div className="hp-cta-wrap">
+          <button
+            type="button"
+            className={'hp-cta ' + (isSell ? 'hp-cta-sell' : 'hp-cta-buy')}
+            onClick={!connected ? onConnectWallet : handleSwap}
+            disabled={connected ? !canSwap : false}
+          >
+            {ctaLabel}
+          </button>
+          <div className="hp-cta-foot">
+            Powered by <b>Jupiter</b> · Non-custodial · Your keys
+          </div>
+        </div>
+      </div>
+    </>
+  );
 }
 
 // =====================================================================
-// XSTOCK HELPERS (copied verbatim from Stocks.jsx)
+// XSTOCK DRAWER  — verbatim port of Stocks.jsx TradeModal
 // =====================================================================
+const XSTOCK_FEE_BPS      = 500;
+const XSTOCK_SLIPPAGE_BPS = 500;
+const USDC_DECIMALS       = 6;
+const ATA_PROGRAM_ID      = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+
 async function fetchWithTimeout(url, opts = {}, timeoutMs = 12_000) {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
@@ -625,9 +1123,7 @@ async function getJupiterQuoteX({ inputMint, outputMint, amountAtomic, slippageB
     slippageBps: String(slippageBps),
     swapMode:    'ExactIn',
   });
-  const res = await fetchWithTimeout(`/api/jupiter/quote?${params}`, {
-    headers: { Accept: 'application/json' },
-  }, 12_000);
+  const res = await fetchWithTimeout(`/api/jupiter/quote?${params}`, { headers: { Accept: 'application/json' } }, 12_000);
   const json = await res.json();
   if (!res.ok) throw new Error(json?.error || `Quote failed (${res.status})`);
   return json;
@@ -711,8 +1207,6 @@ function deserializeJupInstructionX(ix) {
   });
 }
 
-// ── ALT + blockhash + assemble + simulate + send — ALL via /api/solana-rpc
-// (copied verbatim from Stocks.jsx — the xstock path never touches Connection).
 async function fetchLookupTableAccountsX(altAddresses) {
   if (!altAddresses?.length) return [];
   const res = await fetchWithTimeout('/api/solana-rpc', {
@@ -860,128 +1354,30 @@ async function simulateBeforeSignX(serializedTxBase64) {
   }
 }
 
-// Renders a token icon for a given mint. Resolves SOL/USDC to known logos,
-// uses token meta for others, falls back to a colored letter badge.
-function MintIcon({ mint, meta, size = 22 }) {
-  const [errored, setErrored] = useState(false);
-  useEffect(() => { setErrored(false); }, [mint]);
-
-  const url = KNOWN_ICONS[mint] || meta?.icon || null;
-  const radius = Math.round(size * 0.5);
-
-  if (url && !errored) {
-    return (
-      <img
-        src={url}
-        alt=""
-        onError={() => setErrored(true)}
-        style={{
-          width: size, height: size, borderRadius: radius,
-          objectFit: 'cover', flexShrink: 0,
-          background: 'rgba(255,255,255,.5)',
-        }}
-      />
-    );
-  }
-  const sym = mint === SOL_MINT ? 'S'
-            : mint === USDC_SOLANA ? '$'
-            : ((meta?.symbol || '?').replace(/x$/, '').charAt(0) || '?').toUpperCase();
-  const bg = mint === SOL_MINT
-    ? 'linear-gradient(135deg,#B794F6,#7FFFD4)'
-    : mint === USDC_SOLANA
-      ? 'linear-gradient(135deg,#2775CA,#A0E7FF)'
-      : (() => {
-          const c = meta?.color || colorFromMint(mint);
-          return `linear-gradient(135deg, ${c}, ${c}cc)`;
-        })();
-  return (
-    <div style={{
-      width: size, height: size, borderRadius: radius,
-      flexShrink: 0, display: 'grid', placeItems: 'center',
-      background: bg, color: '#fff',
-      fontFamily: '"Instrument Serif", serif',
-      fontSize: Math.round(size * 0.55), lineHeight: 1,
-    }}>{sym}</div>
-  );
-}
-
-// =====================================================================
-// HOLDING ROW
-// =====================================================================
-function HoldingRow({ token, onBuy, onSell, idx }) {
-  const meta    = token.meta || buildFallbackMeta(token.mint);
-  const val     = token.value || 0;
-  const isSol   = token.mint === SOL_MINT;
-  const isBrand = !!meta.isBrand;
-  const isStable = !!meta.isStable;
-  const isPump   = !!meta.isPump;
-  const hasPrice = !!token.hasPrice || isSol;
-
-  return (
-    <div
-      className={'hp-row' + (isSol ? ' hp-row-sol' : '')}
-      style={{ animationDelay: (idx * 0.03) + 's' }}
-    >
-      <MintIcon mint={token.mint} meta={meta} size={42} />
-      <div className="hp-h-mid">
-        <div className="hp-h-head">
-          <span className="hp-h-sym">{meta.symbol}</span>
-          {isSol     && (<span className="hp-h-tag hp-tag-sol">NATIVE</span>)}
-          {isBrand   && (<span className="hp-h-tag">xSTOCK</span>)}
-          {isStable  && (<span className="hp-h-tag hp-tag-stable">STABLE</span>)}
-          {isPump    && (<span className="hp-h-tag hp-tag-pump">PUMP</span>)}
-        </div>
-        <div className="hp-h-sub">
-          {fmtTokenAmt(token.uiAmount)} {meta.symbol} · {hasPrice && token.price > 0 ? fmtUsd(token.price) : 'no price'}
-        </div>
-      </div>
-      <div className="hp-h-right">
-        <div className="hp-h-value">{val > 0 ? fmtUsd(val) : '—'}</div>
-        {!isSol && (
-          <div className="hp-h-actions">
-            <button type="button" className="hp-act-btn hp-act-buy" onClick={() => onBuy(token)}>
-              BUY
-            </button>
-            <button type="button" className="hp-act-btn hp-act-sell" onClick={() => onSell(token)}>
-              SELL
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// =====================================================================
-// TRADE DRAWER
-// =====================================================================
-function TradeDrawer({
-  token,
-  initialMode,
-  solBalance,
-  tokenBalance,
-  solPrice,
-  publicKey,
-  signTransaction,
-  connected,
-  onClose,
-  onConnectWallet,
-  onTradeComplete,
+function XstockDrawer({
+  token, initialMode,
+  publicKey, signTransaction, connected,
+  onClose, onConnectWallet, onTradeComplete,
 }) {
-  // Single signing wallet for the whole page; passed down to TradeDrawer.
-  // Connection matches SwapWidget / LaunchRadar exactly: single
-  // `new Connection(RPC_POOL[0])`. Used only by jupiter & pumpfun routes.
-  // The xstock route never touches Connection — it uses /api/solana-rpc
-  // directly (Stocks pattern).
-  const connection = useMemo(() => new Connection(RPC_URL, 'confirmed'), []);
+  const meta = token.meta || buildFallbackMeta(token.mint);
+  const brand = {
+    mint:     token.mint,
+    symbol:   meta.symbol,
+    name:     meta.name,
+    decimals: meta.decimals ?? 8,
+  };
+  const price = token.price || 0;
+  const walletPubkey = publicKey ? publicKey.toBase58() : null;
 
-  const isSol = token.mint === SOL_MINT;
-  const baseRoute = useMemo(() => isSol ? 'jupiter' : getTokenRoute(token), [isSol, token]);
-  const isXstock = baseRoute === 'xstock';
-  const isPump   = baseRoute === 'pumpfun';
-
-  const [mode, setMode] = useState(initialMode || 'buy');
-  useEffect(() => { if (isSol && mode !== 'sell') setMode('sell'); }, [isSol, mode]);
+  const [side, setSide]       = useState((initialMode === 'sell' ? 'SELL' : 'BUY'));
+  const [amount, setAmount]   = useState('');
+  const [quote, setQuote]     = useState(null);
+  const [quoting, setQuoting] = useState(false);
+  const [submitState, setSubmitState] = useState({ kind: 'idle', message: '' });
+  const [error, setError]     = useState('');
+  const [brandBal, setBrandBal] = useState({ atomic: 0n, ui: 0, loaded: false });
+  const [usdcBal,  setUsdcBal]  = useState({ atomic: 0n, ui: 0, loaded: false });
+  const quoteSeq = useRef(0);
 
   useEffect(() => {
     const prev = document.body.style.overflow;
@@ -989,662 +1385,653 @@ function TradeDrawer({
     return () => { document.body.style.overflow = prev; };
   }, []);
 
-  // Input/output mint config
-  const inputMint = useMemo(() => {
-    if (isSol) return SOL_MINT;
-    if (isXstock) return mode === 'buy' ? USDC_SOLANA : token.mint;
-    return mode === 'buy' ? SOL_MINT : token.mint;
-  }, [isSol, isXstock, mode, token.mint]);
-
-  const outputMint = useMemo(() => {
-    if (isSol) return USDC_SOLANA;
-    if (isXstock) return mode === 'buy' ? token.mint : USDC_SOLANA;
-    return mode === 'buy' ? token.mint : SOL_MINT;
-  }, [isSol, isXstock, mode, token.mint]);
-
-  const tokenMeta = token.meta || buildFallbackMeta(token.mint);
-  const inputDecimals = useMemo(() => {
-    if (inputMint === SOL_MINT) return 9;
-    if (inputMint === USDC_SOLANA) return USDC_DECIMALS;
-    return tokenMeta.decimals ?? 6;
-  }, [inputMint, tokenMeta.decimals]);
-  const outputDecimals = useMemo(() => {
-    if (outputMint === SOL_MINT) return 9;
-    if (outputMint === USDC_SOLANA) return USDC_DECIMALS;
-    return tokenMeta.decimals ?? 6;
-  }, [outputMint, tokenMeta.decimals]);
-
-  const inputSymbol = inputMint === SOL_MINT ? 'SOL'
-                    : inputMint === USDC_SOLANA ? 'USDC'
-                    : tokenMeta.symbol;
-  const outputSymbol = outputMint === SOL_MINT ? 'SOL'
-                    : outputMint === USDC_SOLANA ? 'USDC'
-                    : tokenMeta.symbol;
-
-  const inputBalanceUi = useMemo(() => {
-    if (inputMint === SOL_MINT)   return solBalance || 0;
-    if (inputMint === token.mint) return tokenBalance?.uiAmount || 0;
-    return 0;
-  }, [inputMint, solBalance, tokenBalance, token.mint]);
-
-  const inputPriceUsd = useMemo(() => {
-    if (inputMint === SOL_MINT)   return solPrice || 0;
-    if (inputMint === USDC_SOLANA) return 1;
-    if (inputMint === token.mint) return token.price || 0;
-    return 0;
-  }, [inputMint, solPrice, token.mint, token.price]);
-
-  // USDC balance for xstock BUY — uses /api/solana-rpc proxy (Stocks pattern).
-  const [usdcBalance, setUsdcBalance] = useState(0);
+  // Refresh balances on open and after each submit settles.
   useEffect(() => {
-    if (!isXstock || !publicKey || mode !== 'buy') return;
+    if (!walletPubkey) return;
     let cancelled = false;
     (async () => {
-      try {
-        const r = await fetchTokenBalanceX({
-          ownerPubkey: publicKey.toBase58(),
-          mint:        USDC_SOLANA,
-          decimals:    USDC_DECIMALS,
-        });
-        if (!cancelled) setUsdcBalance(r.ui);
-      } catch { if (!cancelled) setUsdcBalance(0); }
+      const [s, u] = await Promise.allSettled([
+        fetchTokenBalanceX({ ownerPubkey: walletPubkey, mint: brand.mint, decimals: brand.decimals }),
+        fetchTokenBalanceX({ ownerPubkey: walletPubkey, mint: USDC_SOLANA, decimals: USDC_DECIMALS }),
+      ]);
+      if (cancelled) return;
+      if (s.status === 'fulfilled') setBrandBal({ ...s.value, loaded: true });
+      else                          setBrandBal({ atomic: 0n, ui: 0, loaded: true });
+      if (u.status === 'fulfilled') setUsdcBal({ ...u.value, loaded: true });
+      else                          setUsdcBal({ atomic: 0n, ui: 0, loaded: true });
     })();
     return () => { cancelled = true; };
-  }, [isXstock, publicKey, mode]);
+  }, [walletPubkey, brand.mint, brand.decimals, submitState.kind]);
 
-  const effInputBalanceUi = (isXstock && mode === 'buy') ? usdcBalance : inputBalanceUi;
-
-  const [amount, setAmount] = useState('');
-  const [selectedPreset, setSelectedPreset] = useState(null);
-  useEffect(() => { setAmount(''); setSelectedPreset(null); }, [mode]);
-
-  const amtNum = parseFloat(amount) || 0;
-  const usdValue = amtNum * inputPriceUsd;
-
-  const rawAmount = useMemo(() => {
-    if (!amount) return '';
-    const n = Number(amount);
-    if (!Number.isFinite(n) || n <= 0) return '';
-    return Math.floor(n * Math.pow(10, inputDecimals)).toString();
-  }, [amount, inputDecimals]);
-
-  // ── QUOTE / BUILD STATE ─────────────────────────────────────────────
-  const [build, setBuild] = useState(null);
-  const [quoting, setQuoting] = useState(false);
-  const [quoteError, setQuoteError] = useState(null);
-  const quoteAbortRef = useRef(null);
-
-  // JUPITER QUOTE (from MemeWonderland TradeSheet)
+  // Quote — verbatim from Stocks.jsx
   useEffect(() => {
-    if (baseRoute !== 'jupiter') return;
-    if (!rawAmount || inputMint === outputMint) {
-      setBuild(null); setQuoteError(null); return;
-    }
-    if (quoteAbortRef.current) quoteAbortRef.current.abort();
-    const ac = new AbortController(); quoteAbortRef.current = ac;
-    setQuoting(true); setQuoteError(null);
+    const n = parseFloat(amount);
+    if (!Number.isFinite(n) || n <= 0) { setQuote(null); return; }
+
+    const seq = ++quoteSeq.current;
+    setQuoting(true); setError('');
     const t = setTimeout(async () => {
       try {
-        const net = (BigInt(rawAmount) * BigInt(10000 - FEE_BPS)) / 10000n;
-        if (net <= 0n) { setBuild(null); setQuoting(false); return; }
-        const params = new URLSearchParams({
-          inputMint, outputMint,
-          amount: net.toString(),
-          slippageBps: String(SLIPPAGE_BPS),
-          taker: publicKey ? publicKey.toBase58() : '11111111111111111111111111111111',
-        });
-        const r = await fetch(`/api/jupiter/build?${params}`, { signal: ac.signal });
-        if (!r.ok) {
-          const body = await r.json().catch(() => ({}));
-          throw new Error(body.error || `Quote failed (${r.status})`);
-        }
-        const data = await r.json();
-        if (!ac.signal.aborted) { setBuild({ kind: 'jupiter', ...data }); setQuoteError(null); }
-      } catch (e) {
-        if (e.name === 'AbortError') return;
-        if (!ac.signal.aborted) { setBuild(null); setQuoteError(friendlyError(e)); }
-      } finally {
-        if (!ac.signal.aborted) setQuoting(false);
-      }
-    }, 350);
-    return () => { clearTimeout(t); ac.abort(); };
-  }, [baseRoute, rawAmount, inputMint, outputMint, publicKey]);
+        const isBuy = side === 'BUY';
+        const inputMint  = isBuy ? USDC_SOLANA : brand.mint;
+        const outputMint = isBuy ? brand.mint  : USDC_SOLANA;
 
-  // XSTOCK QUOTE (from Stocks.jsx)
-  useEffect(() => {
-    if (baseRoute !== 'xstock') return;
-    if (!rawAmount || inputMint === outputMint) {
-      setBuild(null); setQuoteError(null); return;
-    }
-    if (quoteAbortRef.current) quoteAbortRef.current.abort();
-    const ac = new AbortController(); quoteAbortRef.current = ac;
-    setQuoting(true); setQuoteError(null);
-    const t = setTimeout(async () => {
-      try {
         let atomic;
-        if (mode === 'buy') {
-          const gross = BigInt(rawAmount);
-          const fee = (gross * BigInt(XSTOCK_FEE_BPS)) / 10000n;
-          atomic = gross - fee;
+        if (isBuy) {
+          const grossUsdcAtomic = Math.round(n * 10 ** USDC_DECIMALS);
+          const feeUsdcAtomic   = Math.floor(grossUsdcAtomic * XSTOCK_FEE_BPS / 10000);
+          atomic = grossUsdcAtomic - feeUsdcAtomic;
         } else {
-          atomic = BigInt(rawAmount);
+          if (!(price > 0)) { setQuote(null); setQuoting(false); return; }
+          atomic = Math.round((n / price) * 10 ** brand.decimals);
         }
-        if (atomic < 1n) { setBuild(null); setQuoting(false); return; }
+        if (atomic < 1) { setQuote(null); setQuoting(false); return; }
+
         const q = await getJupiterQuoteX({
           inputMint, outputMint,
           amountAtomic: atomic,
           slippageBps:  XSTOCK_SLIPPAGE_BPS,
         });
-        if (!ac.signal.aborted) { setBuild({ kind: 'xstock', quoteResponse: q }); setQuoteError(null); }
+        if (seq !== quoteSeq.current) return;
+        setQuote(q);
       } catch (e) {
-        if (!ac.signal.aborted) { setBuild(null); setQuoteError(friendlyError(e)); }
+        if (seq !== quoteSeq.current) return;
+        setError(e.message || 'Quote failed');
+        setQuote(null);
       } finally {
-        if (!ac.signal.aborted) setQuoting(false);
+        if (seq === quoteSeq.current) setQuoting(false);
       }
     }, 350);
-    return () => { clearTimeout(t); ac.abort(); };
-  }, [baseRoute, rawAmount, inputMint, outputMint, mode]);
 
-  // PUMP.FUN ESTIMATE (from LaunchRadar)
-  useEffect(() => {
-    if (baseRoute !== 'pumpfun') return;
-    if (!amtNum || amtNum <= 0) { setBuild(null); setQuoteError(null); return; }
+    return () => clearTimeout(t);
+  }, [amount, side, brand.mint, brand.decimals, price]);
 
-    if (mode === 'buy') {
-      const totalLamports = BigInt(Math.floor(amtNum * 1e9));
-      const feeLamports   = (totalLamports * BigInt(FEE_BPS)) / 10000n;
-      const tradeLamports = ((totalLamports - feeLamports) * 100n) / 110n;
-      if (tradeLamports <= 0n || feeLamports <= 0n) { setBuild(null); return; }
-      let estTokens = 0;
-      if (token?.price > 0 && solPrice > 0) {
-        const tradeSol = Number(tradeLamports) / 1e9;
-        estTokens = (tradeSol * solPrice) / token.price;
+  const usd       = parseFloat(amount) || 0;
+  const isBusy    = submitState.kind === 'loading';
+  const isSuccess = submitState.kind === 'success';
+
+  const outAtomic   = quote ? Number(quote.outAmount) : 0;
+  const isBuy       = side === 'BUY';
+  const outDecimals = isBuy ? brand.decimals : USDC_DECIMALS;
+  const grossOut    = outAtomic / 10 ** outDecimals;
+
+  const feeBpsRatio    = XSTOCK_FEE_BPS / 10000;
+  const platformFeeUsd = isBuy ? usd * feeBpsRatio : grossOut * feeBpsRatio;
+  const netOutUsdc  = !isBuy ? Math.max(0, grossOut - platformFeeUsd) : 0;
+  const outAmount   = isBuy ? grossOut : netOutUsdc;
+  const priceImpactPct = quote?.priceImpactPct ? Number(quote.priceImpactPct) * 100 : 0;
+
+  const brandAtomicNeeded = (() => {
+    if (isBuy || !(usd > 0) || !(price > 0)) return 0n;
+    try { return BigInt(Math.round((usd / price) * 10 ** brand.decimals)); } catch { return 0n; }
+  })();
+  const validStake = isBuy
+    ? (usd >= 1 && usd <= 50000)
+    : (brandAtomicNeeded > 0n && brandAtomicNeeded <= brandBal.atomic);
+  const insufficientBrand = !isBuy && brandBal.loaded && brandAtomicNeeded > brandBal.atomic;
+  const sellBrandEquiv = !isBuy && usd > 0 && price > 0 ? usd / price : 0;
+
+  const handleSubmit = async () => {
+    if (!connected) { onConnectWallet?.(); return; }
+    if (!walletPubkey) { setError('Wallet not connected'); return; }
+    if (!quote) { setError('No quote available'); return; }
+    if (!signTransaction) { setError('Wallet cannot sign'); return; }
+
+    setSubmitState({ kind: 'loading', message: 'Building transaction...' });
+    setError('');
+
+    try {
+      const owner       = new PublicKey(walletPubkey);
+      const usdcMintPk  = new PublicKey(USDC_SOLANA);
+
+      const userUsdcAta = deriveAtaX(owner,      usdcMintPk, TOKEN_PROGRAM_ID);
+      const feeUsdcAta  = deriveAtaX(FEE_WALLET, usdcMintPk, TOKEN_PROGRAM_ID);
+
+      let feeAtomic;
+      if (side === 'BUY') {
+        feeAtomic = BigInt(Math.round(usd * 10 ** USDC_DECIMALS)) * BigInt(XSTOCK_FEE_BPS) / 10000n;
+      } else {
+        const worstUsdcOut = BigInt(quote.otherAmountThreshold || quote.outAmount || '0');
+        feeAtomic = (worstUsdcOut * BigInt(XSTOCK_FEE_BPS)) / 10000n;
       }
-      setBuild({
-        kind: 'pumpfun',
+      if (feeAtomic <= 0n) throw new Error('Amount too small');
+
+      const feeIxs = [
+        createIdempotentAtaIxX(owner, feeUsdcAta, FEE_WALLET, usdcMintPk, TOKEN_PROGRAM_ID),
+        createTransferCheckedIxX({
+          source: userUsdcAta,
+          mint: usdcMintPk,
+          destination: feeUsdcAta,
+          owner,
+          amountAtomic: feeAtomic,
+          decimals: USDC_DECIMALS,
+          tokenProgramId: TOKEN_PROGRAM_ID,
+        }),
+      ];
+
+      const swapIxs = await getJupiterSwapInstructionsX({
+        quoteResponse: quote,
+        userPublicKey: walletPubkey,
+      });
+
+      const tx = await assembleSwapTxX({
+        swapInstructions: swapIxs,
+        feeIxs,
+        userPublicKey:    walletPubkey,
+        prependFee:       side === 'BUY',
+      });
+
+      setSubmitState({ kind: 'loading', message: 'Simulating...' });
+      const serializedForSim = btoa(String.fromCharCode(...tx.serialize()));
+      const sim = await simulateBeforeSignX(serializedForSim);
+      if (!sim.ok) throw new Error(sim.message || 'Simulation failed');
+
+      setSubmitState({ kind: 'loading', message: 'Confirm in your wallet...' });
+      const signed = await signTransaction(tx);
+
+      setSubmitState({ kind: 'loading', message: 'Submitting on Solana...' });
+      const serialized = btoa(String.fromCharCode(...signed.serialize()));
+      const submitRes = await fetchWithTimeout('/api/solana-rpc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0', id: 1, method: 'sendTransaction',
+          params: [serialized, { encoding: 'base64', skipPreflight: true, preflightCommitment: 'confirmed', maxRetries: 5 }],
+        }),
+      }, 20_000);
+      const submitJson = await submitRes.json();
+      if (submitJson.error) throw new Error(submitJson.error.message || 'Submit failed');
+
+      setSubmitState({ kind: 'success', message: 'Swap submitted', signature: submitJson.result });
+      setTimeout(() => { onTradeComplete?.(); }, 2200);
+    } catch (e) {
+      console.error('[hp-xstock swap]', e);
+      const msg = e.message || 'Swap failed';
+      setSubmitState({ kind: 'error', message: /reject|cancel|user/i.test(msg) ? 'Cancelled' : msg });
+      setTimeout(() => setSubmitState({ kind: 'idle', message: '' }), 4500);
+    }
+  };
+
+  const sellPctUsd = (pct) => {
+    if (!brandBal.loaded || brandBal.atomic <= 0n || !(price > 0)) return '';
+    if (pct === 100) {
+      const exactUsd = (Number(brandBal.atomic) / 10 ** brand.decimals) * price;
+      return (Math.floor(exactUsd * 100) / 100).toFixed(2);
+    }
+    const partUsd = (Number(brandBal.atomic) * (pct / 100) / 10 ** brand.decimals) * price;
+    return (Math.floor(partUsd * 100) / 100).toFixed(2);
+  };
+  const buyChips  = [
+    { label: '$50',   val: '50'   },
+    { label: '$100',  val: '100'  },
+    { label: '$500',  val: '500'  },
+    { label: '$1000', val: '1000' },
+  ];
+  const sellChips = [
+    { label: '25%', val: sellPctUsd(25)  },
+    { label: '50%', val: sellPctUsd(50)  },
+    { label: '75%', val: sellPctUsd(75)  },
+    { label: 'MAX', val: sellPctUsd(100) },
+  ];
+  const chips = isBuy ? buyChips : sellChips;
+
+  const successSig = submitState.kind === 'success' ? submitState.signature : null;
+
+  return (
+    <>
+      <div className="hp-sheet-backdrop" onClick={isBusy ? undefined : onClose} />
+      <div className="hp-sheet">
+        <div className="hp-grabber" />
+
+        <div className="hp-sheet-head">
+          <MintIcon mint={token.mint} meta={meta} size={46} />
+          <div className="hp-sheet-title-wrap">
+            <div className="hp-sheet-title">{meta.symbol}</div>
+            <div className="hp-sheet-sub">
+              {meta.name} · {price > 0 ? fmtUsd(price) : 'no price'}
+              <span className="hp-route-badge hp-route-xstock">xSTOCK</span>
+            </div>
+          </div>
+          <button type="button" className="hp-sheet-close" onClick={onClose} disabled={isBusy}>×</button>
+        </div>
+
+        <div className="hp-side-switch">
+          {['BUY', 'SELL'].map(s => {
+            const active = side === s;
+            const cls = s === 'BUY' ? 'hp-buy' : 'hp-sell';
+            return (
+              <button
+                key={s}
+                type="button"
+                className={'hp-side-btn' + (active ? ` hp-active ${cls}` : '')}
+                onClick={() => { if (!isBusy) { setSide(s); setAmount(''); setQuote(null); } }}
+                disabled={isBusy}
+              >{s === 'BUY' ? 'Buy with USDC' : 'Sell to USDC'}</button>
+            );
+          })}
+        </div>
+
+        <div className="hp-sheet-body">
+          <div className="hp-amount-label">
+            <span>{isBuy ? 'YOU PAY (USDC)' : 'YOU SELL (USDC)'}</span>
+            <span className="hp-amount-bal">
+              {brandBal.loaded
+                ? <>Hold: <b>{fmtTokenAmt(brandBal.ui)}</b> {brand.symbol}</>
+                : 'Hold: …'}
+            </span>
+          </div>
+
+          <div className="hp-amount-wrap">
+            <div className="hp-amount-chip">
+              <MintIcon mint={USDC_SOLANA} meta={{ symbol: 'USDC' }} size={22} />
+              USDC
+            </div>
+            <input
+              className="hp-amount-input"
+              type="text"
+              inputMode="decimal"
+              placeholder="0.00"
+              value={amount}
+              onChange={e => {
+                const v = e.target.value.replace(/[^\d.]/g, '');
+                const parts = v.split('.');
+                if (parts.length > 2) return;
+                setAmount(v); setError('');
+              }}
+              disabled={isBusy}
+            />
+          </div>
+          {!isBuy && sellBrandEquiv > 0 && (
+            <div className="hp-amount-equiv">≈ {fmtTokenAmt(sellBrandEquiv)} {brand.symbol}</div>
+          )}
+
+          <div className="hp-presets">
+            {chips.map(c => {
+              const disabled = isBusy || !c.val;
+              return (
+                <button key={c.label} type="button"
+                  className="hp-preset"
+                  onClick={() => { if (c.val) { setAmount(c.val); setError(''); } }}
+                  disabled={disabled}>
+                  {c.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {usd > 0 && (
+            <div className="hp-receive">
+              <div className="hp-receive-head">
+                <span>YOU RECEIVE</span>
+                {quoting && <span className="hp-receive-loading">updating…</span>}
+              </div>
+              <div className={'hp-receive-val' + (outAtomic > 0 ? '' : ' hp-muted')}>
+                {outAtomic > 0
+                  ? (isBuy ? `${fmtTokenAmt(outAmount)} ${brand.symbol}` : fmtUsd(outAmount))
+                  : '—'}
+              </div>
+              {quote && (
+                <div className="hp-receive-meta">
+                  <div className="hp-receive-meta-row">
+                    <span>Price impact</span>
+                    <span>{priceImpactPct.toFixed(2)}%</span>
+                  </div>
+                  <div className="hp-receive-meta-row">
+                    <span>Platform fee</span>
+                    <span>5% · in USDC</span>
+                  </div>
+                  <div className="hp-receive-meta-row">
+                    <span>Route</span>
+                    <span>Jupiter · {(quote.routePlan?.length || 1)} hop{(quote.routePlan?.length || 1) === 1 ? '' : 's'}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {(error || submitState.kind === 'error') && (
+            <div className="hp-sheet-error">{error || submitState.message}</div>
+          )}
+          {successSig && (
+            <div className="hp-sheet-success">
+              Swap submitted.{' '}
+              <a href={`https://solscan.io/tx/${successSig}`} target="_blank" rel="noreferrer">
+                View on Solscan
+              </a>
+            </div>
+          )}
+          {submitState.kind === 'loading' && submitState.message && (
+            <div className="hp-sheet-success" style={{ background: 'rgba(183,148,246,.12)', borderColor: 'rgba(183,148,246,.4)' }}>
+              {submitState.message}
+            </div>
+          )}
+        </div>
+
+        <div className="hp-cta-wrap">
+          {!connected ? (
+            <button type="button" className="hp-cta hp-cta-buy" onClick={() => onConnectWallet?.()}>
+              Connect Wallet
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={'hp-cta ' + (isBuy ? 'hp-cta-buy' : 'hp-cta-sell')}
+              onClick={handleSubmit}
+              disabled={isBusy || !quote || !validStake}
+            >
+              {isBusy ? 'Processing…' :
+               isSuccess ? 'Swap placed' :
+               insufficientBrand ? `Insufficient ${brand.symbol}` :
+               !validStake ? 'Enter USDC amount' :
+               !quote ? (quoting ? 'Getting quote…' : 'No quote') :
+               `${isBuy ? 'Buy' : 'Sell'} ${brand.symbol} · ${fmtUsd(usd)}`}
+            </button>
+          )}
+          <div className="hp-cta-foot">
+            Powered by <b>Jupiter</b> · USDC settles to your wallet · No KYC
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// =====================================================================
+// PUMPFUN DRAWER  — verbatim port of LaunchRadar TradeModal + executeSwap
+// =====================================================================
+const PUMP_FEE_BPS  = 300;
+const SOL_RESERVE   = 0.01;
+
+async function decodeBuiltTx(b64, connection) {
+  const txBytes = Buffer.from(b64, 'base64');
+  const tx      = VersionedTransaction.deserialize(txBytes);
+  const message = tx.message;
+  const lookupKeys = (message.addressTableLookups || []).map(l => l.accountKey);
+  const alts = [];
+  if (lookupKeys.length > 0) {
+    const infos = await connection.getMultipleAccountsInfo(lookupKeys);
+    for (let i = 0; i < lookupKeys.length; i++) {
+      if (!infos[i]) continue;
+      alts.push(new AddressLookupTableAccount({
+        key:   lookupKeys[i],
+        state: AddressLookupTableAccount.deserialize(infos[i].data),
+      }));
+    }
+  }
+  const decompiled = TransactionMessage.decompile(message, {
+    addressLookupTableAccounts: alts,
+  });
+  return { instructions: decompiled.instructions, alts };
+}
+
+async function getPumpRoute({ action, mint, user, amount, decimals, connection }) {
+  const body = {
+    action,
+    mint,
+    user:   user.toBase58(),
+    amount: String(amount),
+  };
+  if (decimals != null) body.decimals = Number(decimals);
+
+  const r = await fetch('/api/pumpfun/trade', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data?.error || ('pump HTTP ' + r.status));
+  if (!data.tx) throw new Error('PumpPortal returned no tx.');
+
+  const { instructions, alts } = await decodeBuiltTx(data.tx, connection);
+  return { instructions, alts, pool: data.pool, route: data.route };
+}
+
+function describeSimLogs(logs, fallbackMsg) {
+  const arr = Array.isArray(logs) ? logs : [];
+  const j = arr.join('\n').toLowerCase();
+  if (j.includes('slippage') || j.includes('toomuchsol') || j.includes('toolittlesol'))
+    return 'Price moved past slippage — try again.';
+  if (j.includes('insufficient') || j.includes('debit an account')) return 'Not enough SOL for the trade + fees.';
+  if (j.includes('exceeded') && j.includes('compute')) return 'Hit the compute limit — retry.';
+  const ctx = (arr.filter(l => /program log:|error|0x/i.test(l)).pop() || '').replace(/^Program log:\s*/i, '').slice(0, 150);
+  if (ctx) return 'Sim failed → ' + ctx;
+  return fallbackMsg ? ('Sim failed → ' + String(fallbackMsg).slice(0, 160)) : 'Sim failed (no logs returned).';
+}
+
+function PumpfunDrawer({
+  token, initialMode,
+  solBalance, tokenBalance, solPrice,
+  publicKey, signTransaction, connected,
+  onClose, onConnectWallet, onTradeComplete,
+}) {
+  const connection = useMemo(() => new Connection(RPC_URL, 'confirmed'), []);
+  const meta = token.meta || buildFallbackMeta(token.mint);
+
+  const [mode, setMode] = useState(initialMode || 'buy');
+  const [amount, setAmount] = useState('');
+  const [confirming, setConfirming] = useState(false);
+  const [error, setError] = useState(null);
+  const [swapResult, setSwapResult] = useState(null);
+
+  useEffect(() => { setAmount(''); setError(null); }, [mode]);
+  useEffect(() => { setError(null); }, [amount]);
+
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, []);
+
+  const isBuy = mode === 'buy';
+  const buyPresets  = [0.1, 0.25, 0.5, 1, 2];
+  const sellPresets = [25, 50, 100];
+  const presets = isBuy ? buyPresets : sellPresets;
+
+  const ownedUiAmount = tokenBalance?.uiAmount || 0;
+  const ownedRaw      = tokenBalance?.rawAmount || 0n;
+  const ownedDec      = tokenBalance?.decimals ?? meta.decimals ?? 6;
+  const availSol      = Math.max(0, (solBalance || 0) - SOL_RESERVE);
+
+  // swapParams — verbatim from LaunchRadar TradeModal
+  const swapParams = useMemo(() => {
+    if (!amount) return null;
+    const n = Number(amount);
+    if (!Number.isFinite(n) || n <= 0) return null;
+
+    if (isBuy) {
+      const totalLamports = BigInt(Math.floor(n * 1e9));
+      if (totalLamports <= 0n) return null;
+      const feeLamports   = (totalLamports * BigInt(PUMP_FEE_BPS)) / 10000n;
+      const tradeLamports = ((totalLamports - feeLamports) * 100n) / 110n;
+      if (tradeLamports <= 0n || feeLamports <= 0n) return null;
+      return {
         mode: 'buy',
+        solAmount: n,
         totalLamports: totalLamports.toString(),
         tradeLamports: tradeLamports.toString(),
         feeLamports:   feeLamports.toString(),
-        estOut: estTokens,
-      });
-      setQuoteError(null);
-    } else {
-      if (!tokenBalance?.rawAmount || tokenBalance.rawAmount <= 0n) {
-        setBuild(null); setQuoteError(null); return;
-      }
-      const pct = Math.min(100, Math.max(0.01, amtNum));
-      const tradeTokens = (tokenBalance.rawAmount * BigInt(Math.floor(pct * 100))) / 10000n;
-      if (tradeTokens <= 0n) { setBuild(null); return; }
-      const decimals = tokenBalance.decimals ?? tokenMeta.decimals ?? 6;
-      const tradeTokensUi = Number(tradeTokens) / Math.pow(10, decimals);
-      let feeLamports = '0';
-      let estSolOut = 0;
-      if (token?.price > 0 && solPrice > 0) {
-        const grossSol = (tradeTokensUi * token.price) / solPrice;
-        const lam = Math.floor(grossSol * (FEE_BPS / 10000) * 1e9);
-        if (lam > 0) feeLamports = String(lam);
-        estSolOut = Math.max(0, grossSol * (1 - FEE_BPS / 10000));
-      }
-      setBuild({
-        kind: 'pumpfun',
-        mode: 'sell',
-        decimals,
-        percentage: pct,
-        tradeTokens: tradeTokens.toString(),
-        tradeTokensUi,
-        feeLamports,
-        estOut: estSolOut,
-      });
-      setQuoteError(null);
-    }
-  }, [baseRoute, amtNum, mode, token, tokenBalance, solPrice, tokenMeta.decimals]);
-
-  // Display output
-  const outAmountUi = useMemo(() => {
-    if (!build) return null;
-    if (build.kind === 'jupiter') {
-      return Number(build.outAmount) / Math.pow(10, outputDecimals);
-    }
-    if (build.kind === 'xstock') {
-      const gross = Number(build.quoteResponse?.outAmount || 0) / Math.pow(10, outputDecimals);
-      if (mode === 'sell') return Math.max(0, gross * (1 - XSTOCK_FEE_BPS / 10000));
-      return gross;
-    }
-    if (build.kind === 'pumpfun') return build.estOut || 0;
-    return null;
-  }, [build, outputDecimals, mode]);
-
-  const rate = useMemo(() => {
-    if (!outAmountUi || !amtNum) return null;
-    return outAmountUi / amtNum;
-  }, [outAmountUi, amtNum]);
-
-  // Presets
-  const buyPresetsSol  = ['0.1', '0.5', '1', '2'];
-  const buyPresetsUsd  = ['50', '100', '500', '1000'];
-  const sellPresets    = [
-    { label: '25%',  pct: 25 },
-    { label: '50%',  pct: 50 },
-    { label: '75%',  pct: 75 },
-    { label: 'MAX',  pct: 100 },
-  ];
-
-  const isSellSide = mode === 'sell' || isSol;
-
-  const applyBuyPreset = (v) => { setAmount(v); setSelectedPreset(v); };
-  const applySellPercent = (pct) => {
-    if (!(effInputBalanceUi > 0)) return;
-    let amt = (effInputBalanceUi * pct) / 100;
-    if (inputMint === SOL_MINT && pct === 100) amt = Math.max(0, amt - SOL_RESERVE);
-    const factor = Math.pow(10, Math.min(8, inputDecimals));
-    amt = Math.floor(amt * factor) / factor;
-    setAmount(String(amt));
-    setSelectedPreset('pct-' + pct);
-  };
-  const applyPumpSellPct = (pct) => {
-    setAmount(String(pct));
-    setSelectedPreset('pct-' + pct);
-  };
-
-  // ── EXECUTE ─────────────────────────────────────────────────────────
-  const [swapping, setSwapping] = useState(false);
-  const [swapError, setSwapError] = useState(null);
-  const [swapResult, setSwapResult] = useState(null);
-
-  // JUPITER (verbatim from MemeWonderland TradeSheet.handleSwap)
-  const executeJupiter = useCallback(async () => {
-    const b = build;
-    if (!b || b.kind !== 'jupiter') throw new Error('No Jupiter quote.');
-    const dec = inputDecimals;
-
-    const feeAmount = (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n;
-    if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero — amount too small.');
-
-    const feeIxs = [];
-    if (inputMint === SOL_MINT) {
-      feeIxs.push(SystemProgram.transfer({
-        fromPubkey: publicKey,
-        toPubkey:   FEE_WALLET,
-        lamports:   Number(feeAmount),
-      }));
-    } else {
-      const mintPk = new PublicKey(inputMint);
-      const mintInfo = await connection.getAccountInfo(mintPk);
-      if (!mintInfo) throw new Error('Input mint not found on-chain.');
-      const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
-        ? TOKEN_2022_PROGRAM_ID
-        : TOKEN_PROGRAM_ID;
-
-      const sourceAta = getAssociatedTokenAddressSync(mintPk, publicKey, true, tokenProgram);
-      const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET, true, tokenProgram);
-
-      feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
-        publicKey, destAta, FEE_WALLET, mintPk, tokenProgram,
-      ));
-      feeIxs.push(createTransferCheckedInstruction(
-        sourceAta, mintPk, destAta, publicKey,
-        feeAmount, dec, [], tokenProgram,
-      ));
+      };
     }
 
-    const ixs = [];
-    if (Array.isArray(b.computeBudgetInstructions))
-      for (const ix of b.computeBudgetInstructions) ixs.push(deserIx(ix));
-    for (const ix of feeIxs) ixs.push(ix);
-    if (Array.isArray(b.setupInstructions))
-      for (const ix of b.setupInstructions) ixs.push(deserIx(ix));
-    if (b.swapInstruction) ixs.push(deserIx(b.swapInstruction));
-    if (b.cleanupInstruction) ixs.push(deserIx(b.cleanupInstruction));
-    if (Array.isArray(b.otherInstructions))
-      for (const ix of b.otherInstructions) ixs.push(deserIx(ix));
-
-    const altKeys = Object.keys(b.addressesByLookupTableAddress || {});
-    let alts = [];
-    if (altKeys.length > 0) {
-      const infos = await connection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
-      alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
-        key:   new PublicKey(k),
-        state: AddressLookupTableAccount.deserialize(infos[i].data),
-      }) : null).filter(Boolean);
+    if (!ownedRaw || ownedRaw <= 0n) return null;
+    const pct = Math.min(100, Math.max(0.01, n));
+    const tradeTokens = (ownedRaw * BigInt(Math.floor(pct * 100))) / 10000n;
+    if (tradeTokens <= 0n) return null;
+    const tradeTokensUi = Number(tradeTokens) / Math.pow(10, ownedDec);
+    let feeLamports = '0';
+    if (token?.price > 0 && solPrice > 0) {
+      const grossSol = (tradeTokensUi * token.price) / solPrice;
+      const lam = Math.floor(grossSol * (PUMP_FEE_BPS / 10000) * 1e9);
+      if (lam > 0) feeLamports = String(lam);
     }
-
-    const latest = await connection.getLatestBlockhash('confirmed');
-    const message = new TransactionMessage({
-      payerKey:        publicKey,
-      recentBlockhash: latest.blockhash,
-      instructions:    ixs,
-    }).compileToV0Message(alts);
-    const tx = new VersionedTransaction(message);
-
-    const mapSimErr = (logs) => {
-      const j = (logs || []).join('\n').toLowerCase();
-      if (j.includes('insufficient') || j.includes('0x1')) return 'Insufficient balance for this swap.';
-      if (j.includes('slippage') || j.includes('0x1771'))  return 'Price moved — try a higher slippage or smaller amount.';
-      if (j.includes('account not') || j.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
-      if (j.includes('blockhash') || j.includes('expired')) return 'Quote expired. Please refresh and retry.';
-      return null;
+    return {
+      mode: 'sell',
+      decimals: ownedDec,
+      percentage: pct,
+      tradeTokens:   tradeTokens.toString(),
+      tradeTokensUi,
+      feeLamports,
     };
-    try {
-      const sim = await connection.simulateTransaction(tx, {
-        replaceRecentBlockhash: true,
-        sigVerify: false,
-      });
-      if (sim.value.err) {
-        throw new Error(mapSimErr(sim.value.logs) || 'Swap simulation failed — the price may have moved.');
-      }
-    } catch (simErr) {
-      if (simErr?.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) {
-        throw simErr;
-      }
-      console.warn('[hp jupiter sim non-fatal]', simErr);
+  }, [amount, isBuy, token, ownedRaw, ownedDec, solPrice]);
+
+  const estReceive = useMemo(() => {
+    if (!swapParams || !(token?.price > 0) || !(solPrice > 0)) return null;
+    if (swapParams.mode === 'buy') {
+      const tradeSol = Number(swapParams.tradeLamports) / 1e9;
+      const tokens = (tradeSol * solPrice) / token.price;
+      return tokens > 0 ? { tokens } : null;
     }
+    const grossSol = (swapParams.tradeTokensUi * token.price) / solPrice;
+    const netSol   = grossSol * (1 - PUMP_FEE_BPS / 10000);
+    return netSol > 0 ? { sol: netSol } : null;
+  }, [swapParams, token?.price, solPrice]);
 
-    const signed = await signTransaction(tx);
-    const sig = await connection.sendRawTransaction(signed.serialize(), {
-      skipPreflight: false,
-      maxRetries: 3,
-    });
-    return { sig, latest };
-  }, [build, inputMint, inputDecimals, rawAmount, connection, publicKey, signTransaction]);
+  const hasFunds = (() => {
+    if (!amount || Number(amount) <= 0) return false;
+    if (isBuy) return Number(amount) <= availSol;
+    return ownedUiAmount > 0 && (solBalance || 0) >= 0.003;
+  })();
 
-  // XSTOCK (verbatim from Stocks.jsx TradeModal.handleSubmit — all RPC
-  // calls go through /api/solana-rpc, no Connection involved).
-  const executeXstock = useCallback(async () => {
-    const b = build;
-    if (!b || b.kind !== 'xstock') throw new Error('No xStock quote.');
-    const quote = b.quoteResponse;
-
-    const usdcMintPk = new PublicKey(USDC_SOLANA);
-    const userUsdcAta = deriveAtaX(publicKey, usdcMintPk, TOKEN_PROGRAM_ID);
-    const feeUsdcAta  = deriveAtaX(FEE_WALLET, usdcMintPk, TOKEN_PROGRAM_ID);
-
-    let feeAtomic;
-    if (mode === 'buy') {
-      feeAtomic = BigInt(rawAmount) * BigInt(XSTOCK_FEE_BPS) / 10000n;
-    } else {
-      const worstUsdcOut = BigInt(quote.otherAmountThreshold || quote.outAmount || '0');
-      feeAtomic = (worstUsdcOut * BigInt(XSTOCK_FEE_BPS)) / 10000n;
-    }
-    if (feeAtomic <= 0n) throw new Error('Amount too small.');
-
-    const feeIxs = [
-      createIdempotentAtaIxX(publicKey, feeUsdcAta, FEE_WALLET, usdcMintPk, TOKEN_PROGRAM_ID),
-      createTransferCheckedIxX({
-        source: userUsdcAta,
-        mint: usdcMintPk,
-        destination: feeUsdcAta,
-        owner: publicKey,
-        amountAtomic: feeAtomic,
-        decimals: USDC_DECIMALS,
-        tokenProgramId: TOKEN_PROGRAM_ID,
-      }),
-    ];
-
-    const swapIxs = await getJupiterSwapInstructionsX({
-      quoteResponse: quote,
-      userPublicKey: publicKey.toBase58(),
-    });
-
-    const tx = await assembleSwapTxX({
-      swapInstructions: swapIxs,
-      feeIxs,
-      userPublicKey:    publicKey.toBase58(),
-      prependFee:       mode === 'buy',
-    });
-
-    const serializedForSim = btoa(String.fromCharCode(...tx.serialize()));
-    const sim = await simulateBeforeSignX(serializedForSim);
-    if (!sim.ok) throw new Error(sim.message || 'Simulation failed');
-
-    const signed = await signTransaction(tx);
-
-    const serialized = btoa(String.fromCharCode(...signed.serialize()));
-    const submitRes = await fetchWithTimeout('/api/solana-rpc', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0', id: 1, method: 'sendTransaction',
-        params: [serialized, { encoding: 'base64', skipPreflight: true, preflightCommitment: 'confirmed', maxRetries: 5 }],
-      }),
-    }, 20_000);
-    const submitJson = await submitRes.json();
-    if (submitJson.error) throw new Error(submitJson.error.message || 'Submit failed');
-
-    const sig = submitJson.result;
-    // No blockhash for poll-style confirm — caller will poll via getSignatureStatus.
-    return { sig, latest: null };
-  }, [build, mode, rawAmount, publicKey, signTransaction]);
-
-  // PUMP.FUN (verbatim from LaunchRadar executeSwap)
-  const executePumpfun = useCallback(async () => {
-    const b = build;
-    if (!b || b.kind !== 'pumpfun') throw new Error('No pump.fun route.');
-
-    const route = await getPumpRoute({
-      action:   b.mode === 'buy' ? 'buy' : 'sell',
-      mint:     token.mint,
-      user:     publicKey,
-      amount:   b.mode === 'buy' ? b.tradeLamports : b.tradeTokens,
-      decimals: b.mode === 'buy' ? undefined : b.decimals,
-      connection,
-    });
-
-    const feeLamports = BigInt(b.feeLamports || '0');
-    if (feeLamports <= 0n) {
-      throw new Error(b.mode === 'buy'
-        ? 'Fee rounds to zero — amount too small.'
-        : 'Could not estimate sell fee — token or SOL price unavailable.');
-    }
-    const feeIx = SystemProgram.transfer({
-      fromPubkey: publicKey,
-      toPubkey:   FEE_WALLET,
-      lamports:   Number(feeLamports),
-    });
-
-    const CB_PROGRAM = 'ComputeBudget111111111111111111111111111111';
-    const ixs = route.instructions.slice();
-    if (b.mode === 'buy') {
-      let insertAt = 0;
-      while (insertAt < ixs.length && ixs[insertAt].programId.toBase58() === CB_PROGRAM) insertAt++;
-      ixs.splice(insertAt, 0, feeIx);
-    } else {
-      ixs.push(feeIx);
-    }
-
-    const latest = await connection.getLatestBlockhash('confirmed');
-    const message = new TransactionMessage({
-      payerKey:        publicKey,
-      recentBlockhash: latest.blockhash,
-      instructions:    ixs,
-    }).compileToV0Message(route.alts);
-    const tx = new VersionedTransaction(message);
-
-    let simLogs = null;
-    try {
-      const sim = await connection.simulateTransaction(tx, {
-        sigVerify: false,
-        replaceRecentBlockhash: true,
-        commitment: 'processed',
-      });
-      simLogs = sim?.value?.logs || null;
-      if (sim?.value?.err) {
-        throw new Error(describeSimLogs(simLogs, JSON.stringify(sim.value.err)));
-      }
-    } catch (simErr) {
-      if (simErr instanceof Error && /sim failed/i.test(simErr.message)) throw simErr;
-      console.warn('[hp pumpfun sim non-fatal]', simErr?.message);
-    }
-
-    const signed = await signTransaction(tx);
-    const raw = signed.serialize();
-    let sig;
-    try {
-      sig = await connection.sendRawTransaction(raw, {
-        skipPreflight: true,
-        maxRetries:    5,
-      });
-    } catch (sendErr) {
-      let logs = sendErr?.logs || null;
-      if (!logs && typeof sendErr?.getLogs === 'function') {
-        try { logs = await sendErr.getLogs(connection); } catch {}
-      }
-      throw new Error(describeSimLogs(logs, sendErr?.message));
-    }
-    return { sig, latest, raw };
-  }, [build, token.mint, connection, publicKey, signTransaction]);
-
-  // Master swap handler
-  const handleSwap = useCallback(async () => {
+  // execute — verbatim from LaunchRadar executeSwap
+  const handleConfirm = useCallback(async () => {
     if (!connected || !publicKey || !signTransaction) {
       onConnectWallet?.();
       return;
     }
-    if (!build) { setSwapError('No quote available — try again.'); return; }
-    setSwapping(true); setSwapError(null); setSwapResult(null);
+    if (!swapParams) return;
+    setConfirming(true);
+    setError(null);
+    setSwapResult(null);
 
     try {
-      let res;
-      if (build.kind === 'jupiter')      res = await executeJupiter();
-      else if (build.kind === 'xstock')  res = await executeXstock();
-      else if (build.kind === 'pumpfun') res = await executePumpfun();
-      else throw new Error('Unknown route');
+      const route = await getPumpRoute({
+        action: swapParams.mode === 'buy' ? 'buy' : 'sell',
+        mint:   token.mint,
+        user:   publicKey,
+        amount: swapParams.mode === 'buy' ? swapParams.tradeLamports : swapParams.tradeTokens,
+        decimals: swapParams.mode === 'buy' ? undefined : swapParams.decimals,
+        connection,
+      });
 
-      const { sig, latest, raw } = res;
+      const feeLamports = BigInt(swapParams.feeLamports || '0');
+      if (feeLamports <= 0n) {
+        throw new Error(swapParams.mode === 'buy'
+          ? 'Fee rounds to zero — amount too small.'
+          : 'Could not estimate sell fee — token or SOL price unavailable.');
+      }
+      const feeIx = SystemProgram.transfer({
+        fromPubkey: publicKey,
+        toPubkey:   FEE_WALLET,
+        lamports:   Number(feeLamports),
+      });
 
-      // Confirmation strategy:
-      //   pumpfun: poll + rebroadcast (LaunchRadar)
-      //   xstock:  poll signature status only (Stocks doesn't await confirm
-      //            in its handleSubmit — it returns success on submit;
-      //            here we wait briefly so the UI shows the right state).
-      //   jupiter: confirmTransaction with polling fallback (SwapWidget)
-      let confirmed = false;
-      if (build.kind === 'pumpfun') {
-        let onchainErr = null;
-        const startedAt = Date.now();
-        const HARD_CAP_MS = 60_000;
-        while (Date.now() - startedAt < HARD_CAP_MS) {
-          try {
-            const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-            if (st?.value?.err) { onchainErr = st.value.err; break; }
-            const cs = st?.value?.confirmationStatus;
-            if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
-          } catch {}
-          try {
-            const h = await connection.getBlockHeight('confirmed');
-            if (h > latest.lastValidBlockHeight) break;
-          } catch {}
-          try { if (raw) await connection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }); } catch {}
-          await new Promise(r => setTimeout(r, 2000));
-        }
-        if (onchainErr) {
-          throw new Error('Trade failed on-chain — price likely moved past slippage.');
-        }
-      } else if (build.kind === 'xstock') {
-        // Poll-only confirm via /api/solana-rpc (Stocks doesn't even await
-        // this — but we do so the UI doesn't lie about pending state).
-        const deadline = Date.now() + 30_000;
-        while (Date.now() < deadline) {
-          try {
-            const r = await fetchWithTimeout('/api/solana-rpc', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                jsonrpc: '2.0', id: 1, method: 'getSignatureStatuses',
-                params: [[sig], { searchTransactionHistory: true }],
-              }),
-            }, 6_000);
-            const j = await r.json();
-            const st = j?.result?.value?.[0];
-            if (st?.err) throw new Error('Swap tx failed on-chain.');
-            const cs = st?.confirmationStatus;
-            if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
-          } catch (e) {
-            if (/failed on-chain/i.test(String(e.message))) throw e;
-          }
-          await new Promise(r => setTimeout(r, 2000));
-        }
+      const CB_PROGRAM = 'ComputeBudget111111111111111111111111111111';
+      const ixs = route.instructions.slice();
+      if (swapParams.mode === 'buy') {
+        let insertAt = 0;
+        while (insertAt < ixs.length && ixs[insertAt].programId.toBase58() === CB_PROGRAM) insertAt++;
+        ixs.splice(insertAt, 0, feeIx);
       } else {
-        try {
-          const conf = await Promise.race([
-            connection.confirmTransaction({
-              signature: sig,
-              blockhash: latest.blockhash,
-              lastValidBlockHeight: latest.lastValidBlockHeight,
-            }, 'confirmed'),
-            new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
-          ]);
-          if (conf?.value?.err) throw new Error('Swap tx failed on-chain.');
-          confirmed = true;
-        } catch (cfErr) {
-          const deadline = Date.now() + 20_000;
-          while (Date.now() < deadline) {
-            await new Promise(r => setTimeout(r, 2000));
-            try {
-              const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-              const cs = st?.value?.confirmationStatus;
-              if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
-              if (st?.value?.err) throw new Error('Swap tx failed on-chain.');
-            } catch (e) {
-              if (/failed on-chain/i.test(String(e.message))) throw e;
-            }
-          }
+        ixs.push(feeIx);
+      }
+
+      const latest = await connection.getLatestBlockhash('confirmed');
+      const message = new TransactionMessage({
+        payerKey:        publicKey,
+        recentBlockhash: latest.blockhash,
+        instructions:    ixs,
+      }).compileToV0Message(route.alts);
+      const tx = new VersionedTransaction(message);
+
+      let simLogs = null;
+      try {
+        const sim = await connection.simulateTransaction(tx, {
+          sigVerify: false,
+          replaceRecentBlockhash: true,
+          commitment: 'processed',
+        });
+        simLogs = sim?.value?.logs || null;
+        if (sim?.value?.err) {
+          throw new Error(describeSimLogs(simLogs, JSON.stringify(sim.value.err)));
         }
+      } catch (simErr) {
+        if (simErr instanceof Error && /sim failed/i.test(simErr.message)) throw simErr;
+        console.warn('[hp-pump sim non-fatal]', simErr?.message);
+      }
+
+      const signed = await signTransaction(tx);
+      const raw = signed.serialize();
+
+      let sig;
+      try {
+        sig = await connection.sendRawTransaction(raw, {
+          skipPreflight: true,
+          maxRetries:    5,
+        });
+      } catch (sendErr) {
+        let logs = sendErr?.logs || null;
+        if (!logs && typeof sendErr?.getLogs === 'function') {
+          try { logs = await sendErr.getLogs(connection); } catch {}
+        }
+        throw new Error(describeSimLogs(logs, sendErr?.message));
+      }
+
+      let confirmed = false, onchainErr = null;
+      const startedAt = Date.now();
+      const HARD_CAP_MS = 60_000;
+      while (Date.now() - startedAt < HARD_CAP_MS) {
+        try {
+          const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+          if (st?.value?.err) { onchainErr = st.value.err; break; }
+          const cs = st?.value?.confirmationStatus;
+          if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
+        } catch {}
+        try {
+          const h = await connection.getBlockHeight('confirmed');
+          if (h > latest.lastValidBlockHeight) break;
+        } catch {}
+        try { await connection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }); } catch {}
+        await new Promise(r => setTimeout(r, 2000));
+      }
+      if (onchainErr) {
+        throw new Error('Trade failed on-chain — price likely moved past slippage.');
       }
 
       setSwapResult({ signature: sig, pending: !confirmed });
       if (confirmed) setTimeout(() => onTradeComplete?.(), 2000);
     } catch (e) {
-      console.error('[hp swap]', e);
-      setSwapError(friendlyError(e));
+      console.error('[hp-pump swap]', e);
+      setError(friendlyError(e));
     } finally {
-      setSwapping(false);
+      setConfirming(false);
     }
-  }, [connected, publicKey, signTransaction, build, executeJupiter, executeXstock, executePumpfun, connection, onConnectWallet, onTradeComplete]);
+  }, [
+    connected, publicKey, signTransaction, swapParams,
+    token.mint, connection, onConnectWallet, onTradeComplete,
+  ]);
 
-  // CTA + validity
-  const hasFunds = amtNum > 0 && effInputBalanceUi >= amtNum;
-  const pumpSellHasHolding = !!(isPump && mode === 'sell' &&
-    tokenBalance?.rawAmount && tokenBalance.rawAmount > 0n);
-  const inputOk = isPump && mode === 'sell' ? pumpSellHasHolding : hasFunds;
-  const canSwap  = !!publicKey && !!build && !quoting && !swapping &&
-                   amtNum > 0 && inputMint !== outputMint && inputOk;
+  const setMaxBuy = () => {
+    if (!isBuy || availSol <= 0) return;
+    setAmount(String(Math.floor(availSol * 10000) / 10000));
+  };
 
-  const ctaLabel = swapping
-    ? (isSellSide ? 'Swapping…' : 'Buying…')
-    : !publicKey
+  const confirmDisabled = confirming || !swapParams || !hasFunds || !!error;
+  const ctaLabel = confirming
+    ? (isBuy ? 'Buying…' : 'Selling…')
+    : !connected
       ? 'Connect Wallet'
-      : amtNum <= 0
-        ? 'Enter amount'
-        : quoting && !build
-          ? 'Getting quote…'
-          : !build
-            ? 'No route available'
-            : !inputOk
-              ? (isPump && mode === 'sell' ? `No ${tokenMeta.symbol} to sell` : `Insufficient ${inputSymbol}`)
-              : isPump
-                ? (mode === 'buy' ? `Buy ${tokenMeta.symbol} via pump.fun` : `Sell ${Math.min(100, amtNum).toFixed(0)}% of ${tokenMeta.symbol}`)
-                : isXstock
-                  ? (mode === 'buy' ? `Buy ${tokenMeta.symbol} · ${fmtUsd(amtNum)}` : `Sell ${tokenMeta.symbol} → USDC`)
-                  : isSellSide
-                    ? `Swap ${inputSymbol} → ${outputSymbol}`
-                    : `Buy ${tokenMeta.symbol}`;
-
-  // Visual
-  const meta = tokenMeta;
-
-  const routeBadge = isXstock ? { label: 'xSTOCK', cls: 'hp-route-xstock' }
-                  : isPump    ? { label: 'PUMP.FUN', cls: 'hp-route-pump' }
-                  :             { label: 'JUPITER', cls: 'hp-route-jup' };
-
-  const inputPlaceholder = isXstock && mode === 'buy' ? '0.00'
-                         : isPump && mode === 'sell' ? '0-100'
-                         : '0.00';
-  const inputChipLabel = isPump && mode === 'sell' ? '%' : inputSymbol;
+      : !amount || Number(amount) <= 0
+        ? (isBuy ? 'Enter SOL amount' : 'Enter percentage')
+        : !hasFunds
+          ? (isBuy
+              ? 'Insufficient SOL'
+              : (ownedUiAmount <= 0 ? `No ${meta.symbol} to sell` : 'Need ~0.003 SOL for fees'))
+          : (isBuy ? `Buy ${amount} SOL of ${meta.symbol}`
+                   : `Sell ${Math.min(100, Number(amount)).toFixed(0)}% of ${meta.symbol}`);
 
   return (
     <>
-      <div className="hp-sheet-backdrop" onClick={swapping ? undefined : onClose} />
+      <div className="hp-sheet-backdrop" onClick={confirming ? undefined : onClose} />
       <div className="hp-sheet">
         <div className="hp-grabber" />
 
@@ -1654,146 +2041,133 @@ function TradeDrawer({
             <div className="hp-sheet-title">{meta.symbol}</div>
             <div className="hp-sheet-sub">
               {meta.name} · {token.price > 0 ? fmtUsd(token.price) : 'no price'}
-              <span className={'hp-route-badge ' + routeBadge.cls}>{routeBadge.label}</span>
+              <span className="hp-route-badge hp-route-pump">PUMP.FUN</span>
             </div>
           </div>
-          <button type="button" className="hp-sheet-close" onClick={onClose} disabled={swapping}>×</button>
+          <button type="button" className="hp-sheet-close" onClick={onClose} disabled={confirming}>×</button>
         </div>
 
-        {!isSol && (
-          <div className="hp-side-switch">
-            {['buy', 'sell'].map(s => {
-              const active = mode === s;
-              const buyLabel  = isXstock ? 'Buy with USDC' : 'Buy with SOL';
-              const sellLabel = isXstock ? 'Sell to USDC'  : 'Sell to SOL';
-              return (
-                <button
-                  key={s}
-                  type="button"
-                  className={'hp-side-btn' + (active ? ` hp-active hp-${s}` : '')}
-                  onClick={() => !swapping && setMode(s)}
-                  disabled={swapping}
-                >{s === 'buy' ? buyLabel : sellLabel}</button>
-              );
-            })}
-          </div>
-        )}
+        <div className="hp-side-switch">
+          {['buy', 'sell'].map(s => {
+            const active = mode === s;
+            return (
+              <button
+                key={s}
+                type="button"
+                className={'hp-side-btn' + (active ? ` hp-active hp-${s}` : '')}
+                onClick={() => !confirming && setMode(s)}
+                disabled={confirming}
+              >{s === 'buy' ? 'Buy with SOL' : 'Sell to SOL'}</button>
+            );
+          })}
+        </div>
 
         <div className="hp-sheet-body">
           <div className="hp-amount-label">
-            <span>
-              {isPump && mode === 'sell' ? 'YOU SELL (% OF HOLDING)' :
-               isSellSide ? 'YOU SELL' : 'YOU PAY'}
-            </span>
+            <span>{isBuy ? 'YOU PAY' : 'YOU SELL (% OF HOLDING)'}</span>
             <span className="hp-amount-bal">
-              {isPump && mode === 'sell' ? (
-                <>Holding: <b>{fmtTokenAmt(tokenBalance?.uiAmount || 0)}</b> {tokenMeta.symbol}</>
-              ) : (
-                <>Bal: <b>{fmtTokenAmt(effInputBalanceUi)}</b> {inputSymbol}</>
-              )}
-              {!isPump && mode === 'buy' && effInputBalanceUi > 0 && !isXstock && (
-                <button type="button" className="hp-max-btn"
-                  onClick={() => applySellPercent(100)}>MAX</button>
+              {isBuy
+                ? <>Wallet: <b>{fmtTokenAmt(solBalance || 0)}</b> SOL</>
+                : <>You own: <b>{fmtTokenAmt(ownedUiAmount)}</b> {meta.symbol}</>}
+              {isBuy && availSol > 0 && (
+                <button type="button" className="hp-max-btn" onClick={setMaxBuy}>MAX</button>
               )}
             </span>
           </div>
 
           <div className="hp-amount-wrap">
             <div className="hp-amount-chip">
-              {isPump && mode === 'sell'
-                ? <div className="hp-amount-chip-icon" />
-                : <MintIcon mint={inputMint} meta={tokenMeta} size={22} />}
-              {inputChipLabel}
+              {isBuy
+                ? <MintIcon mint={SOL_MINT} meta={meta} size={22} />
+                : <div className="hp-amount-chip-icon" />}
+              {isBuy ? 'SOL' : '%'}
             </div>
             <input
               className="hp-amount-input"
               type="text"
               inputMode="decimal"
-              placeholder={inputPlaceholder}
+              placeholder={isBuy ? '0.00' : '0-100'}
               value={amount}
               onChange={(e) => {
                 const v = e.target.value.replace(/[^\d.]/g, '');
                 const parts = v.split('.');
                 if (parts.length > 2) return;
-                if (isPump && mode === 'sell' && Number(v) > 100) { setAmount('100'); setSelectedPreset(null); return; }
-                setAmount(v); setSelectedPreset(null);
+                if (!isBuy && Number(v) > 100) { setAmount('100'); return; }
+                setAmount(v);
               }}
-              disabled={swapping}
+              disabled={confirming}
             />
           </div>
-          {usdValue > 0 && !(isPump && mode === 'sell') && (
-            <div className="hp-amount-equiv">≈ {fmtUsd(usdValue)}</div>
+          {!isBuy && amount && (
+            <div className="hp-amount-equiv">
+              {Math.min(100, Math.max(0, Number(amount) || 0)).toFixed(0)}% of holding
+            </div>
           )}
 
-          {(mode === 'buy' && !isSol) ? (
-            <div className="hp-presets">
-              {(isXstock ? buyPresetsUsd : buyPresetsSol).map(v => (
+          <div className="hp-presets">
+            {presets.map(v => {
+              const active = Number(amount) === v;
+              return (
                 <button key={v} type="button"
-                  className={'hp-preset' + (selectedPreset === v ? ' hp-preset-active' : '')}
-                  onClick={() => applyBuyPreset(v)}
-                  disabled={swapping}>
-                  {isXstock ? '$' + v : v + ' SOL'}
+                  className={'hp-preset' + (active ? ' hp-preset-active' : '')}
+                  onClick={() => setAmount(String(v))}
+                  disabled={confirming}>
+                  {isBuy ? `${v} SOL` : `${v}%`}
                 </button>
-              ))}
-            </div>
-          ) : (
-            <div className="hp-presets">
-              {sellPresets.map(p => {
-                const k = 'pct-' + p.pct;
-                const disabled = swapping || (isPump
-                  ? !(tokenBalance?.uiAmount > 0)
-                  : !(effInputBalanceUi > 0));
-                return (
-                  <button key={k} type="button"
-                    className={'hp-preset' + (selectedPreset === k ? ' hp-preset-active' : '')}
-                    onClick={() => isPump ? applyPumpSellPct(p.pct) : applySellPercent(p.pct)}
-                    disabled={disabled}>
-                    {p.label}
-                  </button>
-                );
-              })}
-            </div>
-          )}
+              );
+            })}
+          </div>
 
-          {(amtNum > 0 || quoting) && (
+          {swapParams && Number(amount) > 0 && (
             <div className="hp-receive">
               <div className="hp-receive-head">
-                <span>YOU RECEIVE {isPump ? '(EST.)' : ''}</span>
-                {quoting && <span className="hp-receive-loading">updating…</span>}
+                <span>YOU RECEIVE (EST.)</span>
               </div>
-              <div className={'hp-receive-val' + (outAmountUi != null && outAmountUi > 0 ? '' : ' hp-muted')}>
-                {outAmountUi != null && outAmountUi > 0
-                  ? `${fmtTokenAmt(outAmountUi)} ${outputSymbol}`
-                  : '—'}
+              <div className={'hp-receive-val' + (estReceive ? '' : ' hp-muted')}>
+                {isBuy
+                  ? (estReceive?.tokens > 0 ? `≈ ${fmtTokenAmt(estReceive.tokens)} ${meta.symbol}` : '—')
+                  : (estReceive?.sol > 0   ? `≈ ${fmtTokenAmt(estReceive.sol)} SOL`           : '—')}
               </div>
-              {build && rate && (
-                <div className="hp-receive-meta">
-                  <div className="hp-receive-meta-row">
-                    <span>Rate</span>
-                    <span>1 {inputSymbol} ≈ {fmtTokenAmt(rate)} {outputSymbol}</span>
-                  </div>
-                  <div className="hp-receive-meta-row">
-                    <span>Platform fee</span>
-                    <span>{isXstock ? '5%' : '3%'} · in {isXstock ? 'USDC' : (isPump ? 'SOL' : inputSymbol)}</span>
-                  </div>
-                  <div className="hp-receive-meta-row">
-                    <span>Route</span>
-                    <span>{isXstock ? 'Jupiter · USDC pair' : isPump ? 'pump.fun bonding curve' : 'Jupiter'}</span>
-                  </div>
+              <div className="hp-receive-meta">
+                {isBuy ? (
+                  <>
+                    <div className="hp-receive-meta-row">
+                      <span>To curve</span>
+                      <span>{fmtTokenAmt(Number(swapParams.tradeLamports) / 1e9)} SOL</span>
+                    </div>
+                    <div className="hp-receive-meta-row">
+                      <span>Platform fee (3%)</span>
+                      <span>{fmtTokenAmt(Number(swapParams.feeLamports) / 1e9)} SOL</span>
+                    </div>
+                    <div className="hp-receive-meta-row">
+                      <span>Wallet pays</span>
+                      <span>{fmtTokenAmt(Number(swapParams.totalLamports) / 1e9)} SOL</span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="hp-receive-meta-row">
+                      <span>Selling</span>
+                      <span>{fmtTokenAmt(swapParams.tradeTokensUi)} {meta.symbol}</span>
+                    </div>
+                    <div className="hp-receive-meta-row">
+                      <span>Platform fee (3%)</span>
+                      <span>in SOL (after curve)</span>
+                    </div>
+                  </>
+                )}
+                <div className="hp-receive-meta-row">
+                  <span>Route</span>
+                  <span>pump.fun bonding curve</span>
                 </div>
-              )}
+              </div>
             </div>
           )}
 
-          {quoteError && !swapping && !swapResult && (
-            <div className="hp-sheet-error">{quoteError}</div>
-          )}
-          {swapError && (
-            <div className="hp-sheet-error">{swapError}</div>
-          )}
+          {error && (<div className="hp-sheet-error">{error}</div>)}
           {swapResult && (
             <div className="hp-sheet-success">
-              {swapResult.pending ? 'Submitted but still confirming. ' : 'Swap confirmed. '}
+              {swapResult.pending ? 'Submitted but still confirming. ' : 'Trade confirmed. '}
               <a href={`https://solscan.io/tx/${swapResult.signature}`} target="_blank" rel="noreferrer">
                 View on Solscan
               </a>
@@ -1804,14 +2178,14 @@ function TradeDrawer({
         <div className="hp-cta-wrap">
           <button
             type="button"
-            className={'hp-cta ' + (isSellSide ? 'hp-cta-sell' : 'hp-cta-buy')}
-            onClick={!connected ? onConnectWallet : handleSwap}
-            disabled={connected ? !canSwap : false}
+            className={'hp-cta ' + (isBuy ? 'hp-cta-buy' : 'hp-cta-sell')}
+            onClick={!connected ? onConnectWallet : handleConfirm}
+            disabled={connected ? confirmDisabled : false}
           >
             {ctaLabel}
           </button>
           <div className="hp-cta-foot">
-            Powered by <b>{isPump ? 'pump.fun' : 'Jupiter'}</b> · Non-custodial · Your keys
+            Routed via <b>pump.fun</b> · Your keys, your coins
           </div>
         </div>
       </div>
@@ -1848,7 +2222,6 @@ export default function Holdings({ onConnectWallet }) {
   useHpCSS();
 
   const { isConnected, walletAddress } = useNexusWallet();
-  // Single signing wallet for the whole page; passed down to TradeDrawer.
   const { publicKey, signTransaction, connected } = useWallet();
 
   const [portfolio, setPortfolio]   = useState(null);
@@ -1927,7 +2300,7 @@ export default function Holdings({ onConnectWallet }) {
   const openSell = useCallback((token) => setDrawer({ token, mode: 'sell' }), []);
   const closeDrawer = useCallback(() => setDrawer(null), []);
 
-  // Disconnected
+  // Disconnected screen
   if (!isConnected) {
     return (
       <div className="hp-root">
@@ -1996,14 +2369,15 @@ export default function Holdings({ onConnectWallet }) {
   const tokenCount  = tokens.length + (solBalance > 0 ? 1 : 0);
 
   const solHolding = {
-    mint:     SOL_MINT,
-    meta:     { symbol: 'SOL', name: 'Solana', color: '#B794F6', icon: null, decimals: 9 },
-    price:    solPriceUsd,
-    value:    solValue,
-    uiAmount: solBalance,
+    mint:      SOL_MINT,
+    meta:      { symbol: 'SOL', name: 'Solana', color: '#B794F6', icon: null, decimals: 9 },
+    price:     solPriceUsd,
+    value:     solValue,
+    uiAmount:  solBalance,
     rawAmount: BigInt(portfolio?.solLamports || 0),
-    decimals: 9,
+    decimals:  9,
     isToken2022: false,
+    hasPrice:  solPriceUsd > 0,
   };
 
   const tokenBalanceFor = (mint) => {
@@ -2011,9 +2385,6 @@ export default function Holdings({ onConnectWallet }) {
     return tokens.find(t => t.mint === mint) || null;
   };
 
-  // SEARCH — by symbol, name (case-insensitive) or contract address (mint,
-  // base58 is case-sensitive, so match the raw query exactly or as a prefix,
-  // same anchored pattern the working TokenPicker uses).
   const qRaw = query.trim();
   const q    = qRaw.toLowerCase();
   const matchHolding = (t) => {
@@ -2028,6 +2399,29 @@ export default function Holdings({ onConnectWallet }) {
   const showSol       = matchHolding(solHolding);
   const visibleTokens = tokens.filter(matchHolding);
   const noMatches     = !showSol && visibleTokens.length === 0;
+
+  // Pick the right drawer for the open token.
+  let drawerEl = null;
+  if (drawer) {
+    const isSolRow = drawer.token.mint === SOL_MINT;
+    const route = isSolRow ? 'jupiter' : getTokenRoute(drawer.token);
+    const sharedProps = {
+      token: drawer.token,
+      initialMode: drawer.mode,
+      solBalance,
+      tokenBalance: tokenBalanceFor(drawer.token.mint),
+      solPrice: solPriceUsd,
+      publicKey,
+      signTransaction,
+      connected,
+      onClose: closeDrawer,
+      onConnectWallet,
+      onTradeComplete: () => { handleRefresh(); },
+    };
+    if (route === 'xstock')        drawerEl = <XstockDrawer  {...sharedProps} />;
+    else if (route === 'pumpfun')  drawerEl = <PumpfunDrawer {...sharedProps} />;
+    else                           drawerEl = <JupiterDrawer {...sharedProps} isSol={isSolRow} />;
+  }
 
   return (
     <div className="hp-root">
@@ -2153,21 +2547,7 @@ export default function Holdings({ onConnectWallet }) {
         </div>
       </div>
 
-      {drawer && (
-        <TradeDrawer
-          token={drawer.token}
-          initialMode={drawer.mode}
-          solBalance={solBalance}
-          tokenBalance={tokenBalanceFor(drawer.token.mint)}
-          solPrice={solPriceUsd}
-          publicKey={publicKey}
-          signTransaction={signTransaction}
-          connected={connected}
-          onClose={closeDrawer}
-          onConnectWallet={onConnectWallet}
-          onTradeComplete={() => { handleRefresh(); }}
-        />
-      )}
+      {drawerEl}
     </div>
   );
 }
