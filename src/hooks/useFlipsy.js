@@ -1,13 +1,44 @@
+// src/hooks/useFlipsy.js — pure public + free.
+//
+// READS  → race across multiple public devnet RPCs (Promise.any).
+//          One anchor Program per RPC; .fetch / .all are raced.
+// WRITES → pinned to the official Solana devnet RPC (most reliable
+//          for tx propagation and confirmation on devnet).
+//
+// Honest balance state: `balanceStatus` is 'idle' | 'loading' | 'ok' | 'fail'.
+// The UI shows '…' / 'RPC down' / real number — never silent zero.
+//
+// Price: Coinbase spot endpoint, with a CoinGecko fallback. Both public.
+
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import * as anchor from '@coral-xyz/anchor';
 import { Connection, PublicKey, SystemProgram } from '@solana/web3.js';
 import idl from '../idl/flipsy.json';
 
 const PROGRAM_ID = new PublicKey('71bEAUToad7j8k8As9LwsGWBYTLxVJoP2SBNB3S3RLHs');
-const FLIPSY_RPC = 'https://api.devnet.solana.com';
-const PRICE_URL = 'https://api.coinbase.com/v2/prices/SOL-USD/spot';
-const POLL_PRICE_MS = 2_500;
-const POLL_CHAIN_MS = 5_000;
+
+// === PUBLIC DEVNET RPC POOL — no env vars, no API keys ===============
+// Reads race across all of these; the fastest healthy one wins.
+const DEVNET_RPC_POOL = [
+  'https://api.devnet.solana.com',
+  'https://solana-devnet-rpc.publicnode.com',
+  'https://rpc.ankr.com/solana_devnet',
+  'https://solana-devnet.drpc.org',
+];
+// Writes use the official RPC — devnet's official endpoint is the most
+// reliable for tx broadcast/confirmation.
+const WRITE_RPC = 'https://api.devnet.solana.com';
+
+// Price feeds (public, free, no key).
+const PRICE_URLS = [
+  { url: 'https://api.coinbase.com/v2/prices/SOL-USD/spot',
+    pick: (j) => parseFloat(j?.data?.amount) },
+  { url: 'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
+    pick: (j) => parseFloat(j?.solana?.usd) },
+];
+
+const POLL_PRICE_MS = 5_000;     // gentler — public price APIs rate-limit
+const POLL_CHAIN_MS = 6_000;     // gentler — public RPCs rate-limit
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const PRICE_SCALE = 1e8;
 const DEFAULT_BETTING_DURATION = 900;
@@ -17,6 +48,9 @@ const RECENT_ROUNDS_COUNT = 10;
 
 if (!idl.address) idl.address = PROGRAM_ID.toBase58();
 
+// ============================================================
+// Anchor helpers (unchanged)
+// ============================================================
 const u64Buf = (n) => new anchor.BN(n).toArrayLike(Buffer, 'le', 8);
 const findConfigPda = () =>
   PublicKey.findProgramAddressSync([Buffer.from('config')], PROGRAM_ID)[0];
@@ -94,8 +128,45 @@ function stubRound(epoch, expectedStartTime, bettingDuration, gapDuration) {
   };
 }
 
+// ============================================================
+// RPC race — Promise.any across the public devnet pool.
+// `op(program, connection, url)` runs once per pool entry; whichever
+// resolves first wins. Rejects only when ALL pool entries fail.
+// ============================================================
+function raceAny(label, calls) {
+  return Promise.any(calls).catch((agg) => {
+    console.warn('[flipsy] all RPCs failed for ' + label, agg?.errors?.[0]?.message);
+    throw new Error(label + ': all public RPCs failed');
+  });
+}
+
+// ============================================================
+// Hook
+// ============================================================
 export function useFlipsy(wallet) {
-  const connection = useMemo(() => new Connection(FLIPSY_RPC, 'confirmed'), []);
+  // ---- Read pool: one Connection + Program per RPC -----------------
+  // Memoised once — these stay stable across renders.
+  const readPool = useMemo(() => {
+    const dummyWallet = {
+      publicKey: PROGRAM_ID,
+      signTransaction: async () => { throw new Error('read-only'); },
+      signAllTransactions: async () => { throw new Error('read-only'); },
+    };
+    return DEVNET_RPC_POOL.map((url) => {
+      try {
+        const connection = new Connection(url, 'confirmed');
+        const provider = new anchor.AnchorProvider(
+          connection, dummyWallet,
+          { commitment: 'confirmed', preflightCommitment: 'confirmed' },
+        );
+        const program = new anchor.Program(idl, provider);
+        return { url, connection, program };
+      } catch (e) {
+        console.warn('[flipsy] read pool init failed for', url, e?.message);
+        return null;
+      }
+    }).filter(Boolean);
+  }, []);
 
   const [livePrice, setLivePrice] = useState(0);
   const [liveRound, setLiveRound] = useState(null);
@@ -103,6 +174,7 @@ export function useFlipsy(wallet) {
   const [recentRounds, setRecentRounds] = useState([]);
   const [userBets, setUserBets] = useState({});
   const [balance, setBalance] = useState(0);
+  const [balanceStatus, setBalanceStatus] = useState('idle'); // idle|loading|ok|fail
   const [loading, setLoading] = useState(true);
   const [programConfig, setProgramConfig] = useState(null);
   const [chainError, setChainError] = useState(null);
@@ -113,30 +185,13 @@ export function useFlipsy(wallet) {
     return pk ? pk.toBase58() : null;
   }, [wallet?.publicKey]);
 
-  const readProgram = useMemo(() => {
-    try {
-      const dummyWallet = {
-        publicKey: PROGRAM_ID,
-        signTransaction: async () => { throw new Error('read-only'); },
-        signAllTransactions: async () => { throw new Error('read-only'); },
-      };
-      const provider = new anchor.AnchorProvider(
-        connection, dummyWallet,
-        { commitment: 'confirmed', preflightCommitment: 'confirmed' },
-      );
-      return new anchor.Program(idl, provider);
-    } catch (e) {
-      console.error('[flipsy] readProgram init failed:', e);
-      queueMicrotask(() => setChainError(`IDL load failed: ${e?.message || e}`));
-      return null;
-    }
-  }, [connection]);
-
+  // ---- Write program: pinned to official devnet RPC ----------------
   const writeProgram = useMemo(() => {
     if (!walletPkStr) return null;
     if (typeof wallet?.signTransaction !== 'function') return null;
     try {
       const pk = new PublicKey(walletPkStr);
+      const connection = new Connection(WRITE_RPC, 'confirmed');
       const wrappedWallet = {
         publicKey: pk,
         signTransaction: wallet.signTransaction.bind(wallet),
@@ -152,43 +207,84 @@ export function useFlipsy(wallet) {
       return new anchor.Program(idl, provider);
     } catch (e) {
       console.error('[flipsy] writeProgram init failed:', e);
-      queueMicrotask(() => setChainError(`Wallet init failed: ${e?.message || e}`));
+      queueMicrotask(() => setChainError('Wallet init failed: ' + (e?.message || e)));
       return null;
     }
-  }, [connection, walletPkStr, wallet?.signTransaction]);
+  }, [walletPkStr, wallet?.signTransaction]);
 
+  // ============================================================
+  // Race helpers, built over the read pool
+  // ============================================================
+  const raceFetchAccount = useCallback(async (label, kind, pda) => {
+    if (!readPool.length) throw new Error('No read RPCs available');
+    return raceAny(label, readPool.map(p => p.program.account[kind].fetch(pda)));
+  }, [readPool]);
+
+  const raceGetAccountInfo = useCallback(async (label, pda) => {
+    if (!readPool.length) throw new Error('No read RPCs available');
+    return raceAny(label, readPool.map(p => p.connection.getAccountInfo(pda)));
+  }, [readPool]);
+
+  const raceAllBets = useCallback(async (filters) => {
+    if (!readPool.length) throw new Error('No read RPCs available');
+    return raceAny('bets.all', readPool.map(p => p.program.account.bet.all(filters)));
+  }, [readPool]);
+
+  const raceGetBalance = useCallback(async (pk) => {
+    if (!readPool.length) throw new Error('No read RPCs available');
+    return raceAny('getBalance', readPool.map(p => p.connection.getBalance(pk)));
+  }, [readPool]);
+
+  // ============================================================
+  // Price polling (public, free, with fallback)
+  // ============================================================
   useEffect(() => {
     let cancelled = false;
     async function fetchPrice() {
-      try {
-        const res = await fetch(PRICE_URL);
-        if (!res.ok) return;
-        const json = await res.json();
-        const p = parseFloat(json?.data?.amount);
-        if (!cancelled && Number.isFinite(p) && p > 0) {
-          setLivePrice(p);
-          livePriceRef.current = p;
-        }
-      } catch (_) {}
+      for (const src of PRICE_URLS) {
+        try {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 4000);
+          const res = await fetch(src.url, { signal: ctrl.signal });
+          clearTimeout(t);
+          if (!res.ok) continue;
+          const json = await res.json();
+          const p = src.pick(json);
+          if (!cancelled && Number.isFinite(p) && p > 0) {
+            setLivePrice(p);
+            livePriceRef.current = p;
+            return;
+          }
+        } catch (_) {}
+      }
     }
     fetchPrice();
     const i = setInterval(fetchPrice, POLL_PRICE_MS);
     return () => { cancelled = true; clearInterval(i); };
   }, []);
 
+  // ============================================================
+  // Chain state polling — all reads raced across the public pool
+  // ============================================================
   useEffect(() => {
-    if (!readProgram) { setLoading(false); return; }
+    if (!readPool.length) {
+      setChainError('No public devnet RPCs configured');
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
 
     async function fetchState() {
       try {
         const configPda = findConfigPda();
-        const configInfo = await connection.getAccountInfo(configPda);
+
+        // Probe existence first — racing getAccountInfo across pool.
+        const configInfo = await raceGetAccountInfo('config', configPda);
         if (!configInfo) {
-          throw new Error(`Flipsy config not found at ${configPda.toBase58()}. Program may not be deployed/initialised on this cluster.`);
+          throw new Error('Flipsy config not found at ' + configPda.toBase58() + '. Program may not be deployed/initialised on devnet.');
         }
 
-        const config = await readProgram.account.config.fetch(configPda);
+        const config = await raceFetchAccount('config', 'config', configPda);
         const currentEpoch = bnToNumber(config.currentEpoch);
         const price = livePriceRef.current;
 
@@ -196,22 +292,24 @@ export function useFlipsy(wallet) {
         const gapDuration = bnToNumber(config.gapDuration) || DEFAULT_GAP_DURATION;
         const claimForfeitDelay = bnToNumber(config.claimForfeitDelay) || DEFAULT_CLAIM_FORFEIT_DELAY;
 
+        // Current/live round
         let live = null;
         if (currentEpoch > 0) {
           try {
-            const r = await readProgram.account.round.fetch(findRoundPda(currentEpoch));
+            const r = await raceFetchAccount('round-' + currentEpoch, 'round', findRoundPda(currentEpoch));
             live = mapRound(r, price);
             if (live.outcome !== 'unresolved') live = null;
           } catch (_) {}
         }
 
+        // Upcoming rounds (next 3)
         const upcomingEpochs = [currentEpoch + 1, currentEpoch + 2, currentEpoch + 3];
         const liveCloseTime = live?.closeTime || Math.floor(Date.now() / 1000) + bettingDuration;
         const baseStart = liveCloseTime + gapDuration;
         const upcoming = await Promise.all(
           upcomingEpochs.map(async (e, idx) => {
             try {
-              const r = await readProgram.account.round.fetch(findRoundPda(e));
+              const r = await raceFetchAccount('round-' + e, 'round', findRoundPda(e));
               const m = mapRound(r, price);
               return m.outcome !== 'unresolved' ? null : m;
             } catch (_) {
@@ -223,6 +321,7 @@ export function useFlipsy(wallet) {
 
         if (live) live._claimForfeitDelay = claimForfeitDelay;
 
+        // Recent rounds
         const recentEpochs = [];
         for (let i = 1; i <= RECENT_ROUNDS_COUNT; i++) {
           if (currentEpoch - i > 0) recentEpochs.push(currentEpoch - i);
@@ -231,18 +330,19 @@ export function useFlipsy(wallet) {
         const recents = await Promise.all(
           allRecent.map(async (e) => {
             try {
-              const r = await readProgram.account.round.fetch(findRoundPda(e));
+              const r = await raceFetchAccount('round-' + e, 'round', findRoundPda(e));
               const m = mapRound(r, price);
               return m.outcome === 'unresolved' ? null : m;
             } catch (_) { return null; }
           }),
         );
 
+        // User bets
         const walletPk = toPubkey(wallet?.publicKey);
         let userBetsMap = {};
         if (walletPk) {
           try {
-            const bets = await readProgram.account.bet.all([
+            const bets = await raceAllBets([
               { memcmp: { offset: 8, bytes: walletPk.toBase58() } },
             ]);
             for (const b of bets) {
@@ -259,15 +359,21 @@ export function useFlipsy(wallet) {
               if (!userBetsMap[epoch]) userBetsMap[epoch] = [];
               userBetsMap[epoch].push(betObj);
             }
-          } catch (e) { console.warn('[flipsy] user bets:', e); }
+          } catch (e) { console.warn('[flipsy] user bets:', e?.message); }
         }
 
+        // Wallet balance — independent race so it stays accurate even
+        // when other RPC calls fail intermittently.
         let walletBalanceUsd = 0;
+        let balOk = false;
         if (walletPk) {
           try {
-            const lamports = await connection.getBalance(walletPk);
+            const lamports = await raceGetBalance(walletPk);
             walletBalanceUsd = solToUsd(lamportsToSol(lamports), price);
-          } catch (_) {}
+            balOk = true;
+          } catch (e) { console.warn('[flipsy] wallet balance:', e?.message); }
+        } else {
+          balOk = true; // not connected — '0' is honestly correct
         }
 
         if (cancelled) return;
@@ -276,6 +382,7 @@ export function useFlipsy(wallet) {
         setRecentRounds(recents.filter(Boolean));
         setUserBets(userBetsMap);
         setBalance(walletBalanceUsd);
+        setBalanceStatus(balOk ? 'ok' : 'fail');
         setProgramConfig({
           minBet: bnToNumber(config.minBet),
           maxBet: bnToNumber(config.maxBet),
@@ -288,17 +395,24 @@ export function useFlipsy(wallet) {
         setChainError(null);
       } catch (e) {
         console.error('[flipsy] state fetch error:', e);
-        if (!cancelled) setChainError(e?.message || String(e) || 'Failed to load on-chain state');
+        if (!cancelled) {
+          setChainError(e?.message || String(e) || 'Failed to load on-chain state');
+          setBalanceStatus('fail');
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
     }
 
+    setBalanceStatus(prev => prev === 'idle' ? 'loading' : prev);
     fetchState();
     const i = setInterval(fetchState, POLL_CHAIN_MS);
     return () => { cancelled = true; clearInterval(i); };
-  }, [readProgram, walletPkStr, connection, wallet]);
+  }, [readPool, walletPkStr, raceFetchAccount, raceGetAccountInfo, raceAllBets, raceGetBalance, wallet]);
 
+  // ============================================================
+  // Writes (placeBet / claim) — anchor handles tx via writeProgram
+  // ============================================================
   const placeBet = useCallback(async (epoch, side, usdAmount) => {
     if (!writeProgram) throw new Error('Connect your wallet first');
     const walletPk = toPubkey(wallet?.publicKey);
@@ -345,7 +459,7 @@ export function useFlipsy(wallet) {
     try {
       const r = await writeProgram.account.round.fetch(roundPda);
       resolvedAt = bnToNumber(r.resolvedAt);
-    } catch (e) { console.warn('[flipsy] round fetch:', e); }
+    } catch (e) { console.warn('[flipsy] round fetch:', e?.message); }
 
     const configPda = findConfigPda();
     let superAdmin;
@@ -383,8 +497,8 @@ export function useFlipsy(wallet) {
   }, [writeProgram, wallet, userBets]);
 
   return {
-    livePrice, liveRound, upcomingRounds, recentRounds, userBets, balance,
+    livePrice, liveRound, upcomingRounds, recentRounds, userBets,
+    balance, balanceStatus,
     placeBet, claim, loading, programConfig, chainError,
   };
 }
- 
