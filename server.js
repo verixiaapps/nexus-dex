@@ -38,11 +38,8 @@ const CSP_DIRECTIVES = [
     "'self'",
     'https://api.jup.ag', 'https://lite-api.jup.ag', 'https://quote-api.jup.ag', 'https://token.jup.ag',
     'https://li.quest',
-    // Solana RPC — Alchemy is the canonical endpoint. mainnet-beta kept as
-    // last-resort fallback (server-side via getSolanaRpcUrl() if env var
-    // missing, and client-side via the RPC_POOL tail in each component).
-    'https://*.g.alchemy.com',
-    'https://api.mainnet-beta.solana.com',
+    // Solana RPC — dRPC is the sole endpoint, server- and client-side. No fallbacks.
+    'https://lb.drpc.live',
     'https://explorer-api.walletconnect.com',
     'https://*.walletconnect.com', 'https://*.walletconnect.org',
     'wss://relay.walletconnect.com', 'wss://relay.walletconnect.org',
@@ -87,15 +84,9 @@ const JUPITER_LEGACY_BASE   = (process.env.JUPITER_QUOTE_BASE || 'https://api.ju
 const JUPITER_TOKENS_BASE   = 'https://lite-api.jup.ag/tokens/v2';
 const JUPITER_PRICE_BASE    = 'https://lite-api.jup.ag/price/v3';
 
-// Solana RPC — Alchemy. Set ALCHEMY_SOLANA_RPC in Railway to the full URL
-// (e.g. https://solana-mainnet.g.alchemy.com/v2/<API_KEY>). The legacy env
-// var names REACT_APP_SOLANA_RPC and HELIUS_RPC_URL are still honoured as
-// fallbacks so existing deployments don't break mid-rollout.
-const ALCHEMY_SOLANA_RPC =
-  process.env.ALCHEMY_SOLANA_RPC ||
-  process.env.REACT_APP_SOLANA_RPC ||
-  process.env.HELIUS_RPC_URL ||
-  '';
+// Solana RPC — dRPC. Set DRPC_API_KEY in Railway. No fallbacks anywhere.
+const DRPC_API_KEY = process.env.DRPC_API_KEY || '';
+const DRPC_RPC_URL = DRPC_API_KEY ? `https://lb.drpc.live/solana/${DRPC_API_KEY}` : '';
 
 const LIFI_API     = 'https://li.quest/v1';
 const LIFI_API_KEY = process.env.LIFI_API_KEY || '';
@@ -149,7 +140,7 @@ function scrubSecrets(s) {
   if (s == null) return '';
   return String(s)
     .replace(/api-key=[^&\s"']+/gi,             'api-key=***')
-    .replace(/\/v2\/[A-Za-z0-9_-]+/g,           '/v2/***')       // Alchemy URLs
+    .replace(/\/solana\/[A-Za-z0-9_-]+/g,       '/solana/***')   // dRPC URLs
     .replace(/x-api-key["':\s]+[^&\s"',}]+/gi,  'x-api-key=***')
     .replace(/Bearer\s+[A-Za-z0-9._-]+/gi,      'Bearer ***');
 }
@@ -999,112 +990,48 @@ app.get('/api/lifi/status', async (req, res) => {
 });
 
 /* ========================================================================
- * Solana RPC — Alchemy primary, public endpoints as fallback
+ * Solana RPC — dRPC (single endpoint, no fallbacks)
  * ─────────────────────────────────────────────────────────────────────────
- * RPC_URLS is tried in order on every proxy request. If Alchemy returns
- * non-2xx (e.g. 429 rate-limit) or times out, we fall through to the next.
- * Per-endpoint timeout is short (6s) so a dead primary doesn't stall the
- * whole request — worst case for the full chain is ~24s.
+ * All Solana RPC traffic — server-side proxy routes (/api/solana-rpc,
+ * /api/helius/das) and client-side connections (via /embed/config.js) —
+ * resolves to https://lb.drpc.live/solana/${DRPC_API_KEY}. If the key is
+ * missing, RPC calls return a clear error rather than silently routing
+ * to a public endpoint.
  *
- * Public fallbacks verified working June 17 2026:
- *   • publicnode.com   — Allnodes, free, no API key
- *   • onfinality.io    — OnFinality, free public endpoint (rate-limited)
- *   • mainnet-beta     — Solana Foundation, 40 req/10s per IP (last resort)
- *
- * Intentionally NOT included:
- *   • drpc.org         — currently shows "no active nodes" on their own page
- *   • rpc.ankr.com     — now generally requires an API key
- *
- * DAS-specific methods (getAssetsByOwner, getAsset, searchAssets) are
- * Helius-only and will fail on all of these endpoints. Switch any client
- * code that uses them to standard SPL token account queries
- * (getTokenAccountsByOwner with jsonParsed) instead.
- *
- * getSolanaRpcUrl() returns the primary (Alchemy if set, else mainnet-beta)
- * and is injected into the browser via /embed/config.js. Client-side
- * fallback would require returning the whole array — out of scope here.
+ * getSolanaRpcUrl() returns the dRPC URL and is injected into the browser
+ * via /embed/config.js. NOTE: this exposes the key to anyone who can load
+ * the page (same model as the previous Alchemy setup — domain-scoped key
+ * recommended on the dRPC dashboard).
  * ===================================================================== */
-const RPC_URLS = [
-  ALCHEMY_SOLANA_RPC,
-  'https://solana-rpc.publicnode.com',
-  'https://solana.api.onfinality.io/public',
-  'https://api.mainnet-beta.solana.com',
-].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
-
-const RPC_PER_TRY_TIMEOUT_MS = 6_000;
+const RPC_TIMEOUT_MS = 10_000;
 
 function getSolanaRpcUrl() {
-  return RPC_URLS[0] || 'https://api.mainnet-beta.solana.com';
+  return DRPC_RPC_URL;
 }
 
-// Detect provider rate-limit / quota errors that come back as HTTP 200
-// with a JSON-RPC error envelope. Critical: Alchemy returns
-// {"error":{"code":-32429,"message":"max usage reached"}} with HTTP 200
-// when the monthly CU cap is hit, which the old fallback (which only
-// checked r.ok) treated as success and never fell through.
-//
-// Recognized codes: -32429 (Alchemy quota), -32005 (common rate limit),
-// -32007 (some providers). Also matches the phrases "max usage",
-// "rate limit", "quota", "too many requests", "exceeded".
-//
-// For batch requests, fall through if ANY item is a rate-limit error.
-function isRpcRateLimitedBody(body) {
-  if (!body) return false;
-  const items = Array.isArray(body) ? body : [body];
-  for (const item of items) {
-    const err = item && item.error;
-    if (!err) continue;
-    const code = Number(err.code);
-    const msg  = String(err.message || '').toLowerCase();
-    if (code === -32429 || code === -32005 || code === -32007) return true;
-    if (/max usage|rate limit|quota|too many requests|exceeded/i.test(msg)) return true;
+// Forward an RPC body to dRPC. Returns { status, parsed, raw }.
+// No fallback — if dRPC fails, the caller surfaces the error.
+async function forwardRpc(body) {
+  if (!DRPC_RPC_URL) {
+    const err = new Error('DRPC_API_KEY is not set');
+    err.status = 500;
+    throw err;
   }
-  return false;
-}
-
-// Sequential fallback. Returns { status, parsed, raw } for the first
-// endpoint that responds 2xx with a usable body. Throws if every
-// endpoint fails or returns a rate-limit error. Each try gets its own
-// short timeout so a stuck endpoint can't poison the whole chain.
-async function forwardRpcWithFallback(body) {
-  let lastErr;
-  let lastStatus = 0;
-  for (const url of RPC_URLS) {
-    try {
-      const r = await fetchWithTimeout(
-        url,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) },
-        RPC_PER_TRY_TIMEOUT_MS,
-      );
-      const text = await r.text();
-      if (!r.ok) {
-        lastStatus = r.status;
-        lastErr = new Error('HTTP ' + r.status + ': ' + text.slice(0, 200));
-        continue;
-      }
-      let parsed;
-      try { parsed = JSON.parse(text); } catch {
-        // Non-JSON 2xx — pass through; caller will surface upstream body.
-        return { status: r.status, parsed: null, raw: text };
-      }
-      if (isRpcRateLimitedBody(parsed)) {
-        lastStatus = r.status;
-        const item = Array.isArray(parsed) ? parsed.find(x => x?.error) : parsed;
-        lastErr = new Error('RPC quota/limit: ' + (item?.error?.message || 'rate limited'));
-        continue;
-      }
-      return { status: r.status, parsed, raw: null };
-    } catch (e) {
-      lastErr = e;
-    }
-  }
-  const err = new Error(
-    'All Solana RPC endpoints failed' +
-    (lastStatus ? ' (last status ' + lastStatus + ')' : '') +
-    (lastErr?.message ? ': ' + lastErr.message : '')
+  const r = await fetchWithTimeout(
+    DRPC_RPC_URL,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) },
+    RPC_TIMEOUT_MS,
   );
-  err.lastStatus = lastStatus;
-  throw err;
+  const text = await r.text();
+  if (!r.ok) {
+    const err = new Error('dRPC HTTP ' + r.status + ': ' + text.slice(0, 200));
+    err.status = r.status;
+    throw err;
+  }
+  let parsed;
+  try { parsed = JSON.parse(text); }
+  catch { return { status: r.status, parsed: null, raw: text }; }
+  return { status: r.status, parsed, raw: null };
 }
 
 function sendForwardedRpc(res, result) {
@@ -1114,23 +1041,23 @@ function sendForwardedRpc(res, result) {
 
 app.post('/api/helius/das', async (req, res) => {
   try {
-    const result = await forwardRpcWithFallback(req.body);
+    const result = await forwardRpc(req.body);
     return sendForwardedRpc(res, result);
   } catch (e) {
     if (e.name === 'AbortError') return res.status(504).json({ error: 'Solana RPC (das alias) timed out' });
     logError('solana-rpc-das-alias', e);
-    return res.status(502).json({ error: e.message || 'Unknown error' });
+    return res.status(e.status && e.status >= 400 ? e.status : 502).json({ error: e.message || 'Unknown error' });
   }
 });
 
 app.post('/api/solana-rpc', async (req, res) => {
   try {
-    const result = await forwardRpcWithFallback(req.body);
+    const result = await forwardRpc(req.body);
     return sendForwardedRpc(res, result);
   } catch (e) {
     if (e.name === 'AbortError') return res.status(504).json({ error: 'Solana RPC timed out' });
     logError('solana-rpc', e);
-    return res.status(502).json({ error: e.message || 'Unknown error' });
+    return res.status(e.status && e.status >= 400 ? e.status : 502).json({ error: e.message || 'Unknown error' });
   }
 });
 
@@ -1146,7 +1073,7 @@ app.get('/api/health', (req, res) => {
       jupiter:        Boolean(JUPITER_ENABLED),
       jupiterApiKey:  Boolean(JUPITER_API_KEY),
       jupiterSeoKey:  Boolean(JUPITER_API_KEY_SEO),
-      alchemyRpc:     Boolean(ALCHEMY_SOLANA_RPC),
+      drpcRpc:        Boolean(DRPC_API_KEY),
       lifiApiKey:     Boolean(LIFI_API_KEY),
       chainflip:      true,
     },
@@ -1161,9 +1088,9 @@ app.get('/api/health', (req, res) => {
     lifi: { baseUrl: LIFI_API, keySet: Boolean(LIFI_API_KEY) },
     chainflip: { network: 'mainnet', brokerCommissionBps: 0 },
     solanaRpc: {
-      provider: ALCHEMY_SOLANA_RPC ? 'alchemy' : 'public mainnet-beta',
-      fallbackCount: RPC_URLS.length,
-      perTryTimeoutMs: RPC_PER_TRY_TIMEOUT_MS,
+      provider:  'drpc',
+      keySet:    Boolean(DRPC_API_KEY),
+      timeoutMs: RPC_TIMEOUT_MS,
     },
     time: new Date().toISOString(),
   });
@@ -1781,7 +1708,7 @@ app.all('/api/*', (req, res) => res.status(404).json({ error: 'API route not fou
  * ─────────────────────────────────────────────────────────────────────────
  * The browser reads window.__VERIXIA_CONFIG__.rpc and uses it as the first
  * entry in each component's RPC_POOL — so client-side `new Connection(...)`
- * calls hit Alchemy too. Single source of truth: ALCHEMY_SOLANA_RPC.
+ * calls hit dRPC too. Single source of truth: DRPC_API_KEY.
  * ===================================================================== */
 app.get('/embed/config.js', (req, res) => {
   const cfg = {
@@ -1834,6 +1761,6 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('  Jupiter Price:   ' + JUPITER_PRICE_BASE);
   console.log('  LI.FI:           ' + LIFI_API + (LIFI_API_KEY ? ' (key set)' : ' (no key)'));
   console.log('  Chainflip:       mainnet (SOL → BTC, broker commission disabled)');
-  console.log('  Solana RPC:      ' + (ALCHEMY_SOLANA_RPC ? 'alchemy' : 'public mainnet-beta') + ' (' + RPC_URLS.length + ' endpoint' + (RPC_URLS.length === 1 ? '' : 's') + ' with fallback)');
+  console.log('  Solana RPC:      drpc' + (DRPC_API_KEY ? ' (key set)' : ' (NO KEY — set DRPC_API_KEY)') + ' (no fallback)');
   console.log('  Allowed origins: ' + allowedOrigins.join(', '));
 });
