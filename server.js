@@ -1037,13 +1037,38 @@ function getSolanaRpcUrl() {
   return RPC_URLS[0] || 'https://api.mainnet-beta.solana.com';
 }
 
-// Sequential fallback. Returns the first 2xx fetch Response. Throws if
-// every endpoint fails. Each try gets its own short timeout via
-// fetchWithTimeout so a stuck endpoint can't poison the whole chain.
+// Detect provider rate-limit / quota errors that come back as HTTP 200
+// with a JSON-RPC error envelope. Critical: Alchemy returns
+// {"error":{"code":-32429,"message":"max usage reached"}} with HTTP 200
+// when the monthly CU cap is hit, which the old fallback (which only
+// checked r.ok) treated as success and never fell through.
+//
+// Recognized codes: -32429 (Alchemy quota), -32005 (common rate limit),
+// -32007 (some providers). Also matches the phrases "max usage",
+// "rate limit", "quota", "too many requests", "exceeded".
+//
+// For batch requests, fall through if ANY item is a rate-limit error.
+function isRpcRateLimitedBody(body) {
+  if (!body) return false;
+  const items = Array.isArray(body) ? body : [body];
+  for (const item of items) {
+    const err = item && item.error;
+    if (!err) continue;
+    const code = Number(err.code);
+    const msg  = String(err.message || '').toLowerCase();
+    if (code === -32429 || code === -32005 || code === -32007) return true;
+    if (/max usage|rate limit|quota|too many requests|exceeded/i.test(msg)) return true;
+  }
+  return false;
+}
+
+// Sequential fallback. Returns { status, parsed, raw } for the first
+// endpoint that responds 2xx with a usable body. Throws if every
+// endpoint fails or returns a rate-limit error. Each try gets its own
+// short timeout so a stuck endpoint can't poison the whole chain.
 async function forwardRpcWithFallback(body) {
   let lastErr;
   let lastStatus = 0;
-  let lastBody = '';
   for (const url of RPC_URLS) {
     try {
       const r = await fetchWithTimeout(
@@ -1051,11 +1076,24 @@ async function forwardRpcWithFallback(body) {
         { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) },
         RPC_PER_TRY_TIMEOUT_MS,
       );
-      if (r.ok) return r;
-      lastStatus = r.status;
-      // Keep a tiny body snippet to surface in the final error response.
-      try { lastBody = (await r.text()).slice(0, 200); } catch {}
-      lastErr = new Error('HTTP ' + r.status + (lastBody ? ': ' + lastBody : ''));
+      const text = await r.text();
+      if (!r.ok) {
+        lastStatus = r.status;
+        lastErr = new Error('HTTP ' + r.status + ': ' + text.slice(0, 200));
+        continue;
+      }
+      let parsed;
+      try { parsed = JSON.parse(text); } catch {
+        // Non-JSON 2xx — pass through; caller will surface upstream body.
+        return { status: r.status, parsed: null, raw: text };
+      }
+      if (isRpcRateLimitedBody(parsed)) {
+        lastStatus = r.status;
+        const item = Array.isArray(parsed) ? parsed.find(x => x?.error) : parsed;
+        lastErr = new Error('RPC quota/limit: ' + (item?.error?.message || 'rate limited'));
+        continue;
+      }
+      return { status: r.status, parsed, raw: null };
     } catch (e) {
       lastErr = e;
     }
@@ -1069,10 +1107,15 @@ async function forwardRpcWithFallback(body) {
   throw err;
 }
 
+function sendForwardedRpc(res, result) {
+  if (result.parsed !== null) return res.status(result.status).json(result.parsed);
+  return res.status(result.status).json({ error: 'Upstream returned non-JSON', body: (result.raw || '').slice(0, 500) });
+}
+
 app.post('/api/helius/das', async (req, res) => {
   try {
-    const response = await forwardRpcWithFallback(req.body);
-    return respondJsonOrError(res, response, await safeJson(response));
+    const result = await forwardRpcWithFallback(req.body);
+    return sendForwardedRpc(res, result);
   } catch (e) {
     if (e.name === 'AbortError') return res.status(504).json({ error: 'Solana RPC (das alias) timed out' });
     logError('solana-rpc-das-alias', e);
@@ -1082,8 +1125,8 @@ app.post('/api/helius/das', async (req, res) => {
 
 app.post('/api/solana-rpc', async (req, res) => {
   try {
-    const response = await forwardRpcWithFallback(req.body);
-    return respondJsonOrError(res, response, await safeJson(response));
+    const result = await forwardRpcWithFallback(req.body);
+    return sendForwardedRpc(res, result);
   } catch (e) {
     if (e.name === 'AbortError') return res.status(504).json({ error: 'Solana RPC timed out' });
     logError('solana-rpc', e);
