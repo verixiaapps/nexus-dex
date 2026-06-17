@@ -8,6 +8,7 @@ import CrossChainSwap      from './components/CrossChainSwap.jsx';
 import SolToBtcChainflip   from './components/SolToBtcChainflip.jsx';
 import MemeWonderland      from './components/MemeWonderland.jsx';
 import LaunchRadar         from './components/LaunchRadar.jsx';
+import Ape                 from './components/Ape.jsx';
 import Flipsy              from './components/Flipsy.jsx';
 import GetStarted          from './components/GetStarted.jsx';
 import Holdings            from './components/Holdings.jsx';
@@ -126,6 +127,7 @@ input[type="text"],input[type="number"],input[type="email"],input[type="password
 function EcoStrip({ active, onGo }) {
   const items = [
     { ic: '⇅',  lbl: 'Swap',       tab: 'swap' },
+    { ic: '🚀', lbl: 'Radar',      tab: 'launchradar' },
     { ic: '✨', lbl: 'Wonderland', tab: 'wonderland' },
     { ic: '📈', lbl: 'Markets',    tab: 'markets' },
     { ic: '🎯', lbl: 'Flipsy',     tab: 'flipsy' },
@@ -269,6 +271,7 @@ function HomeBelow({ onSwitchTab }) {
     { tab: 'swap',        icon: '⇅',  name: 'Swap',             desc: '12,000+ Solana tokens, best price via Jupiter.',                 live: '$48M / 24H', grad: 'linear-gradient(135deg,#A0E7FF,#FF8FBE)' },
     { tab: 'wonderland',  icon: '✨', name: 'Wonderland',       desc: 'Discover the meme tokens going up.',                             live: 'TRENDING',   grad: 'linear-gradient(135deg,#B794F6,#FFD46B)' },
     { tab: 'bridge',      icon: '🌉', name: 'Cross-Chain Swap', desc: 'Move any token to Ethereum, Base, Arbitrum & 68 more — ~2 min.', live: '71 CHAINS',  grad: 'linear-gradient(135deg,#A0E7FF,#B794F6)' },
+    { tab: 'launchradar', icon: '🚀', name: 'Radar',            desc: 'New token launches, before they pump.',                          live: 'FRESH',      grad: 'linear-gradient(135deg,#FFD46B,#FFB088)' },
     { tab: 'solbtc',      icon: '₿',  name: 'SOL → Native BTC', desc: 'Swap Solana straight to real Bitcoin on the BTC network.',       live: 'NATIVE BTC', grad: 'linear-gradient(135deg,#FFD46B,#FFB088)' },
     { tab: 'markets',     icon: '📈', name: 'Markets',          desc: 'Tokenized Tesla, Apple, NVIDIA — trade 24/7.',                   live: '18 STOCKS',  grad: 'linear-gradient(135deg,#FF8FBE,#B794F6)' },
   ];
@@ -530,7 +533,7 @@ const PATH_TO_TAB = {
   '/': 'swap', '/swap': 'swap', '/bridge': 'bridge',
   '/sol-btc': 'solbtc', '/btc': 'solbtc', '/bitcoin': 'solbtc',
   '/wonderland': 'wonderland', '/memes': 'wonderland',
-  '/ape': 'launchradar', '/radar': 'launchradar', '/launch-radar': 'launchradar', '/launches': 'launchradar',
+  '/ape': 'ape', '/radar': 'launchradar', '/launch-radar': 'launchradar', '/launches': 'launchradar',
   '/markets': 'markets', '/tokenized': 'markets',
   '/flipsy': 'flipsy', '/predict': 'flipsy',
   '/get-started': 'getstarted', '/wallet': 'getstarted',
@@ -539,7 +542,7 @@ const PATH_TO_TAB = {
 };
 const TAB_TO_PATH = {
   swap: '/swap', bridge: '/bridge', solbtc: '/sol-btc',
-  wonderland: '/wonderland', launchradar: '/ape', markets: '/markets', flipsy: '/flipsy',
+  wonderland: '/wonderland', launchradar: '/radar', ape: '/ape', markets: '/markets', flipsy: '/flipsy',
   getstarted: '/get-started',
   holdings: '/holdings',
 };
@@ -901,10 +904,11 @@ function IconFlipsy()     { return <svg width="18" height="18" viewBox="0 0 24 2
 function IconLaunchRadar() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><path d="M12 3v3"/><path d="M12 18v3"/><path d="M3 12h3"/><path d="M18 12h3"/></svg>; }
 function IconGetStarted() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="7" width="18" height="13" rx="2.5"/><path d="M3 10h18"/><path d="M7 7V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v2"/><circle cx="17" cy="15" r="1.5" fill="currentColor" stroke="none"/></svg>; }
 function IconHoldings()   { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7h18l-2 13H5L3 7z"/><path d="M8 7V5a4 4 0 0 1 8 0v2"/><circle cx="12" cy="13" r="1.5" fill="currentColor" stroke="none"/></svg>; }
+function IconApe()        { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L4 14h6l-1 8 9-12h-6l1-8z"/></svg>; }
 
-const NAV_ICONS = { swap: IconSwap, launchradar: IconLaunchRadar, bridge: IconBridge, wonderland: IconWonderland, markets: IconMarkets, flipsy: IconFlipsy, holdings: IconHoldings, getstarted: IconGetStarted };
+const NAV_ICONS = { swap: IconSwap, launchradar: IconLaunchRadar, ape: IconApe, bridge: IconBridge, wonderland: IconWonderland, markets: IconMarkets, flipsy: IconFlipsy, holdings: IconHoldings, getstarted: IconGetStarted };
 const NAV_TABS = [
-  { id: 'swap', label: 'Swap' }, { id: 'launchradar', label: 'Ape' },
+  { id: 'swap', label: 'Swap' }, { id: 'launchradar', label: 'Radar' }, { id: 'ape', label: 'Ape' },
   { id: 'wonderland', label: 'Wonder' }, { id: 'markets', label: 'Markets' }, { id: 'flipsy', label: 'Flipsy' },
   { id: 'holdings', label: 'Bags' },
   { id: 'getstarted', label: 'Wallet' },
@@ -985,7 +989,7 @@ function AppInner() {
 
   // "Ape" is a private page — only the authorized wallet sees the tab or can open it.
   const canApe  = wallet.walletAddress === APE_ACCESS_WALLET;
-  const navTabs = NAV_TABS.filter(t => t.id !== 'launchradar' || canApe);
+  const navTabs = NAV_TABS.filter(t => t.id !== 'ape' || canApe);
 
   return (
     <div style={{ minHeight: '100dvh', color: C.ink, fontFamily: "'Space Grotesk', sans-serif", overscrollBehavior: 'none', overflowX: 'hidden', width: '100%', position: 'relative' }}>
@@ -1067,8 +1071,9 @@ function AppInner() {
             <HomeBelow onSwitchTab={switchTab} />
           </>
         )}
-        {tab === 'launchradar' && (canApe
-          ? <LaunchRadar onConnectWallet={openWallet} />
+        {tab === 'launchradar' && <LaunchRadar onConnectWallet={openWallet} />}
+        {tab === 'ape' && (canApe
+          ? <Ape onConnectWallet={openWallet} />
           : <ApeLocked connected={wallet.isConnected} onConnectWallet={openWallet} />
         )}
         {tab === 'bridge'      && <><BridgeHero onSwitchTab={switchTab} /><CrossChainSwap onConnectWallet={openWallet} /></>}
