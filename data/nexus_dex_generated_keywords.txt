@@ -60,6 +60,7 @@ bullx vs photon reddit
 bullx vs photon slippage
 bullx vs photon speed
 bullx vs photon which is better
+buy meme coins
 buy meme coins instantly
 buy solana tokens
 chainlink exchange
@@ -189,9 +190,20 @@ lowest fee ton swap
 lowest fee usdc swap
 lowest fee usdt swap
 lowest fee xrp swap
+meme coin alerts
 meme coin bridge
+meme coin discovery
+meme coin exchange
 meme coin exchange no account
+meme coin finder
+meme coin marketplace
+meme coin scanner
 meme coin swap no kyc
+meme coin swaps
+meme coin tracker
+meme coin trading
+meme token exchange
+meme token swaps
 mkr exchange
 move crypto between chains
 multi chain token exchange
@@ -199,6 +211,8 @@ multichain swaps
 multichain trading
 near exchange
 new crypto tokens
+new meme coins
+new solana tokens
 no kyc exchange
 non custodial exchange
 on chain trading
@@ -225,13 +239,18 @@ self custody crypto
 shiba inu exchange
 smart contract trading
 solana blockchain
+solana bridge
+solana cross chain
 solana crypto exchange
+solana crypto platform
 solana crypto trading
 solana defi
+solana defi platform
 solana dex
 solana ecosystem
 solana exchange
 solana liquidity
+solana liquidity pools
 solana meme coin aggregator
 solana meme coin dex
 solana meme coin exchange
@@ -239,10 +258,18 @@ solana meme coin platform
 solana meme coin swap
 solana meme coin trading
 solana meme coins
+solana token exchange
+solana token explorer
+solana token scanner
 solana token swaps
+solana token tracker
 solana token trading
 solana trading
+solana trading platform
 solana wallet swap
+solana web3
+spl token exchange
+spl token swap
 stablecoin liquidity bridge
 swap aggregator
 swap any token to any token
@@ -1370,6 +1397,7 @@ swap without kyc
 token exchange
 token marketplace
 token swaps
+top meme coins
 top solana swaps
 top solana token swaps
 trade altcoins
@@ -1408,6 +1436,7 @@ trade without kyc
 transfer crypto across chains
 trending meme coins
 trending solana memecoins to buy
+trending solana tokens
 tron bridge from solana
 tron network swap
 trustless trading
@@ -1423,6 +1452,7 @@ usdc trading
 usdt exchange
 usdt swap
 usdt trading
+viral meme coins
 viral meme tokens
 wallet based crypto exchange
 wallet based exchange

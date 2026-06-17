@@ -1,38 +1,8 @@
 web3 exchange
 solana swaps
 solana trading
-solana web3
-solana defi platform
-solana crypto platform
-spl token swap
-spl token exchange
-solana token exchange
-solana liquidity pools
-solana bridge
-solana cross chain
-solana token explorer
-solana token scanner
-solana token tracker
-solana trading platform
-meme coin exchange
-meme coin swaps
 trade meme coins
-buy meme coins
-new meme coins
 trending meme coins
-viral meme coins
-top meme coins
-meme token exchange
-meme token swaps
-meme coin trading
-meme coin marketplace
-meme coin discovery
-meme coin scanner
-meme coin tracker
-meme coin alerts
-meme coin finder
-trending solana tokens
-new solana tokens
 hot crypto tokens
 emerging crypto tokens
 low cap crypto tokens
