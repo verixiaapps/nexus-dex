@@ -1,36 +1,6 @@
-smart contract trading
-crypto aggregator
-dex aggregator
-swap aggregator
-crypto marketplace
-digital asset exchange
-token exchange
-token marketplace
 web3 exchange
-blockchain trading
-crypto ecosystem
-defi platform
-crypto platform
-decentralized finance
-crypto assets
-digital assets
-solana dex
-solana exchange
 solana swaps
 solana trading
-solana defi
-solana token swaps
-solana crypto exchange
-solana liquidity
-solana meme coins
-solana token trading
-solana crypto trading
-solana wallet swap
-swap solana
-trade solana
-buy solana tokens
-solana ecosystem
-solana blockchain
 solana web3
 solana defi platform
 solana crypto platform
