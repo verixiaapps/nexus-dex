@@ -125,18 +125,28 @@ crypto exchange without kyc
 crypto freedom
 crypto freedom exchange
 crypto gems
+crypto insights
+crypto intelligence
 crypto interoperability
 crypto launch tracker
 crypto liquidity
 crypto liquidity app
+crypto market scanner
 crypto marketplace
+crypto monitoring
+crypto opportunities
 crypto platform
+crypto research
+crypto risk checker
 crypto routing engine
 crypto scanner
+crypto screener
 crypto staking
 crypto swaps
 crypto tracker
 crypto trading
+crypto trends
+crypto wallet analytics
 crypto wallet swap
 crypto without id
 crypto without sign up
@@ -220,6 +230,7 @@ lowest fee ton swap
 lowest fee usdc swap
 lowest fee usdt swap
 lowest fee xrp swap
+market trends
 meme coin alerts
 meme coin bridge
 meme coin discovery
@@ -250,6 +261,8 @@ new meme coins
 new solana tokens
 no kyc exchange
 non custodial exchange
+on chain analytics
+on chain data
 on chain trading
 open access crypto exchange
 open crypto exchange
@@ -269,10 +282,14 @@ privacy first crypto
 private crypto exchange
 pyth exchange
 render token exchange
+rug check
+rug checker
 secure crypto trading
 self custody crypto
 shiba inu exchange
+smart contract scanner
 smart contract trading
+smart money tracker
 solana blockchain
 solana bridge
 solana cross chain
@@ -1431,12 +1448,22 @@ swap wif to w
 swap wif to wen
 swap without kyc
 token analytics
+token discovery
 token exchange
 token explorer
+token finder
 token launches
+token market data
 token marketplace
+token monitoring
+token opportunities
+token research
+token risk checker
 token scanner
+token screener
 token swaps
+token tracker
+token trends
 top meme coins
 top solana swaps
 top solana token swaps
@@ -1498,10 +1525,12 @@ wallet based crypto exchange
 wallet based exchange
 wallet connect swap
 wallet crypto bridge
+wallet insights
 wallet rejected solana swap transaction
 wallet swap app
 wallet to wallet bridge
 wallet to wallet swap
+wallet tracker
 web3 bridge
 web3 exchange
 web3 finance app
@@ -1509,6 +1538,7 @@ web3 swap
 web3 trading
 web3 trading platform
 whale crypto swap
+whale tracker
 what does price impact mean solana swap
 what does route not found mean solana
 what fee to swap act on solana
