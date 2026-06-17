@@ -385,19 +385,12 @@ const SOL_RESERVE = 0.01;
 const DEFAULT_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
 const DEFAULT_SELL_PRESETS = [25, 50, 100];
 
-// ── BALANCE RPC ──────────────────────────────────────────────────────
-const RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
-const ALCHEMY_RPC =
-  (typeof process !== 'undefined' && process.env && process.env.REACT_APP_ALCHEMY_RPC) || '';
+// ── RPC ──────────────────────────────────────────────────────────────
+// Single dRPC endpoint. No fallbacks.
+const DRPC_API_KEY =
+  (typeof process !== 'undefined' && process.env && process.env.DRPC_API_KEY) || '';
 
-const BAL_RPC_POOL = [
-  ALCHEMY_RPC,
-  'https://solana-rpc.publicnode.com',
-  'https://solana.drpc.org',
-  'https://api.mainnet-beta.solana.com',
-].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
-
-const RPC_URL = BAL_RPC_POOL[0];
+const RPC_URL = 'https://lb.drpc.live/solana/' + DRPC_API_KEY;
 const BAL_COMMITMENT = 'processed';
 
 const _connCache = new Map();
@@ -408,15 +401,9 @@ const getConn = (commitment, url = RPC_URL) => {
   return c;
 };
 
-const balRpcRace = (op) => {
-  const conns = BAL_RPC_POOL.map(u => getConn(BAL_COMMITMENT, u));
-  return Promise.any(conns.map((c, i) =>
-    op(c).catch(e => {
-      if (typeof console !== 'undefined') console.warn('[lr-bal] ' + BAL_RPC_POOL[i] + ':', e?.message);
-      throw e;
-    })
-  )).catch(() => { throw new Error('All balance RPCs failed'); });
-};
+// Single-RPC wrapper. Keeps the same `(op) => Promise` signature so existing
+// call sites like `balRpcRace(c => c.getBalance(...))` work unchanged.
+const balRpcRace = (op) => op(getConn(BAL_COMMITMENT));
 
 const POLL_RECENT  = 5_000;
 const POLL_SOL     = 30_000;
@@ -1912,4 +1899,3 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     </div>
   );
 }
-  
