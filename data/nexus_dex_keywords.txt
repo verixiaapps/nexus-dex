@@ -9,30 +9,4 @@ cross chain defi
 transfer crypto across chains
 cross chain token exchange
 cross chain crypto exchange
-token audit
-token safety checker
-crypto safety checker
-honeypot checker
-honeypot scanner
-token legitimacy checker
-crypto scam checker
-wallet risk checker
-contract risk analysis
-token verification
-project verification
-crypto due diligence
-token due diligence
-crypto fraud detection
-token fraud detection
-crypto security analysis
-blockchain security tools
-token transparency
-project transparency
-crypto trust score
-token trust score
-contract scanner
-security scanner crypto
-token health checker
-crypto project analysis
-token credibility checker
 solana swap
