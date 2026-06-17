@@ -1,5 +1,5 @@
-require('dotenv').config(); 
-  
+require('dotenv').config();
+
 const express   = require('express');
 const cors      = require('cors');
 const path      = require('path');
@@ -38,8 +38,11 @@ const CSP_DIRECTIVES = [
     "'self'",
     'https://api.jup.ag', 'https://lite-api.jup.ag', 'https://quote-api.jup.ag', 'https://token.jup.ag',
     'https://li.quest',
-    'https://api.mainnet-beta.solana.com', 'https://mainnet.helius-rpc.com', 'https://*.helius-rpc.com',
-    'https://*.publicnode.com', 'https://*.drpc.org',
+    // Solana RPC — Alchemy is the canonical endpoint. mainnet-beta kept as
+    // last-resort fallback (server-side via getSolanaRpcUrl() if env var
+    // missing, and client-side via the RPC_POOL tail in each component).
+    'https://*.g.alchemy.com',
+    'https://api.mainnet-beta.solana.com',
     'https://explorer-api.walletconnect.com',
     'https://*.walletconnect.com', 'https://*.walletconnect.org',
     'wss://relay.walletconnect.com', 'wss://relay.walletconnect.org',
@@ -84,8 +87,15 @@ const JUPITER_LEGACY_BASE   = (process.env.JUPITER_QUOTE_BASE || 'https://api.ju
 const JUPITER_TOKENS_BASE   = 'https://lite-api.jup.ag/tokens/v2';
 const JUPITER_PRICE_BASE    = 'https://lite-api.jup.ag/price/v3';
 
-const HELIUS_API_KEY = process.env.HELIUS_API_KEY || process.env.REACT_APP_HELIUS_API_KEY || '';
-const HELIUS_RPC_URL = process.env.HELIUS_RPC_URL || process.env.REACT_APP_SOLANA_RPC     || '';
+// Solana RPC — Alchemy. Set ALCHEMY_SOLANA_RPC in Railway to the full URL
+// (e.g. https://solana-mainnet.g.alchemy.com/v2/<API_KEY>). The legacy env
+// var names REACT_APP_SOLANA_RPC and HELIUS_RPC_URL are still honoured as
+// fallbacks so existing deployments don't break mid-rollout.
+const ALCHEMY_SOLANA_RPC =
+  process.env.ALCHEMY_SOLANA_RPC ||
+  process.env.REACT_APP_SOLANA_RPC ||
+  process.env.HELIUS_RPC_URL ||
+  '';
 
 const LIFI_API     = 'https://li.quest/v1';
 const LIFI_API_KEY = process.env.LIFI_API_KEY || '';
@@ -139,6 +149,7 @@ function scrubSecrets(s) {
   if (s == null) return '';
   return String(s)
     .replace(/api-key=[^&\s"']+/gi,             'api-key=***')
+    .replace(/\/v2\/[A-Za-z0-9_-]+/g,           '/v2/***')       // Alchemy URLs
     .replace(/x-api-key["':\s]+[^&\s"',}]+/gi,  'x-api-key=***')
     .replace(/Bearer\s+[A-Za-z0-9._-]+/gi,      'Bearer ***');
 }
@@ -988,41 +999,95 @@ app.get('/api/lifi/status', async (req, res) => {
 });
 
 /* ========================================================================
- * Helius / Solana RPC
+ * Solana RPC — Alchemy primary, public endpoints as fallback
+ * ─────────────────────────────────────────────────────────────────────────
+ * RPC_URLS is tried in order on every proxy request. If Alchemy returns
+ * non-2xx (e.g. 429 rate-limit) or times out, we fall through to the next.
+ * Per-endpoint timeout is short (6s) so a dead primary doesn't stall the
+ * whole request — worst case for the full chain is ~24s.
+ *
+ * Public fallbacks verified working June 17 2026:
+ *   • publicnode.com   — Allnodes, free, no API key
+ *   • onfinality.io    — OnFinality, free public endpoint (rate-limited)
+ *   • mainnet-beta     — Solana Foundation, 40 req/10s per IP (last resort)
+ *
+ * Intentionally NOT included:
+ *   • drpc.org         — currently shows "no active nodes" on their own page
+ *   • rpc.ankr.com     — now generally requires an API key
+ *
+ * DAS-specific methods (getAssetsByOwner, getAsset, searchAssets) are
+ * Helius-only and will fail on all of these endpoints. Switch any client
+ * code that uses them to standard SPL token account queries
+ * (getTokenAccountsByOwner with jsonParsed) instead.
+ *
+ * getSolanaRpcUrl() returns the primary (Alchemy if set, else mainnet-beta)
+ * and is injected into the browser via /embed/config.js. Client-side
+ * fallback would require returning the whole array — out of scope here.
  * ===================================================================== */
+const RPC_URLS = [
+  ALCHEMY_SOLANA_RPC,
+  'https://solana-rpc.publicnode.com',
+  'https://solana.api.onfinality.io/public',
+  'https://api.mainnet-beta.solana.com',
+].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
+
+const RPC_PER_TRY_TIMEOUT_MS = 6_000;
+
 function getSolanaRpcUrl() {
-  if (HELIUS_RPC_URL) return HELIUS_RPC_URL;
-  if (HELIUS_API_KEY) return 'https://mainnet.helius-rpc.com/?api-key=' + encodeURIComponent(HELIUS_API_KEY);
-  return 'https://api.mainnet-beta.solana.com';
+  return RPC_URLS[0] || 'https://api.mainnet-beta.solana.com';
+}
+
+// Sequential fallback. Returns the first 2xx fetch Response. Throws if
+// every endpoint fails. Each try gets its own short timeout via
+// fetchWithTimeout so a stuck endpoint can't poison the whole chain.
+async function forwardRpcWithFallback(body) {
+  let lastErr;
+  let lastStatus = 0;
+  let lastBody = '';
+  for (const url of RPC_URLS) {
+    try {
+      const r = await fetchWithTimeout(
+        url,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) },
+        RPC_PER_TRY_TIMEOUT_MS,
+      );
+      if (r.ok) return r;
+      lastStatus = r.status;
+      // Keep a tiny body snippet to surface in the final error response.
+      try { lastBody = (await r.text()).slice(0, 200); } catch {}
+      lastErr = new Error('HTTP ' + r.status + (lastBody ? ': ' + lastBody : ''));
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  const err = new Error(
+    'All Solana RPC endpoints failed' +
+    (lastStatus ? ' (last status ' + lastStatus + ')' : '') +
+    (lastErr?.message ? ': ' + lastErr.message : '')
+  );
+  err.lastStatus = lastStatus;
+  throw err;
 }
 
 app.post('/api/helius/das', async (req, res) => {
   try {
-    const response = await fetchWithTimeout(
-      getSolanaRpcUrl(),
-      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req.body || {}) },
-      15_000,
-    );
+    const response = await forwardRpcWithFallback(req.body);
     return respondJsonOrError(res, response, await safeJson(response));
   } catch (e) {
-    if (e.name === 'AbortError') return res.status(504).json({ error: 'Helius DAS timed out' });
-    logError('helius-das', e);
-    return res.status(500).json({ error: e.message || 'Unknown error' });
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'Solana RPC (das alias) timed out' });
+    logError('solana-rpc-das-alias', e);
+    return res.status(502).json({ error: e.message || 'Unknown error' });
   }
 });
 
 app.post('/api/solana-rpc', async (req, res) => {
   try {
-    const response = await fetchWithTimeout(
-      getSolanaRpcUrl(),
-      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req.body || {}) },
-      15_000,
-    );
+    const response = await forwardRpcWithFallback(req.body);
     return respondJsonOrError(res, response, await safeJson(response));
   } catch (e) {
     if (e.name === 'AbortError') return res.status(504).json({ error: 'Solana RPC timed out' });
     logError('solana-rpc', e);
-    return res.status(500).json({ error: e.message || 'Unknown error' });
+    return res.status(502).json({ error: e.message || 'Unknown error' });
   }
 });
 
@@ -1038,7 +1103,7 @@ app.get('/api/health', (req, res) => {
       jupiter:        Boolean(JUPITER_ENABLED),
       jupiterApiKey:  Boolean(JUPITER_API_KEY),
       jupiterSeoKey:  Boolean(JUPITER_API_KEY_SEO),
-      helius:         Boolean(HELIUS_API_KEY || HELIUS_RPC_URL),
+      alchemyRpc:     Boolean(ALCHEMY_SOLANA_RPC),
       lifiApiKey:     Boolean(LIFI_API_KEY),
       chainflip:      true,
     },
@@ -1053,9 +1118,9 @@ app.get('/api/health', (req, res) => {
     lifi: { baseUrl: LIFI_API, keySet: Boolean(LIFI_API_KEY) },
     chainflip: { network: 'mainnet', brokerCommissionBps: 0 },
     solanaRpc: {
-      provider: HELIUS_RPC_URL ? 'helius (custom url)'
-              : HELIUS_API_KEY ? 'helius'
-              : 'public mainnet-beta',
+      provider: ALCHEMY_SOLANA_RPC ? 'alchemy' : 'public mainnet-beta',
+      fallbackCount: RPC_URLS.length,
+      perTryTimeoutMs: RPC_PER_TRY_TIMEOUT_MS,
     },
     time: new Date().toISOString(),
   });
@@ -1670,6 +1735,10 @@ app.all('/api/*', (req, res) => res.status(404).json({ error: 'API route not fou
 
 /* ========================================================================
  * Embed runtime config
+ * ─────────────────────────────────────────────────────────────────────────
+ * The browser reads window.__VERIXIA_CONFIG__.rpc and uses it as the first
+ * entry in each component's RPC_POOL — so client-side `new Connection(...)`
+ * calls hit Alchemy too. Single source of truth: ALCHEMY_SOLANA_RPC.
  * ===================================================================== */
 app.get('/embed/config.js', (req, res) => {
   const cfg = {
@@ -1722,6 +1791,6 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('  Jupiter Price:   ' + JUPITER_PRICE_BASE);
   console.log('  LI.FI:           ' + LIFI_API + (LIFI_API_KEY ? ' (key set)' : ' (no key)'));
   console.log('  Chainflip:       mainnet (SOL → BTC, broker commission disabled)');
-  console.log('  Solana RPC:      ' + (HELIUS_RPC_URL ? 'helius (custom)' : HELIUS_API_KEY ? 'helius' : 'public mainnet-beta'));
+  console.log('  Solana RPC:      ' + (ALCHEMY_SOLANA_RPC ? 'alchemy' : 'public mainnet-beta') + ' (' + RPC_URLS.length + ' endpoint' + (RPC_URLS.length === 1 ? '' : 's') + ' with fallback)');
   console.log('  Allowed origins: ' + allowedOrigins.join(', '));
 });
