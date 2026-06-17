@@ -4,41 +4,11 @@ solana trading
 trade meme coins
 trending meme coins
 cross chain exchange
-cross chain dex
-cross chain crypto swaps
-cross chain token swaps
-cross chain trading
-multichain dex
-multichain exchange
-crypto bridge platform
-bridge crypto
-bridge tokens
-bridge solana
-bridge ethereum
-bridge base
-bridge arbitrum
-bridge avalanche
-bridge bnb chain
-crypto interoperability
-blockchain interoperability
 cross chain liquidity
 cross chain defi
-multichain liquidity
-swap across blockchains
 transfer crypto across chains
-bridge crypto assets
 cross chain token exchange
 cross chain crypto exchange
-cross chain wallet
-cross chain protocol
-cross chain marketplace
-cross chain trading platform
-token scanner
-token explorer
-token analytics
-crypto analytics
-crypto scanner
-crypto tracker
 token tracker
 wallet tracker
 smart money tracker
