@@ -1,28 +1,23 @@
-/** 
+/**
  * NEXUS · SolToBtcChainflip.jsx
  * SOL → Native BTC via Chainflip (single-signature, two-tx atomic flow).
  *
- * Same Wonderland-lite identity as SolToBtc.jsx — cream surface with
- * cool-tuned blobs, blue → violet accent, floating ₿ emblems.
- * Instrument Serif italic headline + numbers, JetBrains Mono labels,
- * Space Grotesk body.
+ * Same Wonderland-lite identity as SolToBtc.jsx.
  *
- * Chainflip flow vs Thor:
- *   - quote   → /api/chainflip/quote?amount=<lamports>     (REGULAR only)
- *   - channel → /api/chainflip/channel  (POST quote+addrs)  (server opens it)
+ * Chainflip flow:
+ *   - quote   → /api/chainflip/quote?amount=<lamports>
+ *   - channel → /api/chainflip/channel  (POST quote+addrs)
  *   - status  → /api/chainflip/status?id=<depositChannelId>
  *
- * The bridge tx is a plain SystemProgram.transfer to the deposit address —
- * no memo, no inbound vault, no rotation worries. Status polling keys off
- * the deposit channel ID, not the Solana signature.
- *
- * Class prefix stays ax-. The CSS block is byte-identical to SolToBtc.jsx
- * so the two pages share a visual language. Only labels/wordmarks change.
+ * RPC: local public-RPC pool with race-fallback. No reliance on the app
+ * ConnectionProvider, so this page survives even if app-level RPC is
+ * misconfigured / paid endpoint missing.
  */
 
-import React, { useState, useEffect, useRef } from 'react';
-import { useWallet, useConnection } from '@solana/wallet-adapter-react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useWallet } from '@solana/wallet-adapter-react';
 import {
+  Connection,
   VersionedTransaction,
   PublicKey,
   SystemProgram,
@@ -140,6 +135,7 @@ const STBTC_CSS = `
 .ax-io-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .ax-io-bal{font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--ink-2);font-weight:500}
 .ax-io-bal-val{color:var(--ink);font-weight:700}
+.ax-io-bal-err{color:var(--red);font-weight:700}
 .ax-io-row{display:flex;align-items:center;gap:10px}
 
 .ax-tok-btn{display:flex;align-items:center;gap:8px;padding:8px 12px;background:#fff;border:1px solid var(--border);border-radius:999px;color:var(--ink);font-family:inherit;font-size:13px;font-weight:700;flex-shrink:0;box-shadow:0 2px 8px rgba(26,27,78,.06)}
@@ -212,14 +208,40 @@ const STBTC_CSS = `
 // CONFIG
 // =====================================================================
 const FEE_WALLET    = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
-const PLATFORM_BPS  = 300;   // 3% — your spread, collected on-chain in SOL
-const MIN_SOL       = 0.2;   // Chainflip floor is higher than Thor's; server enforces the real min
+const PLATFORM_BPS  = 300;
+const MIN_SOL       = 0.2;
 const MAX_SOL       = 50;
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const SATS_PER_BTC     = 1e8;
-const PREVIEW_BTC_ADDR = 'bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq'; // rate-only quote when user hasn't typed an address
-const MAX_RESERVE_LAMPORTS = 10_000_000; // 0.01 SOL held back when user taps MAX
+const MAX_RESERVE_LAMPORTS = 10_000_000;
+
+// PUBLIC FREE RPCs ONLY.
+const RPC_POOL = [
+  'https://solana-rpc.publicnode.com',
+  'https://solana.drpc.org',
+  'https://rpc.ankr.com/solana',
+  'https://api.mainnet-beta.solana.com',
+];
+
+const _connCache = new Map();
+const getConn = (url, commitment) => {
+  const key = url + '|' + commitment;
+  let c = _connCache.get(key);
+  if (!c) { c = new Connection(url, commitment); _connCache.set(key, c); }
+  return c;
+};
+
+// Race all RPCs; rejects only when ALL fail.
+const rpcRace = (label, op, commitment = 'confirmed') => {
+  const conns = RPC_POOL.map(u => getConn(u, commitment));
+  return Promise.any(conns.map((c, i) =>
+    op(c).catch(e => {
+      console.warn(`[rpc] ${label} failed on ${RPC_POOL[i]}:`, e?.message);
+      throw e;
+    })
+  )).catch(() => { throw new Error(`${label}: all RPCs failed`); });
+};
 
 // =====================================================================
 // UTILS
@@ -329,8 +351,6 @@ async function cfStatus(id) {
   } catch { return null; }
 }
 
-// Map Chainflip v2 status `state` to a friendly label + completion flag.
-// Defensive: unknown states fall through to "in flight".
 function deriveStatusLabel(status) {
   if (!status || typeof status !== 'object') return { label: 'Waiting for Chainflip to observe deposit…', done: false };
   const s = String(status.state || '').toUpperCase();
@@ -364,7 +384,10 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
   useStbtcCSS();
 
   const { publicKey, connected, signAllTransactions } = useWallet();
-  const { connection } = useConnection();
+
+  // Local connection from the public RPC pool — independent of app-level
+  // ConnectionProvider so this page works on free RPCs regardless of app config.
+  const connection = useMemo(() => getConn(RPC_POOL[0], 'confirmed'), []);
 
   const [solAmount, setSolAmount] = useState('');
   const [btcAddr,   setBtcAddr]   = useState(() => {
@@ -372,19 +395,23 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
     return saved && isValidBtcAddr(saved) ? saved : '';
   });
   const [btcAddrTouched, setBtcAddrTouched] = useState(false);
-  const [quote,     setQuote]     = useState(null);   // { thor: {...} } shape repurposed: { cf: <Chainflip quote>, grossLamports, platformLamports, swapLamports, isPreview, fetchedAt }
+  const [quote,     setQuote]     = useState(null);
   const [quoting,   setQuoting]   = useState(false);
   const [error,     setError]     = useState('');
   const [submit,    setSubmit]    = useState({ kind: 'idle', message: '' });
   const [btcPrice,  setBtcPrice]  = useState(0);
   const [solPrice,  setSolPrice]  = useState(0);
+
+  // BALANCE — honest state. 'idle' | 'loading' | 'ok' | 'fail'
   const [solBalance, setSolBalance] = useState(null);
+  const [balStatus,  setBalStatus]  = useState('idle');
+
   const [channelId,     setChannelId]     = useState(null);
   const [bridgeStatus,  setBridgeStatus]  = useState(null);
 
   const quoteSeq = useRef(0);
 
-  // Live prices — every 30s.
+  // Live prices.
   useEffect(() => {
     let alive = true;
     const tick = async () => {
@@ -398,30 +425,38 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
     return () => { alive = false; clearInterval(id); };
   }, []);
 
-  // SOL balance.
+  // SOL balance — uses RPC pool race so any one of the four endpoints
+  // working is enough. Resets to 'fail' only when ALL four reject.
+  const refreshBalance = useCallback(async () => {
+    if (!publicKey) {
+      setSolBalance(null);
+      setBalStatus('idle');
+      return;
+    }
+    setBalStatus('loading');
+    try {
+      const lamports = await rpcRace('getBalance', c => c.getBalance(publicKey, 'confirmed'));
+      setSolBalance(lamports);
+      setBalStatus('ok');
+    } catch (e) {
+      console.warn('[sol→btc cf] balance failed', e?.message);
+      setBalStatus('fail');
+    }
+  }, [publicKey]);
+
   useEffect(() => {
-    if (!publicKey || !connection) { setSolBalance(null); return; }
-    let alive = true;
-    const tick = async () => {
-      try {
-        const lamports = await connection.getBalance(publicKey, 'confirmed');
-        if (alive) setSolBalance(lamports);
-      } catch { /* ignore */ }
-    };
-    tick();
-    const id = setInterval(tick, 30_000);
-    return () => { alive = false; clearInterval(id); };
-  }, [publicKey, connection]);
+    refreshBalance();
+    if (!publicKey) return;
+    const id = setInterval(refreshBalance, 30_000);
+    return () => clearInterval(id);
+  }, [publicKey, refreshBalance]);
 
   // Persist BTC address when valid.
   useEffect(() => {
     if (btcAddr && isValidBtcAddr(btcAddr)) ls.set(LS_KEY_BTC, btcAddr);
   }, [btcAddr]);
 
-  // Quote — works without wallet OR without address (preview rate mode).
-  // Chainflip's /api/chainflip/quote doesn't need the dest address, but the
-  // address is still part of channel creation downstream. We mark `isPreview`
-  // until the user has typed a valid BTC address.
+  // Quote.
   useEffect(() => {
     const n = parseFloat(solAmount);
     if (!Number.isFinite(n) || n <= 0)     { setQuote(null); return; }
@@ -459,8 +494,7 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
     return () => clearTimeout(t);
   }, [solAmount, btcAddr]);
 
-  // Status polling — every 6s, by depositChannelId. Stops once done. Hard
-  // stop after 30 min so the timer can't leak if a tab is left open forever.
+  // Status polling.
   useEffect(() => {
     if (!channelId) return;
     let alive = true;
@@ -493,16 +527,13 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
   const addrValid  = isValidBtcAddr(btcAddr);
   const usdEquiv   = solPrice > 0 ? n * solPrice : 0;
   const balanceSol = solBalance != null ? solBalance / LAMPORTS_PER_SOL : null;
+  const balanceKnown = balStatus === 'ok';
 
-  // Chainflip quote returns egressAmount in destination atomic units (sats for BTC).
   const expectedSats   = quote?.cf?.egressAmount ? Number(quote.cf.egressAmount) : 0;
   const expectedBtc    = expectedSats / SATS_PER_BTC;
   const expectedBtcUsd = expectedBtc * btcPrice;
 
-  // Live 1-SOL → BTC rate for the signature card.
   const liveSolToBtc = (solPrice > 0 && btcPrice > 0) ? solPrice / btcPrice : 0;
-
-  // Display slippage (server uses the quote's recommended value).
   const dispSlippage = Number(quote?.cf?.recommendedSlippageTolerancePercent ?? 3);
 
   const handleMax = () => {
@@ -516,17 +547,18 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
 
   const handleSubmit = async () => {
     if (!connected) { onConnectWallet?.(); return; }
-    if (!publicKey || !signAllTransactions || !connection) {
-      setError('Wallet not ready'); return;
-    }
+    if (!publicKey || !signAllTransactions) { setError('Wallet not ready'); return; }
     if (!quote || quote.isPreview) { setError('Enter a valid BTC address'); return; }
     if (!addrValid) { setError('Invalid BTC address'); return; }
 
-    const TX_FEE_RESERVE = 500_000n;
-    const totalNeeded = BigInt(quote.platformLamports) + BigInt(quote.swapLamports) + TX_FEE_RESERVE;
-    if (solBalance != null && BigInt(solBalance) < totalNeeded) {
-      setError('Not enough SOL for swap + tx fees');
-      return;
+    // Only enforce client-side balance check when we actually know it.
+    if (balanceKnown) {
+      const TX_FEE_RESERVE = 500_000n;
+      const totalNeeded = BigInt(quote.platformLamports) + BigInt(quote.swapLamports) + TX_FEE_RESERVE;
+      if (solBalance != null && BigInt(solBalance) < totalNeeded) {
+        setError('Not enough SOL for swap + tx fees');
+        return;
+      }
     }
 
     setError('');
@@ -535,14 +567,8 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
     setSubmit({ kind: 'loading', message: 'Refreshing route…' });
 
     try {
-      // Re-quote with the actual swap amount (97% of input). Stale quotes
-      // can drift before user confirms; this also catches min-amount drift
-      // since Chainflip floors move with BTC fees.
       const freshQuote = await cfQuote({ lamports: quote.swapLamports });
 
-      // Open the deposit channel. Cheap, but does cost a small `channelOpeningFee`
-      // deducted from the deposit — fine. Channel sits unused if user cancels
-      // the wallet prompt; it'll expire on Chainflip's side without harm.
       setSubmit({ kind: 'loading', message: 'Opening deposit channel…' });
       const channel = await cfChannel({
         quote:         freshQuote,
@@ -553,12 +579,15 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
       const owner = publicKey;
 
       setSubmit({ kind: 'loading', message: 'Building transactions…' });
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+      // Use rpcRace for blockhash so any working RPC unblocks us.
+      const { blockhash, lastValidBlockHeight } = await rpcRace(
+        'getLatestBlockhash',
+        c => c.getLatestBlockhash('confirmed'),
+      );
 
       const priorityIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 });
       const cuLimitIx  = ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 });
 
-      // Tx 1 — platform fee in SOL to FEE_WALLET (your wallet).
       const feeMsg = new TransactionMessage({
         payerKey:        owner,
         recentBlockhash: blockhash,
@@ -574,7 +603,6 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
       }).compileToV0Message();
       const feeTx = new VersionedTransaction(feeMsg);
 
-      // Tx 2 — bridge: SOL → Chainflip deposit address. No memo. Plain transfer.
       const bridgeMsg = new TransactionMessage({
         payerKey:        owner,
         recentBlockhash: blockhash,
@@ -594,9 +622,10 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
       const [signedFee, signedBridge] = await signAllTransactions([feeTx, bridgeTx]);
 
       setSubmit({ kind: 'loading', message: 'Sending fee tx…' });
-      const feeSig = await connection.sendRawTransaction(signedFee.serialize(), {
+      const feeSerialized = signedFee.serialize();
+      const feeSig = await rpcRace('sendFee', c => c.sendRawTransaction(feeSerialized, {
         skipPreflight: false, maxRetries: 3,
-      });
+      }));
 
       setSubmit({ kind: 'loading', message: 'Confirming fee…' });
       const feeConfirm = await connection.confirmTransaction(
@@ -606,11 +635,11 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
       if (feeConfirm?.value?.err) throw new Error('Fee tx failed — bridge not sent');
 
       setSubmit({ kind: 'loading', message: 'Sending bridge tx…' });
-      const sig = await connection.sendRawTransaction(signedBridge.serialize(), {
+      const bridgeSerialized = signedBridge.serialize();
+      const sig = await rpcRace('sendBridge', c => c.sendRawTransaction(bridgeSerialized, {
         skipPreflight: false, maxRetries: 3,
-      });
+      }));
 
-      // Chainflip status polls off depositChannelId, not the Solana sig.
       console.log('[sol→btc cf] fee', feeSig, 'bridge', sig, 'channel', channel.depositChannelId);
 
       setChannelId(channel.depositChannelId);
@@ -618,7 +647,7 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
       setSubmit({ kind: 'success', message: `Submitted · ${sig.slice(0, 8)}…` });
 
       setSolAmount(''); setQuote(null);
-      setTimeout(() => setSubmit({ kind: 'idle', message: '' }), 6000);
+      setTimeout(() => { setSubmit({ kind: 'idle', message: '' }); refreshBalance(); }, 6000);
     } catch (e) {
       console.error('[sol→btc cf]', e);
       const msg = e.message || 'Transaction failed';
@@ -630,20 +659,31 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
     }
   };
 
+  // Balance display — honest.
+  const renderBalanceMeta = () => {
+    if (!connected) {
+      return <span className="ax-io-bal">Min <span className="ax-io-bal-val">{MIN_SOL}</span> · Max <span className="ax-io-bal-val">{MAX_SOL}</span></span>;
+    }
+    if (balStatus === 'loading' || balStatus === 'idle') {
+      return <span className="ax-io-bal">Balance: <span className="ax-io-bal-val">…</span></span>;
+    }
+    if (balStatus === 'fail') {
+      return <span className="ax-io-bal">Balance: <span className="ax-io-bal-err">RPC unreachable</span></span>;
+    }
+    return <span className="ax-io-bal">Balance: <span className="ax-io-bal-val">{balanceSol != null ? balanceSol.toFixed(4) : '0'}</span> SOL</span>;
+  };
+
   return (
     <div className="ax-page">
-      {/* Blobs */}
       <div className="ax-blob" style={{ width: 380, height: 380, background: '#A0E7FF', top: -100, right: -120 }}/>
       <div className="ax-blob" style={{ width: 420, height: 420, background: '#B794F6', top: '35%', left: -160, animationDelay: '3s' }}/>
       <div className="ax-blob" style={{ width: 300, height: 300, background: '#FFE8F4', bottom: '10%', right: -80, animationDelay: '6s' }}/>
 
-      {/* Faint ₿ emblems */}
       <div className="ax-emblem" style={{ fontSize: 280, top: -40, left: -60, transform: 'rotate(-12deg)' }}>₿</div>
       <div className="ax-emblem" style={{ fontSize: 180, top: '42%', right: -30, transform: 'rotate(15deg)', animationDelay: '4s' }}>₿</div>
       <div className="ax-emblem" style={{ fontSize: 220, bottom: '8%', left: -40, transform: 'rotate(-8deg)', animationDelay: '8s' }}>₿</div>
 
       <div className="ax-inner">
-        {/* HEADER */}
         <div className="ax-head">
           <div className="ax-brand">
             <div className="ax-brand-dot"/>
@@ -652,14 +692,12 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
           <div className="ax-head-live"><span className="d"/>CHAINFLIP</div>
         </div>
 
-        {/* MINI HERO */}
         <div className="ax-mini-hero">
           <div className="ax-mh-eyebrow">⟁ NO KYC · NO WRAPS</div>
           <h1 className="ax-mh-title">Get native <em>Bitcoin.</em></h1>
           <div className="ax-mh-sub">Real BTC straight to your wallet. Not synthetic.</div>
         </div>
 
-        {/* SIGNATURE — LIVE RATE CARD */}
         <div className="ax-rate-card">
           <div className="ax-rate-top">
             <span className="ax-rate-label">Live Rate</span>
@@ -678,26 +716,17 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
           </div>
         </div>
 
-        {/* KYC PILLS */}
         <div className="ax-kyc">
           <span>No KYC</span><span className="dot"/>
           <span>No Account</span><span className="dot"/>
           <span>No Limits</span>
         </div>
 
-        {/* FORM CARD */}
         <div className="ax-card">
-          {/* SOL input */}
           <div className="ax-io">
             <div className="ax-io-head">
               <span className="ax-io-label">You Send</span>
-              <div className="ax-io-meta">
-                {connected && balanceSol != null ? (
-                  <span className="ax-io-bal">Balance: <span className="ax-io-bal-val">{balanceSol.toFixed(4)}</span> SOL</span>
-                ) : (
-                  <span className="ax-io-bal">Min <span className="ax-io-bal-val">{MIN_SOL}</span> · Max <span className="ax-io-bal-val">{MAX_SOL}</span></span>
-                )}
-              </div>
+              <div className="ax-io-meta">{renderBalanceMeta()}</div>
             </div>
             <div className="ax-io-row">
               <div className="ax-tok-btn">
@@ -712,7 +741,7 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
                 disabled={isBusy}
                 inputMode="decimal"
               />
-              {connected && balanceSol != null && balanceSol >= MIN_SOL && !isBusy && (
+              {connected && balanceSol != null && balanceSol >= MIN_SOL && !isBusy && balStatus === 'ok' && (
                 <button type="button" className="ax-max" onClick={handleMax}>MAX</button>
               )}
             </div>
@@ -721,7 +750,6 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
 
           <div className="ax-flip-wrap"><div className="ax-flip-arrow">↓</div></div>
 
-          {/* BTC output */}
           <div className="ax-io">
             <div className="ax-io-head">
               <span className="ax-io-label">You Receive (Native BTC)</span>
@@ -741,7 +769,6 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
             {expectedBtcUsd > 0 && (<div className="ax-io-usd">≈ {fmtUsd(expectedBtcUsd, 2)}</div>)}
           </div>
 
-          {/* BTC address */}
           <div className="ax-addr-wrap">
             <div className="ax-addr-label">
               <span>Your BTC Address</span>
@@ -773,7 +800,6 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
             </div>
           </div>
 
-          {/* Route summary */}
           {quote && (
             <div className="ax-route">
               <div className="ax-route-row"><span className="k">You send</span><span className="v">{n.toFixed(4)} SOL</span></div>
@@ -787,7 +813,6 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
             </div>
           )}
 
-          {/* Status banners */}
           {isBusy && submit.message && (
             <div className="ax-banner info"><div className="ax-spinner"/><span>{submit.message}</span></div>
           )}
@@ -804,7 +829,6 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
             </div>
           )}
 
-          {/* CTA */}
           {!connected ? (
             <button onClick={() => onConnectWallet?.()} className="ax-cta">Connect Wallet</button>
           ) : (
@@ -825,7 +849,6 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
           <div className="ax-cta-footer">One signature · Two txs · Native BTC via Chainflip</div>
         </div>
 
-        {/* POWERED FOOTER */}
         <div className="ax-powered">
           <span className="ax-powered-label">Powered by</span>
           <span className="ax-powered-name">Chainflip</span>
@@ -836,4 +859,3 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
     </div>
   );
 }
- 
