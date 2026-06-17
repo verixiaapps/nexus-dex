@@ -502,4 +502,3 @@ export function useFlipsy(wallet) {
     placeBet, claim, loading, programConfig, chainError,
   };
 }
- 
