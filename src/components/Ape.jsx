@@ -37,7 +37,7 @@ import {
 
 const LR_CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@600;700;800&display=swap');
-.lr-root{
+.ape-root{
   --bg:#0B0A1A; --bg2:#100E22; --surf:#181534; --surf2:#221E45; --line:rgba(255,255,255,.08); --line2:rgba(255,255,255,.14);
   --amber:#FFB52E; --gold:#FFD46B; --green:#2BE08A; --red:#FF5470; --violet:#9B7BFF; --sky:#56C8FF; --pink:#FF7BC8;
   --ink:#F2F0FF; --ink2:rgba(242,240,255,.6); --ink3:rgba(242,240,255,.34);
@@ -50,228 +50,228 @@ const LR_CSS = `
     var(--bg);
   background-attachment:fixed;
 }
-.lr-root,.lr-root *{box-sizing:border-box}
-@keyframes lrSweep{to{transform:rotate(360deg)}}
-@keyframes lrPulse{0%,100%{opacity:1}50%{opacity:.4}}
-@keyframes lrBob{0%,100%{transform:translateY(0) rotate(-3deg)}50%{transform:translateY(-4px) rotate(3deg)}}
-@keyframes lrPop{0%{opacity:0;transform:scale(.8) translateY(8px)}60%{transform:scale(1.04)}100%{opacity:1;transform:scale(1) translateY(0)}}
-@keyframes lrLand{0%{opacity:0;transform:scale(.6);box-shadow:0 0 0 2px var(--green),0 0 40px rgba(43,224,138,.6)}100%{opacity:1;transform:scale(1)}}
-@keyframes lrSheetIn{from{transform:translateY(100%)}to{transform:translateY(0)}}
-@keyframes lrFade{from{opacity:0}to{opacity:1}}
-@keyframes lrCoin{0%{opacity:1;transform:translate(0,0) scale(1)}100%{opacity:0;transform:translate(var(--cx),-42px) scale(.4)}}
-@keyframes lrSquish{0%{transform:scale(1)}35%{transform:scale(.9,1.08)}70%{transform:scale(1.04,.96)}100%{transform:scale(1)}}
-@keyframes lrSpin{to{transform:rotate(360deg)}}
-@keyframes lrToastIn{from{transform:translateY(16px);opacity:0}to{transform:translateY(0);opacity:1}}
-@keyframes lrConfetti{0%{transform:translate(-50%,-50%) rotate(0);opacity:1}100%{transform:translate(calc(-50% + var(--dx,0)),calc(-50% + var(--dy,400px))) rotate(var(--dr,720deg));opacity:0}}
+.ape-root,.ape-root *{box-sizing:border-box}
+@keyframes apeSweep{to{transform:rotate(360deg)}}
+@keyframes apePulse{0%,100%{opacity:1}50%{opacity:.4}}
+@keyframes apeBob{0%,100%{transform:translateY(0) rotate(-3deg)}50%{transform:translateY(-4px) rotate(3deg)}}
+@keyframes apePop{0%{opacity:0;transform:scale(.8) translateY(8px)}60%{transform:scale(1.04)}100%{opacity:1;transform:scale(1) translateY(0)}}
+@keyframes apeLand{0%{opacity:0;transform:scale(.6);box-shadow:0 0 0 2px var(--green),0 0 40px rgba(43,224,138,.6)}100%{opacity:1;transform:scale(1)}}
+@keyframes apeSheetIn{from{transform:translateY(100%)}to{transform:translateY(0)}}
+@keyframes apeFade{from{opacity:0}to{opacity:1}}
+@keyframes apeCoin{0%{opacity:1;transform:translate(0,0) scale(1)}100%{opacity:0;transform:translate(var(--cx),-42px) scale(.4)}}
+@keyframes apeSquish{0%{transform:scale(1)}35%{transform:scale(.9,1.08)}70%{transform:scale(1.04,.96)}100%{transform:scale(1)}}
+@keyframes apeSpin{to{transform:rotate(360deg)}}
+@keyframes apeToastIn{from{transform:translateY(16px);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes apeConfetti{0%{transform:translate(-50%,-50%) rotate(0);opacity:1}100%{transform:translate(calc(-50% + var(--dx,0)),calc(-50% + var(--dy,400px))) rotate(var(--dr,720deg));opacity:0}}
 
-.lr-app{max-width:560px;margin:0 auto;position:relative;z-index:5}
-@media(min-width:1024px){.lr-app{max-width:1100px}}
+.ape-app{max-width:560px;margin:0 auto;position:relative;z-index:5}
+@media(min-width:1024px){.ape-app{max-width:1100px}}
 
-.lr-top{position:sticky;top:0;z-index:42;display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:rgba(11,10,26,.82);backdrop-filter:blur(18px)}
-.lr-brand{display:flex;align-items:center;gap:9px;cursor:pointer}
-.lr-radar{width:30px;height:30px;border-radius:50%;position:relative;flex-shrink:0;border:1px solid rgba(255,181,46,.35);background:radial-gradient(circle,rgba(255,181,46,.12),transparent 70%);overflow:hidden}
-.lr-radar::before{content:'';position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 0deg,transparent 0 290deg,rgba(255,181,46,.65) 350deg,transparent 360deg);animation:lrSweep 2.8s linear infinite}
-.lr-radar::after{content:'';position:absolute;inset:6px;border-radius:50%;border:1px solid rgba(255,181,46,.25)}
-.lr-bname{font-family:'Space Grotesk';font-weight:700;font-size:15px}
-.lr-bname .sl{opacity:.4;margin:0 2px;font-weight:500}
-.lr-bname .ra{background:linear-gradient(90deg,var(--pink),var(--violet),var(--sky));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
-.lr-wbtn{display:flex;align-items:center;gap:7px;padding:8px 13px;border-radius:999px;cursor:pointer;background:var(--surf);border:1px solid var(--line);color:var(--ink);font-family:'JetBrains Mono';font-size:12px;font-weight:700;position:relative}
-.lr-wbtn:hover{border-color:var(--line2)}
-.lr-wbtn .lr-sol{color:var(--amber)}
-.lr-wdot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 7px var(--green)}
-.lr-wbtn .lr-nudge{position:absolute;top:-3px;right:-3px;width:10px;height:10px;border-radius:50%;background:var(--amber);border:2px solid var(--bg);box-shadow:0 0 6px var(--amber)}
+.ape-top{position:sticky;top:0;z-index:42;display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:rgba(11,10,26,.82);backdrop-filter:blur(18px)}
+.ape-brand{display:flex;align-items:center;gap:9px;cursor:pointer}
+.ape-radar{width:30px;height:30px;border-radius:50%;position:relative;flex-shrink:0;border:1px solid rgba(255,181,46,.35);background:radial-gradient(circle,rgba(255,181,46,.12),transparent 70%);overflow:hidden}
+.ape-radar::before{content:'';position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 0deg,transparent 0 290deg,rgba(255,181,46,.65) 350deg,transparent 360deg);animation:apeSweep 2.8s linear infinite}
+.ape-radar::after{content:'';position:absolute;inset:6px;border-radius:50%;border:1px solid rgba(255,181,46,.25)}
+.ape-bname{font-family:'Space Grotesk';font-weight:700;font-size:15px}
+.ape-bname .sl{opacity:.4;margin:0 2px;font-weight:500}
+.ape-bname .ra{background:linear-gradient(90deg,var(--pink),var(--violet),var(--sky));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.ape-wbtn{display:flex;align-items:center;gap:7px;padding:8px 13px;border-radius:999px;cursor:pointer;background:var(--surf);border:1px solid var(--line);color:var(--ink);font-family:'JetBrains Mono';font-size:12px;font-weight:700;position:relative}
+.ape-wbtn:hover{border-color:var(--line2)}
+.ape-wbtn .ape-sol{color:var(--amber)}
+.ape-wdot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 7px var(--green)}
+.ape-wbtn .ape-nudge{position:absolute;top:-3px;right:-3px;width:10px;height:10px;border-radius:50%;background:var(--amber);border:2px solid var(--bg);box-shadow:0 0 6px var(--amber)}
 
-.lr-qbar{position:sticky;top:54px;z-index:41;display:flex;align-items:center;gap:8px;padding:8px 16px;background:rgba(11,10,26,.9);backdrop-filter:blur(18px);overflow-x:auto;scrollbar-width:none}
-.lr-qbar::-webkit-scrollbar{display:none}
-.lr-qlabel{font-family:'JetBrains Mono';font-size:9px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:var(--ink2);flex-shrink:0;display:flex;align-items:center;gap:5px}
-.lr-qlabel .b{color:var(--amber)}
-.lr-qamt{flex-shrink:0;display:flex;align-items:center;gap:4px;padding:6px 13px;border-radius:999px;background:var(--surf);border:1px solid var(--line);color:var(--ink);font-family:'JetBrains Mono';font-weight:700;font-size:13px;cursor:pointer;transition:.12s}
-.lr-qamt.active{background:linear-gradient(135deg,var(--amber),var(--gold));color:#1a1400;border-color:transparent;box-shadow:0 0 16px rgba(255,181,46,.4)}
-.lr-qamt .lr-sol{opacity:.55;font-size:11px}
-.lr-qedit{flex-shrink:0;width:30px;height:30px;border-radius:50%;background:var(--surf);border:1px solid var(--line);display:grid;place-items:center;cursor:pointer;color:var(--ink2);font-size:12px;font-family:initial}
-.lr-qedit:hover{border-color:var(--amber);color:var(--amber)}
-.lr-qinstant{flex-shrink:0;margin-left:auto;display:flex;align-items:center;gap:6px;font-family:'JetBrains Mono';font-size:9px;font-weight:800;letter-spacing:.5px;color:var(--green);background:rgba(43,224,138,.12);padding:6px 10px;border-radius:999px;white-space:nowrap}
-.lr-qinstant .d{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 7px var(--green);animation:lrPulse 1.3s infinite}
+.ape-qbar{position:sticky;top:54px;z-index:41;display:flex;align-items:center;gap:8px;padding:8px 16px;background:rgba(11,10,26,.9);backdrop-filter:blur(18px);overflow-x:auto;scrollbar-width:none}
+.ape-qbar::-webkit-scrollbar{display:none}
+.ape-qlabel{font-family:'JetBrains Mono';font-size:9px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:var(--ink2);flex-shrink:0;display:flex;align-items:center;gap:5px}
+.ape-qlabel .b{color:var(--amber)}
+.ape-qamt{flex-shrink:0;display:flex;align-items:center;gap:4px;padding:6px 13px;border-radius:999px;background:var(--surf);border:1px solid var(--line);color:var(--ink);font-family:'JetBrains Mono';font-weight:700;font-size:13px;cursor:pointer;transition:.12s}
+.ape-qamt.active{background:linear-gradient(135deg,var(--amber),var(--gold));color:#1a1400;border-color:transparent;box-shadow:0 0 16px rgba(255,181,46,.4)}
+.ape-qamt .ape-sol{opacity:.55;font-size:11px}
+.ape-qedit{flex-shrink:0;width:30px;height:30px;border-radius:50%;background:var(--surf);border:1px solid var(--line);display:grid;place-items:center;cursor:pointer;color:var(--ink2);font-size:12px;font-family:initial}
+.ape-qedit:hover{border-color:var(--amber);color:var(--amber)}
+.ape-qinstant{flex-shrink:0;margin-left:auto;display:flex;align-items:center;gap:6px;font-family:'JetBrains Mono';font-size:9px;font-weight:800;letter-spacing:.5px;color:var(--green);background:rgba(43,224,138,.12);padding:6px 10px;border-radius:999px;white-space:nowrap}
+.ape-qinstant .d{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 7px var(--green);animation:apePulse 1.3s infinite}
 
-.lr-ribbon{display:flex;align-items:center;gap:8px;padding:10px 16px 2px;overflow-x:auto;scrollbar-width:none}
-.lr-ribbon::-webkit-scrollbar{display:none}
-.lr-rlbl{font-family:'JetBrains Mono';font-size:9px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--pink);flex-shrink:0}
-.lr-rchip{flex-shrink:0;display:flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;background:var(--surf);border:1px solid var(--line);font-family:'JetBrains Mono';font-size:11px;font-weight:700;cursor:pointer}
-.lr-rchip .up{color:var(--green);font-weight:800}
-.lr-rchip .dn{color:var(--red);font-weight:800}
+.ape-ribbon{display:flex;align-items:center;gap:8px;padding:10px 16px 2px;overflow-x:auto;scrollbar-width:none}
+.ape-ribbon::-webkit-scrollbar{display:none}
+.ape-rlbl{font-family:'JetBrains Mono';font-size:9px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--pink);flex-shrink:0}
+.ape-rchip{flex-shrink:0;display:flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;background:var(--surf);border:1px solid var(--line);font-family:'JetBrains Mono';font-size:11px;font-weight:700;cursor:pointer}
+.ape-rchip .up{color:var(--green);font-weight:800}
+.ape-rchip .dn{color:var(--red);font-weight:800}
 
-.lr-hero{padding:14px 16px 2px;display:flex;align-items:center;justify-content:space-between;gap:10px}
-.lr-hero h1{font-family:'Space Grotesk';font-weight:700;font-size:21px;margin:0;letter-spacing:-.01em}
-.lr-hero h1 .g{background:linear-gradient(90deg,var(--amber),var(--pink));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
-.lr-meta{font-family:'JetBrains Mono';font-size:10px;font-weight:700;color:var(--ink2);display:flex;align-items:center;gap:6px;flex-shrink:0}
-.lr-meta .live{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:lrPulse 1.3s infinite}
-.lr-meta .live.warn{background:var(--amber);box-shadow:0 0 8px var(--amber)}
+.ape-hero{padding:14px 16px 2px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+.ape-hero h1{font-family:'Space Grotesk';font-weight:700;font-size:21px;margin:0;letter-spacing:-.01em}
+.ape-hero h1 .g{background:linear-gradient(90deg,var(--amber),var(--pink));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.ape-meta{font-family:'JetBrains Mono';font-size:10px;font-weight:700;color:var(--ink2);display:flex;align-items:center;gap:6px;flex-shrink:0}
+.ape-meta .live{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:apePulse 1.3s infinite}
+.ape-meta .live.warn{background:var(--amber);box-shadow:0 0 8px var(--amber)}
 
-.lr-controls{display:flex;gap:6px;padding:10px 16px 2px;overflow-x:auto;scrollbar-width:none}
-.lr-controls::-webkit-scrollbar{display:none}
-.lr-seg{flex-shrink:0;padding:7px 13px;border-radius:999px;background:var(--surf);border:1px solid var(--line);color:var(--ink2);font-family:'Space Grotesk';font-size:11px;font-weight:700;cursor:pointer;transition:.15s}
-.lr-seg.active{background:linear-gradient(135deg,var(--violet),var(--pink));color:#fff;border-color:transparent}
-.lr-seg-div{flex-shrink:0;width:1px;height:22px;background:var(--line);align-self:center;margin:0 3px}
+.ape-controls{display:flex;gap:6px;padding:10px 16px 2px;overflow-x:auto;scrollbar-width:none}
+.ape-controls::-webkit-scrollbar{display:none}
+.ape-seg{flex-shrink:0;padding:7px 13px;border-radius:999px;background:var(--surf);border:1px solid var(--line);color:var(--ink2);font-family:'Space Grotesk';font-size:11px;font-weight:700;cursor:pointer;transition:.15s}
+.ape-seg.active{background:linear-gradient(135deg,var(--violet),var(--pink));color:#fff;border-color:transparent}
+.ape-seg-div{flex-shrink:0;width:1px;height:22px;background:var(--line);align-self:center;margin:0 3px}
 
-.lr-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:11px;padding:12px 16px 0}
-@media(min-width:430px){.lr-grid{grid-template-columns:repeat(3,1fr)}}
-@media(min-width:720px){.lr-grid{grid-template-columns:repeat(4,1fr)}}
-.lr-tile{position:relative;border-radius:20px;background:var(--surf);border:1px solid var(--line);overflow:hidden;animation:lrPop .4s cubic-bezier(.2,1.2,.4,1) backwards;cursor:pointer;transition:border-color .15s,transform .1s}
-.lr-tile:hover{border-color:var(--line2)}
-.lr-tile.new{animation:lrLand .55s cubic-bezier(.2,1,.3,1)}
-.lr-tile:active{transform:scale(.985)}
-.lr-face{position:relative;aspect-ratio:1/1;display:grid;place-items:center;overflow:hidden;background:radial-gradient(circle at 50% 32%,rgba(155,123,255,.28),transparent 70%),linear-gradient(160deg,#2a2350,#181534)}
-.lr-face .lr-img{width:100%;height:100%;object-fit:cover}
-.lr-face .lr-emoji{font-size:46px;animation:lrBob 4s ease-in-out infinite;filter:drop-shadow(0 6px 14px rgba(0,0,0,.4))}
-.lr-agep{position:absolute;top:9px;left:9px;font-family:'JetBrains Mono';font-size:9px;font-weight:800;padding:3px 8px;border-radius:999px;background:rgba(11,10,26,.72);backdrop-filter:blur(6px);color:var(--gold);letter-spacing:.3px}
-.lr-trust{position:absolute;top:7px;right:7px;width:40px;height:40px}
-.lr-trust svg{transform:rotate(-90deg)}
-.lr-trust .tnum{position:absolute;inset:0;display:grid;place-items:center;font-family:'JetBrains Mono';font-weight:800;font-size:13px;padding-bottom:2px}
-.lr-trust .tlbl{position:absolute;left:50%;bottom:-2px;transform:translateX(-50%);font-family:'JetBrains Mono';font-size:6.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase}
-.lr-curve{position:absolute;left:0;right:0;bottom:0;height:4px;background:rgba(0,0,0,.35)}
-.lr-curve i{display:block;height:100%;background:linear-gradient(90deg,var(--amber),var(--gold))}
-.lr-body{padding:10px 11px 11px}
-.lr-symrow{display:flex;align-items:baseline;justify-content:space-between;gap:6px}
-.lr-sym{font-family:'Space Grotesk';font-weight:700;font-size:15px;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.lr-chg{font-family:'JetBrains Mono';font-size:11px;font-weight:800;color:var(--green);flex-shrink:0}
-.lr-chg.down{color:var(--red)}
-.lr-name{font-size:10px;color:var(--ink2);font-weight:500;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.lr-statline{display:flex;align-items:center;gap:6px;margin-top:7px;font-family:'JetBrains Mono';font-size:9.5px;font-weight:700;color:var(--ink2)}
-.lr-statline .price{color:var(--ink);font-weight:800}
-.lr-statline b{color:var(--ink)}
-.lr-ape{width:100%;margin-top:10px;border:none;cursor:pointer;padding:10px 0;border-radius:12px;font-family:'Space Grotesk';font-weight:700;font-size:13px;color:#04210f;background:linear-gradient(135deg,var(--green),#54f0ad);display:flex;align-items:center;justify-content:center;gap:5px;box-shadow:0 5px 16px -7px rgba(43,224,138,.6);transition:.1s;position:relative;overflow:hidden}
-.lr-ape:active{animation:lrSquish .3s}
-.lr-ape:disabled{opacity:.75;cursor:wait}
-.lr-ape.filled{background:linear-gradient(135deg,#1FA968,#2BE08A);color:#fff}
-.lr-ape .b{font-size:12px}
-.lr-coinfx{position:absolute;left:50%;top:50%;font-size:14px;pointer-events:none;animation:lrCoin .7s ease forwards}
-.lr-sells{display:flex;gap:5px;margin-top:7px}
-.lr-sellbtn{flex:1;border:1px solid rgba(255,84,112,.4);background:rgba(255,84,112,.08);color:var(--red);cursor:pointer;padding:7px 0;border-radius:9px;font-family:'JetBrains Mono';font-weight:800;font-size:10px}
-.lr-sellbtn:active{transform:scale(.95)}
-.lr-sellbtn:disabled{opacity:.6;cursor:wait}
-.lr-owned{display:flex;align-items:center;gap:6px;font-family:'JetBrains Mono';font-size:9px;color:var(--ink2);margin-top:8px;font-weight:700;padding:5px 8px;background:rgba(43,224,138,.07);border-radius:9px}
-.lr-owned b{color:var(--green)}
-.lr-spinner{width:13px;height:13px;border-radius:50%;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;animation:lrSpin .7s linear infinite;display:inline-block}
+.ape-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:11px;padding:12px 16px 0}
+@media(min-width:430px){.ape-grid{grid-template-columns:repeat(3,1fr)}}
+@media(min-width:720px){.ape-grid{grid-template-columns:repeat(4,1fr)}}
+.ape-tile{position:relative;border-radius:20px;background:var(--surf);border:1px solid var(--line);overflow:hidden;animation:apePop .4s cubic-bezier(.2,1.2,.4,1) backwards;cursor:pointer;transition:border-color .15s,transform .1s}
+.ape-tile:hover{border-color:var(--line2)}
+.ape-tile.new{animation:apeLand .55s cubic-bezier(.2,1,.3,1)}
+.ape-tile:active{transform:scale(.985)}
+.ape-face{position:relative;aspect-ratio:1/1;display:grid;place-items:center;overflow:hidden;background:radial-gradient(circle at 50% 32%,rgba(155,123,255,.28),transparent 70%),linear-gradient(160deg,#2a2350,#181534)}
+.ape-face .ape-img{width:100%;height:100%;object-fit:cover}
+.ape-face .ape-emoji{font-size:46px;animation:apeBob 4s ease-in-out infinite;filter:drop-shadow(0 6px 14px rgba(0,0,0,.4))}
+.ape-agep{position:absolute;top:9px;left:9px;font-family:'JetBrains Mono';font-size:9px;font-weight:800;padding:3px 8px;border-radius:999px;background:rgba(11,10,26,.72);backdrop-filter:blur(6px);color:var(--gold);letter-spacing:.3px}
+.ape-trust{position:absolute;top:7px;right:7px;width:40px;height:40px}
+.ape-trust svg{transform:rotate(-90deg)}
+.ape-trust .tnum{position:absolute;inset:0;display:grid;place-items:center;font-family:'JetBrains Mono';font-weight:800;font-size:13px;padding-bottom:2px}
+.ape-trust .tlbl{position:absolute;left:50%;bottom:-2px;transform:translateX(-50%);font-family:'JetBrains Mono';font-size:6.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase}
+.ape-curve{position:absolute;left:0;right:0;bottom:0;height:4px;background:rgba(0,0,0,.35)}
+.ape-curve i{display:block;height:100%;background:linear-gradient(90deg,var(--amber),var(--gold))}
+.ape-body{padding:10px 11px 11px}
+.ape-symrow{display:flex;align-items:baseline;justify-content:space-between;gap:6px}
+.ape-sym{font-family:'Space Grotesk';font-weight:700;font-size:15px;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ape-chg{font-family:'JetBrains Mono';font-size:11px;font-weight:800;color:var(--green);flex-shrink:0}
+.ape-chg.down{color:var(--red)}
+.ape-name{font-size:10px;color:var(--ink2);font-weight:500;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ape-statline{display:flex;align-items:center;gap:6px;margin-top:7px;font-family:'JetBrains Mono';font-size:9.5px;font-weight:700;color:var(--ink2)}
+.ape-statline .price{color:var(--ink);font-weight:800}
+.ape-statline b{color:var(--ink)}
+.ape-ape{width:100%;margin-top:10px;border:none;cursor:pointer;padding:10px 0;border-radius:12px;font-family:'Space Grotesk';font-weight:700;font-size:13px;color:#04210f;background:linear-gradient(135deg,var(--green),#54f0ad);display:flex;align-items:center;justify-content:center;gap:5px;box-shadow:0 5px 16px -7px rgba(43,224,138,.6);transition:.1s;position:relative;overflow:hidden}
+.ape-ape:active{animation:apeSquish .3s}
+.ape-ape:disabled{opacity:.75;cursor:wait}
+.ape-ape.filled{background:linear-gradient(135deg,#1FA968,#2BE08A);color:#fff}
+.ape-ape .b{font-size:12px}
+.ape-coinfx{position:absolute;left:50%;top:50%;font-size:14px;pointer-events:none;animation:apeCoin .7s ease forwards}
+.ape-sells{display:flex;gap:5px;margin-top:7px}
+.ape-sellbtn{flex:1;border:1px solid rgba(255,84,112,.4);background:rgba(255,84,112,.08);color:var(--red);cursor:pointer;padding:7px 0;border-radius:9px;font-family:'JetBrains Mono';font-weight:800;font-size:10px}
+.ape-sellbtn:active{transform:scale(.95)}
+.ape-sellbtn:disabled{opacity:.6;cursor:wait}
+.ape-owned{display:flex;align-items:center;gap:6px;font-family:'JetBrains Mono';font-size:9px;color:var(--ink2);margin-top:8px;font-weight:700;padding:5px 8px;background:rgba(43,224,138,.07);border-radius:9px}
+.ape-owned b{color:var(--green)}
+.ape-spinner{width:13px;height:13px;border-radius:50%;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;animation:apeSpin .7s linear infinite;display:inline-block}
 
-.lr-empty{grid-column:1/-1;text-align:center;padding:48px 24px;color:var(--ink2);font-size:14px}
-.lr-empty .e{font-size:46px;display:block;margin-bottom:12px;opacity:.6}
-.lr-empty b{color:var(--ink);font-weight:700}
-.lr-empty .sub{font-size:12px;margin-top:6px;color:var(--ink3)}
-.lr-empty .err{margin-top:10px;font-family:'JetBrains Mono';font-size:10px;color:var(--red);background:rgba(255,84,112,.08);padding:7px 12px;border-radius:10px;display:inline-block}
+.ape-empty{grid-column:1/-1;text-align:center;padding:48px 24px;color:var(--ink2);font-size:14px}
+.ape-empty .e{font-size:46px;display:block;margin-bottom:12px;opacity:.6}
+.ape-empty b{color:var(--ink);font-weight:700}
+.ape-empty .sub{font-size:12px;margin-top:6px;color:var(--ink3)}
+.ape-empty .err{margin-top:10px;font-family:'JetBrains Mono';font-size:10px;color:var(--red);background:rgba(255,84,112,.08);padding:7px 12px;border-radius:10px;display:inline-block}
 
-.lr-mascot{position:fixed;right:14px;bottom:16px;z-index:60;width:52px;height:52px;border-radius:50%;background:linear-gradient(150deg,var(--violet),var(--pink));display:grid;place-items:center;font-size:27px;cursor:pointer;box-shadow:0 10px 30px -8px rgba(155,123,255,.7);border:1.5px solid rgba(255,255,255,.2)}
-.lr-mascot .e{animation:lrBob 3s ease-in-out infinite}
-.lr-mbubble{position:fixed;right:14px;bottom:76px;z-index:60;max-width:210px;padding:9px 13px;border-radius:14px 14px 4px 14px;background:var(--surf2);border:1px solid var(--line);font-size:11.5px;font-weight:600;color:var(--ink);box-shadow:0 10px 30px rgba(0,0,0,.4);animation:lrPop .3s ease}
+.ape-mascot{position:fixed;right:14px;bottom:16px;z-index:60;width:52px;height:52px;border-radius:50%;background:linear-gradient(150deg,var(--violet),var(--pink));display:grid;place-items:center;font-size:27px;cursor:pointer;box-shadow:0 10px 30px -8px rgba(155,123,255,.7);border:1.5px solid rgba(255,255,255,.2)}
+.ape-mascot .e{animation:apeBob 3s ease-in-out infinite}
+.ape-mbubble{position:fixed;right:14px;bottom:76px;z-index:60;max-width:210px;padding:9px 13px;border-radius:14px 14px 4px 14px;background:var(--surf2);border:1px solid var(--line);font-size:11.5px;font-weight:600;color:var(--ink);box-shadow:0 10px 30px rgba(0,0,0,.4);animation:apePop .3s ease}
 
-.lr-overlay{position:fixed;inset:0;background:rgba(4,4,12,.66);backdrop-filter:blur(8px);z-index:1000;display:flex;align-items:flex-end;justify-content:center;animation:lrFade .2s}
-.lr-overlay.center{align-items:center;padding:18px}
-.lr-sheet{width:100%;max-width:520px;background:var(--bg2);border:1px solid var(--line);border-radius:22px 22px 0 0;box-shadow:0 -20px 60px rgba(0,0,0,.7);animation:lrSheetIn .3s cubic-bezier(.2,1.2,.4,1);max-height:92dvh;overflow-y:auto}
-.lr-sheet.mini{border-radius:22px;animation:lrPop .3s ease;max-width:430px}
-.lr-x{position:absolute;top:14px;right:14px;background:var(--surf);border:1px solid var(--line);border-radius:50%;width:32px;height:32px;display:grid;place-items:center;cursor:pointer;font-size:16px;color:var(--ink2);z-index:2;font-family:initial}
-.lr-shead{padding:22px 20px 4px;position:relative}
-.lr-stitle{font-family:'Space Grotesk';font-weight:700;font-size:21px;margin:0;display:flex;align-items:center;gap:9px}
-.lr-ssub{font-family:'JetBrains Mono';font-size:10px;color:var(--ink2);margin-top:5px;font-weight:600;letter-spacing:.3px}
-.lr-sbody{padding:14px 20px 22px}
+.ape-overlay{position:fixed;inset:0;background:rgba(4,4,12,.66);backdrop-filter:blur(8px);z-index:1000;display:flex;align-items:flex-end;justify-content:center;animation:apeFade .2s}
+.ape-overlay.center{align-items:center;padding:18px}
+.ape-sheet{width:100%;max-width:520px;background:var(--bg2);border:1px solid var(--line);border-radius:22px 22px 0 0;box-shadow:0 -20px 60px rgba(0,0,0,.7);animation:apeSheetIn .3s cubic-bezier(.2,1.2,.4,1);max-height:92dvh;overflow-y:auto}
+.ape-sheet.mini{border-radius:22px;animation:apePop .3s ease;max-width:430px}
+.ape-x{position:absolute;top:14px;right:14px;background:var(--surf);border:1px solid var(--line);border-radius:50%;width:32px;height:32px;display:grid;place-items:center;cursor:pointer;font-size:16px;color:var(--ink2);z-index:2;font-family:initial}
+.ape-shead{padding:22px 20px 4px;position:relative}
+.ape-stitle{font-family:'Space Grotesk';font-weight:700;font-size:21px;margin:0;display:flex;align-items:center;gap:9px}
+.ape-ssub{font-family:'JetBrains Mono';font-size:10px;color:var(--ink2);margin-top:5px;font-weight:600;letter-spacing:.3px}
+.ape-sbody{padding:14px 20px 22px}
 
-.lr-dhead{display:flex;align-items:center;gap:13px;padding:20px 20px 8px;position:relative}
-.lr-dav{width:60px;height:60px;border-radius:18px;display:grid;place-items:center;font-size:30px;flex-shrink:0;overflow:hidden;background:radial-gradient(circle at 50% 35%,rgba(155,123,255,.3),transparent 70%),linear-gradient(160deg,#2a2350,#181534)}
-.lr-dav .lr-img{width:100%;height:100%;object-fit:cover}
-.lr-dsym{font-family:'Space Grotesk';font-weight:700;font-size:23px;line-height:1}
-.lr-dsub{font-family:'JetBrains Mono';font-size:11px;color:var(--ink2);font-weight:600;margin-top:5px}
-.lr-tcard{display:flex;align-items:center;gap:13px;margin:4px 20px 0;background:rgba(43,224,138,.08);border:1px solid rgba(43,224,138,.25);border-radius:16px;padding:13px 15px}
-.lr-tcard.amber{background:rgba(255,181,46,.08);border-color:rgba(255,181,46,.28)}
-.lr-tcard.red{background:rgba(255,84,112,.08);border-color:rgba(255,84,112,.28)}
-.lr-tcnum{font-family:'Space Grotesk';font-weight:700;font-size:30px;line-height:1}
-.lr-tcv{font-weight:700;font-size:14px}
-.lr-tcs{font-family:'JetBrains Mono';font-size:9.5px;color:var(--ink2);font-weight:600;margin-top:3px;line-height:1.4}
-.lr-checks{display:flex;flex-wrap:wrap;gap:7px;padding:12px 20px 0}
-.lr-chk{font-family:'JetBrains Mono';font-size:9.5px;font-weight:700;padding:4px 10px;border-radius:999px;display:inline-flex;gap:4px}
-.lr-chk.ok{background:rgba(43,224,138,.12);color:var(--green)}.lr-chk.cau{background:rgba(255,181,46,.12);color:var(--amber)}.lr-chk.bad{background:rgba(255,84,112,.12);color:var(--red)}
-.lr-dyor{font-family:'JetBrains Mono';font-size:9px;color:var(--ink3);padding:8px 20px 0;font-weight:600;line-height:1.5}
-.lr-modetabs{display:grid;grid-template-columns:1fr 1fr;margin:14px 20px 14px;background:var(--surf);border-radius:13px;padding:4px;position:relative}
-.lr-mind{position:absolute;top:4px;bottom:4px;width:calc(50% - 4px);border-radius:10px;z-index:1;background:linear-gradient(135deg,var(--green),#54f0ad);transition:transform .3s cubic-bezier(.2,1.3,.4,1),background .25s}
-.lr-modetabs.sell .lr-mind{transform:translateX(100%);background:linear-gradient(135deg,var(--red),#ff86a0)}
-.lr-mtab{padding:10px 0;text-align:center;font-family:'Space Grotesk';font-weight:700;font-size:12px;letter-spacing:.6px;color:var(--ink2);border-radius:10px;cursor:pointer;background:none;border:none;position:relative;z-index:2}
-.lr-mtab.active{color:#04210f}.lr-modetabs.sell .lr-mtab.active{color:#2a0008}
-.lr-row{background:var(--surf);border:1px solid var(--line);border-radius:16px;padding:14px;margin:0 20px}
-.lr-rowtop{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px}
-.lr-rlabel{font-family:'JetBrains Mono';font-size:9px;color:var(--ink2);font-weight:800;letter-spacing:1px;text-transform:uppercase}
-.lr-rbal{font-family:'JetBrains Mono';font-size:10px;color:var(--ink2);font-weight:700;display:flex;align-items:center;gap:6px}
-.lr-rbal b{color:var(--ink)}
-.lr-max{background:rgba(155,123,255,.2);border:1px solid rgba(155,123,255,.4);color:var(--violet);padding:3px 8px;border-radius:7px;font-family:'JetBrains Mono';font-size:9px;font-weight:800;cursor:pointer}
-.lr-rmid{display:flex;align-items:center;gap:10px}
-.lr-chip{display:flex;align-items:center;gap:6px;padding:8px 12px;background:var(--surf2);border-radius:999px;flex-shrink:0;font-weight:700;font-size:13px;font-family:'Space Grotesk'}
-.lr-chiplogo{width:22px;height:22px;border-radius:50%;background:var(--surf);display:grid;place-items:center;font-size:13px;overflow:hidden}
-.lr-chiplogo .lr-img{width:100%;height:100%;object-fit:cover;border-radius:50%}
-.lr-amt{flex:1;background:transparent;border:none;outline:none;color:var(--ink);font-family:'Space Grotesk';font-size:26px;text-align:right;font-weight:600;width:100%;min-width:0}
-.lr-amt::placeholder{color:var(--ink3)}
-.lr-presets{display:flex;gap:6px;margin:10px 20px 0;overflow-x:auto;scrollbar-width:none}.lr-presets::-webkit-scrollbar{display:none}
-.lr-pchip{flex-shrink:0;padding:7px 13px;border-radius:999px;background:var(--surf);border:1px solid var(--line);color:var(--ink);font-family:'JetBrains Mono';font-weight:700;font-size:11px;cursor:pointer}
-.lr-pchip.active{background:var(--green);color:#04210f;border-color:transparent}
-.lr-details{margin:12px 20px 0;padding:11px 15px;background:var(--surf);border-radius:14px;font-family:'JetBrains Mono';font-size:11px}
-.lr-drow{display:flex;justify-content:space-between;padding:3px 0;font-weight:700;gap:8px}
-.lr-drow>span:first-child{color:var(--ink2);font-weight:500}
-.lr-dval{color:var(--ink);font-weight:700;text-align:right}.lr-dval.good{color:var(--green)}
-.lr-banner{margin:12px 20px 0;padding:11px 13px;border-radius:12px;font-size:12px;font-weight:600;border:1px solid rgba(255,84,112,.35);background:rgba(255,84,112,.08);color:var(--red)}
-.lr-confirm{width:calc(100% - 40px);margin:14px 20px 0;padding:16px 0;border:none;border-radius:14px;font-family:'Space Grotesk';font-size:14px;font-weight:700;cursor:pointer;color:#04210f;background:linear-gradient(135deg,var(--green),#54f0ad)}
-.lr-confirm.sell{background:linear-gradient(135deg,var(--red),#ff86a0);color:#2a0008}
-.lr-confirm:disabled{opacity:.45;cursor:not-allowed;background:var(--surf2);color:var(--ink2)}
-.lr-tfoot{margin:10px 20px 0;font-family:'JetBrains Mono';font-size:9px;color:var(--ink3);text-align:center;font-weight:700}
+.ape-dhead{display:flex;align-items:center;gap:13px;padding:20px 20px 8px;position:relative}
+.ape-dav{width:60px;height:60px;border-radius:18px;display:grid;place-items:center;font-size:30px;flex-shrink:0;overflow:hidden;background:radial-gradient(circle at 50% 35%,rgba(155,123,255,.3),transparent 70%),linear-gradient(160deg,#2a2350,#181534)}
+.ape-dav .ape-img{width:100%;height:100%;object-fit:cover}
+.ape-dsym{font-family:'Space Grotesk';font-weight:700;font-size:23px;line-height:1}
+.ape-dsub{font-family:'JetBrains Mono';font-size:11px;color:var(--ink2);font-weight:600;margin-top:5px}
+.ape-tcard{display:flex;align-items:center;gap:13px;margin:4px 20px 0;background:rgba(43,224,138,.08);border:1px solid rgba(43,224,138,.25);border-radius:16px;padding:13px 15px}
+.ape-tcard.amber{background:rgba(255,181,46,.08);border-color:rgba(255,181,46,.28)}
+.ape-tcard.red{background:rgba(255,84,112,.08);border-color:rgba(255,84,112,.28)}
+.ape-tcnum{font-family:'Space Grotesk';font-weight:700;font-size:30px;line-height:1}
+.ape-tcv{font-weight:700;font-size:14px}
+.ape-tcs{font-family:'JetBrains Mono';font-size:9.5px;color:var(--ink2);font-weight:600;margin-top:3px;line-height:1.4}
+.ape-checks{display:flex;flex-wrap:wrap;gap:7px;padding:12px 20px 0}
+.ape-chk{font-family:'JetBrains Mono';font-size:9.5px;font-weight:700;padding:4px 10px;border-radius:999px;display:inline-flex;gap:4px}
+.ape-chk.ok{background:rgba(43,224,138,.12);color:var(--green)}.ape-chk.cau{background:rgba(255,181,46,.12);color:var(--amber)}.ape-chk.bad{background:rgba(255,84,112,.12);color:var(--red)}
+.ape-dyor{font-family:'JetBrains Mono';font-size:9px;color:var(--ink3);padding:8px 20px 0;font-weight:600;line-height:1.5}
+.ape-modetabs{display:grid;grid-template-columns:1fr 1fr;margin:14px 20px 14px;background:var(--surf);border-radius:13px;padding:4px;position:relative}
+.ape-mind{position:absolute;top:4px;bottom:4px;width:calc(50% - 4px);border-radius:10px;z-index:1;background:linear-gradient(135deg,var(--green),#54f0ad);transition:transform .3s cubic-bezier(.2,1.3,.4,1),background .25s}
+.ape-modetabs.sell .ape-mind{transform:translateX(100%);background:linear-gradient(135deg,var(--red),#ff86a0)}
+.ape-mtab{padding:10px 0;text-align:center;font-family:'Space Grotesk';font-weight:700;font-size:12px;letter-spacing:.6px;color:var(--ink2);border-radius:10px;cursor:pointer;background:none;border:none;position:relative;z-index:2}
+.ape-mtab.active{color:#04210f}.ape-modetabs.sell .ape-mtab.active{color:#2a0008}
+.ape-row{background:var(--surf);border:1px solid var(--line);border-radius:16px;padding:14px;margin:0 20px}
+.ape-rowtop{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px}
+.ape-rlabel{font-family:'JetBrains Mono';font-size:9px;color:var(--ink2);font-weight:800;letter-spacing:1px;text-transform:uppercase}
+.ape-rbal{font-family:'JetBrains Mono';font-size:10px;color:var(--ink2);font-weight:700;display:flex;align-items:center;gap:6px}
+.ape-rbal b{color:var(--ink)}
+.ape-max{background:rgba(155,123,255,.2);border:1px solid rgba(155,123,255,.4);color:var(--violet);padding:3px 8px;border-radius:7px;font-family:'JetBrains Mono';font-size:9px;font-weight:800;cursor:pointer}
+.ape-rmid{display:flex;align-items:center;gap:10px}
+.ape-chip{display:flex;align-items:center;gap:6px;padding:8px 12px;background:var(--surf2);border-radius:999px;flex-shrink:0;font-weight:700;font-size:13px;font-family:'Space Grotesk'}
+.ape-chiplogo{width:22px;height:22px;border-radius:50%;background:var(--surf);display:grid;place-items:center;font-size:13px;overflow:hidden}
+.ape-chiplogo .ape-img{width:100%;height:100%;object-fit:cover;border-radius:50%}
+.ape-amt{flex:1;background:transparent;border:none;outline:none;color:var(--ink);font-family:'Space Grotesk';font-size:26px;text-align:right;font-weight:600;width:100%;min-width:0}
+.ape-amt::placeholder{color:var(--ink3)}
+.ape-presets{display:flex;gap:6px;margin:10px 20px 0;overflow-x:auto;scrollbar-width:none}.ape-presets::-webkit-scrollbar{display:none}
+.ape-pchip{flex-shrink:0;padding:7px 13px;border-radius:999px;background:var(--surf);border:1px solid var(--line);color:var(--ink);font-family:'JetBrains Mono';font-weight:700;font-size:11px;cursor:pointer}
+.ape-pchip.active{background:var(--green);color:#04210f;border-color:transparent}
+.ape-details{margin:12px 20px 0;padding:11px 15px;background:var(--surf);border-radius:14px;font-family:'JetBrains Mono';font-size:11px}
+.ape-drow{display:flex;justify-content:space-between;padding:3px 0;font-weight:700;gap:8px}
+.ape-drow>span:first-child{color:var(--ink2);font-weight:500}
+.ape-dval{color:var(--ink);font-weight:700;text-align:right}.ape-dval.good{color:var(--green)}
+.ape-banner{margin:12px 20px 0;padding:11px 13px;border-radius:12px;font-size:12px;font-weight:600;border:1px solid rgba(255,84,112,.35);background:rgba(255,84,112,.08);color:var(--red)}
+.ape-confirm{width:calc(100% - 40px);margin:14px 20px 0;padding:16px 0;border:none;border-radius:14px;font-family:'Space Grotesk';font-size:14px;font-weight:700;cursor:pointer;color:#04210f;background:linear-gradient(135deg,var(--green),#54f0ad)}
+.ape-confirm.sell{background:linear-gradient(135deg,var(--red),#ff86a0);color:#2a0008}
+.ape-confirm:disabled{opacity:.45;cursor:not-allowed;background:var(--surf2);color:var(--ink2)}
+.ape-tfoot{margin:10px 20px 0;font-family:'JetBrains Mono';font-size:9px;color:var(--ink3);text-align:center;font-weight:700}
 
-.lr-balcard{background:linear-gradient(135deg,var(--surf2),rgba(155,123,255,.12));border:1px solid rgba(155,123,255,.25);border-radius:18px;padding:18px;text-align:center;margin-bottom:13px}
-.lr-ballbl{font-family:'JetBrains Mono';font-size:9px;letter-spacing:1.4px;text-transform:uppercase;color:var(--ink2);font-weight:800}
-.lr-balval{font-family:'Space Grotesk';font-weight:700;font-size:33px;margin-top:6px}
-.lr-balval .u{font-size:17px;color:var(--ink2)}
-.lr-balusd{font-family:'JetBrains Mono';font-size:12px;color:var(--ink2);font-weight:700;margin-top:2px}
-.lr-wgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:13px}
-.lr-wact{padding:13px 0;border-radius:13px;border:1px solid var(--line);background:var(--surf);color:var(--ink);font-family:'Space Grotesk';font-weight:700;font-size:13px;cursor:pointer}
-.lr-wact.primary{background:linear-gradient(135deg,var(--amber),var(--gold));color:#1a1400;border-color:transparent}
-.lr-block{background:var(--surf);border-radius:14px;padding:13px 14px;margin-bottom:11px}
-.lr-block-l{font-family:'JetBrains Mono';font-size:9px;letter-spacing:1.2px;text-transform:uppercase;color:var(--ink2);font-weight:800;margin-bottom:8px}
-.lr-qr{display:grid;place-items:center;margin-bottom:11px}
-.lr-qr canvas,.lr-qr img{border-radius:12px;background:#fff;padding:8px;width:160px;height:160px}
-.lr-addr{display:flex;align-items:center;gap:8px}
-.lr-addr-v{flex:1;font-family:'JetBrains Mono';font-size:12px;color:var(--ink);font-weight:600;word-break:break-all;line-height:1.4}
-.lr-copy{flex-shrink:0;background:var(--surf2);border:none;color:var(--ink2);border-radius:9px;padding:8px 12px;font-family:'JetBrains Mono';font-size:10px;font-weight:800;cursor:pointer}
-.lr-input{width:100%;padding:11px 13px;border-radius:11px;background:var(--surf2);border:1px solid var(--line);color:var(--ink);font-family:'JetBrains Mono';font-size:13px;font-weight:600;outline:none;margin-bottom:8px}
-.lr-input:focus{border-color:var(--amber)}
-.lr-go{width:100%;padding:13px 0;border:none;border-radius:12px;font-family:'Space Grotesk';font-weight:700;font-size:13px;cursor:pointer;background:linear-gradient(135deg,var(--violet),var(--pink));color:#fff}
-.lr-go:disabled{opacity:.5;cursor:not-allowed}
-.lr-secret{font-family:'JetBrains Mono';font-size:11px;color:var(--gold);word-break:break-all;line-height:1.5;background:rgba(255,181,46,.06);border:1px dashed rgba(255,181,46,.3);border-radius:10px;padding:11px 12px}
-.lr-warn{font-family:'JetBrains Mono';font-size:10px;color:var(--amber);background:rgba(255,181,46,.08);border-radius:12px;padding:10px 12px;line-height:1.55;font-weight:600;margin-bottom:11px}
-.lr-warn b{color:var(--gold)}
-.lr-nc{display:inline-flex;align-items:center;gap:6px;font-family:'JetBrains Mono';font-size:9px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--green);background:rgba(43,224,138,.1);padding:4px 11px;border-radius:999px}
+.ape-balcard{background:linear-gradient(135deg,var(--surf2),rgba(155,123,255,.12));border:1px solid rgba(155,123,255,.25);border-radius:18px;padding:18px;text-align:center;margin-bottom:13px}
+.ape-ballbl{font-family:'JetBrains Mono';font-size:9px;letter-spacing:1.4px;text-transform:uppercase;color:var(--ink2);font-weight:800}
+.ape-balval{font-family:'Space Grotesk';font-weight:700;font-size:33px;margin-top:6px}
+.ape-balval .u{font-size:17px;color:var(--ink2)}
+.ape-balusd{font-family:'JetBrains Mono';font-size:12px;color:var(--ink2);font-weight:700;margin-top:2px}
+.ape-wgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:13px}
+.ape-wact{padding:13px 0;border-radius:13px;border:1px solid var(--line);background:var(--surf);color:var(--ink);font-family:'Space Grotesk';font-weight:700;font-size:13px;cursor:pointer}
+.ape-wact.primary{background:linear-gradient(135deg,var(--amber),var(--gold));color:#1a1400;border-color:transparent}
+.ape-block{background:var(--surf);border-radius:14px;padding:13px 14px;margin-bottom:11px}
+.ape-block-l{font-family:'JetBrains Mono';font-size:9px;letter-spacing:1.2px;text-transform:uppercase;color:var(--ink2);font-weight:800;margin-bottom:8px}
+.ape-qr{display:grid;place-items:center;margin-bottom:11px}
+.ape-qr canvas,.ape-qr img{border-radius:12px;background:#fff;padding:8px;width:160px;height:160px}
+.ape-addr{display:flex;align-items:center;gap:8px}
+.ape-addr-v{flex:1;font-family:'JetBrains Mono';font-size:12px;color:var(--ink);font-weight:600;word-break:break-all;line-height:1.4}
+.ape-copy{flex-shrink:0;background:var(--surf2);border:none;color:var(--ink2);border-radius:9px;padding:8px 12px;font-family:'JetBrains Mono';font-size:10px;font-weight:800;cursor:pointer}
+.ape-input{width:100%;padding:11px 13px;border-radius:11px;background:var(--surf2);border:1px solid var(--line);color:var(--ink);font-family:'JetBrains Mono';font-size:13px;font-weight:600;outline:none;margin-bottom:8px}
+.ape-input:focus{border-color:var(--amber)}
+.ape-go{width:100%;padding:13px 0;border:none;border-radius:12px;font-family:'Space Grotesk';font-weight:700;font-size:13px;cursor:pointer;background:linear-gradient(135deg,var(--violet),var(--pink));color:#fff}
+.ape-go:disabled{opacity:.5;cursor:not-allowed}
+.ape-secret{font-family:'JetBrains Mono';font-size:11px;color:var(--gold);word-break:break-all;line-height:1.5;background:rgba(255,181,46,.06);border:1px dashed rgba(255,181,46,.3);border-radius:10px;padding:11px 12px}
+.ape-warn{font-family:'JetBrains Mono';font-size:10px;color:var(--amber);background:rgba(255,181,46,.08);border-radius:12px;padding:10px 12px;line-height:1.55;font-weight:600;margin-bottom:11px}
+.ape-warn b{color:var(--gold)}
+.ape-nc{display:inline-flex;align-items:center;gap:6px;font-family:'JetBrains Mono';font-size:9px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--green);background:rgba(43,224,138,.1);padding:4px 11px;border-radius:999px}
 
-.lr-echips{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.lr-echip{display:inline-flex;align-items:center;gap:7px;padding:8px 8px 8px 14px;border-radius:999px;background:var(--surf);border:1px solid var(--line);font-family:'JetBrains Mono';font-size:13px;font-weight:700}
-.lr-echip .x{width:19px;height:19px;border-radius:50%;background:rgba(255,84,112,.14);color:var(--red);border:none;cursor:pointer;font-size:12px;display:grid;place-items:center;font-family:initial}
-.lr-eadd{display:flex;gap:6px}
-.lr-eadd input{width:74px;padding:8px 12px;border-radius:999px;background:var(--surf);border:1px solid var(--line);font-family:'JetBrains Mono';font-size:13px;font-weight:700;color:var(--ink);outline:none}
-.lr-eadd .plus{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--amber),var(--gold));color:#1a1400;border:none;cursor:pointer;font-size:17px;font-family:initial}
-.lr-sec-lbl{font-family:'JetBrains Mono';font-size:10px;letter-spacing:1.2px;text-transform:uppercase;font-weight:800;color:var(--ink2);margin:16px 0 9px}
-.lr-esave{width:100%;margin-top:18px;padding:14px 0;border:none;border-radius:13px;font-family:'Space Grotesk';font-weight:700;font-size:14px;cursor:pointer;background:linear-gradient(135deg,var(--amber),var(--gold));color:#1a1400}
+.ape-echips{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.ape-echip{display:inline-flex;align-items:center;gap:7px;padding:8px 8px 8px 14px;border-radius:999px;background:var(--surf);border:1px solid var(--line);font-family:'JetBrains Mono';font-size:13px;font-weight:700}
+.ape-echip .x{width:19px;height:19px;border-radius:50%;background:rgba(255,84,112,.14);color:var(--red);border:none;cursor:pointer;font-size:12px;display:grid;place-items:center;font-family:initial}
+.ape-eadd{display:flex;gap:6px}
+.ape-eadd input{width:74px;padding:8px 12px;border-radius:999px;background:var(--surf);border:1px solid var(--line);font-family:'JetBrains Mono';font-size:13px;font-weight:700;color:var(--ink);outline:none}
+.ape-eadd .plus{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--amber),var(--gold));color:#1a1400;border:none;cursor:pointer;font-size:17px;font-family:initial}
+.ape-sec-lbl{font-family:'JetBrains Mono';font-size:10px;letter-spacing:1.2px;text-transform:uppercase;font-weight:800;color:var(--ink2);margin:16px 0 9px}
+.ape-esave{width:100%;margin-top:18px;padding:14px 0;border:none;border-radius:13px;font-family:'Space Grotesk';font-weight:700;font-size:14px;cursor:pointer;background:linear-gradient(135deg,var(--amber),var(--gold));color:#1a1400}
 
-.lr-toasts{position:fixed;bottom:calc(80px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);z-index:1100;display:flex;flex-direction:column;gap:8px;max-width:440px;width:calc(100% - 24px);pointer-events:none}
-.lr-toast{pointer-events:auto;display:flex;align-items:center;gap:10px;padding:13px 14px;border-radius:16px;backdrop-filter:blur(20px);box-shadow:0 12px 32px rgba(0,0,0,.4);animation:lrToastIn .3s ease;font-size:13px;font-weight:600;border:1px solid var(--line)}
-.lr-toast.success{background:linear-gradient(135deg,rgba(24,21,52,.95),rgba(43,224,138,.22));border-color:rgba(43,224,138,.4);color:var(--ink)}
-.lr-toast.error{background:linear-gradient(135deg,rgba(24,21,52,.95),rgba(255,84,112,.2));border-color:rgba(255,84,112,.4);color:var(--ink)}
-.lr-toast.info{background:rgba(24,21,52,.95);color:var(--ink)}
-.lr-toast .em{font-size:21px;flex-shrink:0}
-.lr-toast .tb{flex:1;min-width:0;line-height:1.35}.lr-toast .tb b{font-weight:800}
-.lr-toast .ta{display:flex;gap:5px;flex-shrink:0}
-.lr-taction{background:var(--surf);border:1px solid var(--line);color:var(--ink);padding:6px 10px;border-radius:9px;font-family:'JetBrains Mono';font-size:10px;font-weight:800;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:4px}
-.lr-taction.tw{background:linear-gradient(135deg,rgba(86,200,255,.3),rgba(43,224,138,.3));border-color:rgba(86,200,255,.4)}
-.lr-taction svg{width:11px;height:11px}
+.ape-toasts{position:fixed;bottom:calc(80px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);z-index:1100;display:flex;flex-direction:column;gap:8px;max-width:440px;width:calc(100% - 24px);pointer-events:none}
+.ape-toast{pointer-events:auto;display:flex;align-items:center;gap:10px;padding:13px 14px;border-radius:16px;backdrop-filter:blur(20px);box-shadow:0 12px 32px rgba(0,0,0,.4);animation:apeToastIn .3s ease;font-size:13px;font-weight:600;border:1px solid var(--line)}
+.ape-toast.success{background:linear-gradient(135deg,rgba(24,21,52,.95),rgba(43,224,138,.22));border-color:rgba(43,224,138,.4);color:var(--ink)}
+.ape-toast.error{background:linear-gradient(135deg,rgba(24,21,52,.95),rgba(255,84,112,.2));border-color:rgba(255,84,112,.4);color:var(--ink)}
+.ape-toast.info{background:rgba(24,21,52,.95);color:var(--ink)}
+.ape-toast .em{font-size:21px;flex-shrink:0}
+.ape-toast .tb{flex:1;min-width:0;line-height:1.35}.ape-toast .tb b{font-weight:800}
+.ape-toast .ta{display:flex;gap:5px;flex-shrink:0}
+.ape-taction{background:var(--surf);border:1px solid var(--line);color:var(--ink);padding:6px 10px;border-radius:9px;font-family:'JetBrains Mono';font-size:10px;font-weight:800;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:4px}
+.ape-taction.tw{background:linear-gradient(135deg,rgba(86,200,255,.3),rgba(43,224,138,.3));border-color:rgba(86,200,255,.4)}
+.ape-taction svg{width:11px;height:11px}
 
-.lr-confetti{position:fixed;inset:0;pointer-events:none;z-index:1200;overflow:hidden}
-.lr-cpiece{position:absolute;top:50%;left:50%;width:8px;height:14px;border-radius:2px;animation:lrConfetti 1.6s cubic-bezier(.15,.9,.3,1) forwards}
+.ape-confetti{position:fixed;inset:0;pointer-events:none;z-index:1200;overflow:hidden}
+.ape-cpiece{position:absolute;top:50%;left:50%;width:8px;height:14px;border-radius:2px;animation:apeConfetti 1.6s cubic-bezier(.15,.9,.3,1) forwards}
 
-@media(prefers-reduced-motion:reduce){.lr-root *{animation-duration:.01ms!important;animation-iteration-count:1!important}}
+@media(prefers-reduced-motion:reduce){.ape-root *{animation-duration:.01ms!important;animation-iteration-count:1!important}}
 `;
 
 function useLrCSS() {
   useEffect(() => {
-    const id = 'wonderland-lr-css';
+    const id = 'wonderland-ape-css';
     if (document.getElementById(id)) return;
     const el = document.createElement('style');
     el.id = id; el.textContent = LR_CSS;
@@ -308,7 +308,7 @@ const getConn = (commitment, url = RPC_URL) => {
 const balRpcRace = (op) => {
   const conns = BAL_RPC_POOL.map(u => getConn(BAL_COMMITMENT, u));
   return Promise.any(conns.map((c, i) =>
-    op(c).catch(e => { console.warn('[lr-bal] ' + BAL_RPC_POOL[i] + ':', e && e.message); throw e; })
+    op(c).catch(e => { console.warn('[ape-bal] ' + BAL_RPC_POOL[i] + ':', e && e.message); throw e; })
   )).catch(() => { throw new Error('All balance RPCs failed'); });
 };
 const POLL_RECENT = 5000, POLL_SOL = 30000, POLL_BALANCE = 30000;
@@ -324,7 +324,7 @@ function loadOrCreateKeypair() {
   try {
     const sk = localStorage.getItem(SK_KEY);
     if (sk) return Keypair.fromSecretKey(bs58.decode(sk));
-  } catch (e) { console.warn('[lr-wallet] load failed, regenerating', e && e.message); }
+  } catch (e) { console.warn('[ape-wallet] load failed, regenerating', e && e.message); }
   const kp = Keypair.generate();
   try { localStorage.setItem(SK_KEY, bs58.encode(kp.secretKey)); } catch (e) {}
   return kp;
@@ -612,15 +612,15 @@ function TokenFace(props) {
   const url = useTokenIcon(token);
   const [errored, setErrored] = useState(false);
   useEffect(() => { setErrored(false); }, [url]);
-  if (url && !errored) return <img className="lr-img" src={url} alt={token.sym || ''} onError={() => setErrored(true)} />;
-  return <span className="lr-emoji">{token.emoji || emojiFor(token.sym)}</span>;
+  if (url && !errored) return <img className="ape-img" src={url} alt={token.sym || ''} onError={() => setErrored(true)} />;
+  return <span className="ape-emoji">{token.emoji || emojiFor(token.sym)}</span>;
 }
 function TokenIconSmall(props) {
   const token = props.token;
   const url = useTokenIcon(token);
   const [errored, setErrored] = useState(false);
   useEffect(() => { setErrored(false); }, [url]);
-  if (url && !errored) return <img className="lr-img" src={url} alt={token.sym || ''} onError={() => setErrored(true)} />;
+  if (url && !errored) return <img className="ape-img" src={url} alt={token.sym || ''} onError={() => setErrored(true)} />;
   return <span>{token.emoji || emojiFor(token.sym)}</span>;
 }
 
@@ -651,25 +651,25 @@ function PresetsModal(props) {
   const addSell = () => { const v = parseFloat(ns); if (!(v > 0) || v > 100 || sellDraft.includes(v)) { setNs(''); return; } setSellDraft([...sellDraft, v].sort((a,b)=>a-b)); setNs(''); };
   const save = () => { setBuyPresets(buyDraft.length ? buyDraft : DEFAULT_BUY_PRESETS); setSellPresets(sellDraft.length ? sellDraft : DEFAULT_SELL_PRESETS); onClose(); };
   return (
-    <div className="lr-overlay center" onClick={onClose}>
-      <div className="lr-sheet mini" onClick={e=>e.stopPropagation()}>
-        <div className="lr-shead">
-          <button className="lr-x" onClick={onClose}>×</button>
-          <h3 className="lr-stitle">Quick amounts</h3>
-          <div className="lr-ssub">tap to set, edit any time</div>
+    <div className="ape-overlay center" onClick={onClose}>
+      <div className="ape-sheet mini" onClick={e=>e.stopPropagation()}>
+        <div className="ape-shead">
+          <button className="ape-x" onClick={onClose}>×</button>
+          <h3 className="ape-stitle">Quick amounts</h3>
+          <div className="ape-ssub">tap to set, edit any time</div>
         </div>
-        <div className="lr-sbody">
-          <div className="lr-sec-lbl">Buy amounts (SOL)</div>
-          <div className="lr-echips">
-            {buyDraft.map(v => <span key={v} className="lr-echip">{v}<button className="x" onClick={()=>setBuyDraft(buyDraft.filter(x=>x!==v))}>×</button></span>)}
-            <span className="lr-eadd"><input type="number" step="0.01" min="0" placeholder="0.5" value={nb} onChange={e=>setNb(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')addBuy();}} /><button className="plus" onClick={addBuy}>+</button></span>
+        <div className="ape-sbody">
+          <div className="ape-sec-lbl">Buy amounts (SOL)</div>
+          <div className="ape-echips">
+            {buyDraft.map(v => <span key={v} className="ape-echip">{v}<button className="x" onClick={()=>setBuyDraft(buyDraft.filter(x=>x!==v))}>×</button></span>)}
+            <span className="ape-eadd"><input type="number" step="0.01" min="0" placeholder="0.5" value={nb} onChange={e=>setNb(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')addBuy();}} /><button className="plus" onClick={addBuy}>+</button></span>
           </div>
-          <div className="lr-sec-lbl">Sell amounts (%)</div>
-          <div className="lr-echips">
-            {sellDraft.map(v => <span key={v} className="lr-echip">{v}%<button className="x" onClick={()=>setSellDraft(sellDraft.filter(x=>x!==v))}>×</button></span>)}
-            <span className="lr-eadd"><input type="number" step="1" min="1" max="100" placeholder="50" value={ns} onChange={e=>setNs(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')addSell();}} /><button className="plus" onClick={addSell}>+</button></span>
+          <div className="ape-sec-lbl">Sell amounts (%)</div>
+          <div className="ape-echips">
+            {sellDraft.map(v => <span key={v} className="ape-echip">{v}%<button className="x" onClick={()=>setSellDraft(sellDraft.filter(x=>x!==v))}>×</button></span>)}
+            <span className="ape-eadd"><input type="number" step="1" min="1" max="100" placeholder="50" value={ns} onChange={e=>setNs(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')addSell();}} /><button className="plus" onClick={addSell}>+</button></span>
           </div>
-          <button className="lr-esave" onClick={save}>Save</button>
+          <button className="ape-esave" onClick={save}>Save</button>
         </div>
       </div>
     </div>
@@ -707,62 +707,62 @@ function WalletDrawer(props) {
   const maxOut = Math.max(0, sol - 0.001);
 
   return (
-    <div className="lr-overlay" onClick={onClose}>
-      <div className="lr-sheet" onClick={e=>e.stopPropagation()}>
-        <div className="lr-shead">
-          <button className="lr-x" onClick={onClose}>×</button>
-          <h3 className="lr-stitle"><span className="lr-wdot" />Your wallet</h3>
-          <div className="lr-ssub">lives on this device · signs instantly · your keys</div>
+    <div className="ape-overlay" onClick={onClose}>
+      <div className="ape-sheet" onClick={e=>e.stopPropagation()}>
+        <div className="ape-shead">
+          <button className="ape-x" onClick={onClose}>×</button>
+          <h3 className="ape-stitle"><span className="ape-wdot" />Your wallet</h3>
+          <div className="ape-ssub">lives on this device · signs instantly · your keys</div>
         </div>
-        <div className="lr-sbody">
-          <div className="lr-balcard">
-            <div className="lr-ballbl">Ready to ape</div>
-            <div className="lr-balval">{formatSol(sol)} <span className="u">SOL</span></div>
-            <div className="lr-balusd">{solPrice > 0 ? '≈ $' + format(sol * solPrice) : ' '}</div>
+        <div className="ape-sbody">
+          <div className="ape-balcard">
+            <div className="ape-ballbl">Ready to ape</div>
+            <div className="ape-balval">{formatSol(sol)} <span className="u">SOL</span></div>
+            <div className="ape-balusd">{solPrice > 0 ? '≈ $' + format(sol * solPrice) : ' '}</div>
           </div>
 
-          <div className="lr-wgrid">
-            <button className={'lr-wact' + (tab==='deposit'?' primary':'')} onClick={()=>setTab('deposit')}>↓ Deposit</button>
-            <button className={'lr-wact' + (tab==='withdraw'?' primary':'')} onClick={()=>setTab('withdraw')}>↑ Withdraw</button>
+          <div className="ape-wgrid">
+            <button className={'ape-wact' + (tab==='deposit'?' primary':'')} onClick={()=>setTab('deposit')}>↓ Deposit</button>
+            <button className={'ape-wact' + (tab==='withdraw'?' primary':'')} onClick={()=>setTab('withdraw')}>↑ Withdraw</button>
           </div>
 
           {tab === 'deposit' && (
-            <div className="lr-block">
-              <div className="lr-block-l">Send SOL to this address</div>
-              <div className="lr-qr"><canvas ref={qrRef} width="160" height="160" /></div>
-              <div className="lr-addr"><div className="lr-addr-v">{addr}</div><button className="lr-copy" onClick={copy}>{copied?'COPIED':'COPY'}</button></div>
+            <div className="ape-block">
+              <div className="ape-block-l">Send SOL to this address</div>
+              <div className="ape-qr"><canvas ref={qrRef} width="160" height="160" /></div>
+              <div className="ape-addr"><div className="ape-addr-v">{addr}</div><button className="ape-copy" onClick={copy}>{copied?'COPIED':'COPY'}</button></div>
             </div>
           )}
 
           {tab === 'withdraw' && (
-            <div className="lr-block">
-              <div className="lr-block-l">Send SOL out</div>
-              <input className="lr-input" placeholder="Destination address" value={dest} onChange={e=>setDest(e.target.value.trim())} />
-              <input className="lr-input" type="number" step="0.001" placeholder={'Amount (max ' + formatSol(maxOut) + ')'} value={amt} onChange={e=>setAmt(e.target.value)} />
-              <button className="lr-go" disabled={busy || !dest || !(Number(amt) > 0) || Number(amt) > maxOut} onClick={()=>onWithdraw(dest, Number(amt))}>
+            <div className="ape-block">
+              <div className="ape-block-l">Send SOL out</div>
+              <input className="ape-input" placeholder="Destination address" value={dest} onChange={e=>setDest(e.target.value.trim())} />
+              <input className="ape-input" type="number" step="0.001" placeholder={'Amount (max ' + formatSol(maxOut) + ')'} value={amt} onChange={e=>setAmt(e.target.value)} />
+              <button className="ape-go" disabled={busy || !dest || !(Number(amt) > 0) || Number(amt) > maxOut} onClick={()=>onWithdraw(dest, Number(amt))}>
                 {busy ? 'Sending…' : 'Withdraw ' + (Number(amt) > 0 ? Number(amt) + ' SOL' : '')}
               </button>
             </div>
           )}
 
-          <div className="lr-block">
-            <div className="lr-block-l">Back up your wallet {wallet.backedUp ? '✓' : ''}</div>
+          <div className="ape-block">
+            <div className="ape-block-l">Back up your wallet {wallet.backedUp ? '✓' : ''}</div>
             {!revealed ? (
-              <button className="lr-go" style={{background:'var(--surf2)',color:'var(--gold)'}} onClick={()=>{ setRevealed(true); wallet.markBackedUp(); }}>Show secret key</button>
+              <button className="ape-go" style={{background:'var(--surf2)',color:'var(--gold)'}} onClick={()=>{ setRevealed(true); wallet.markBackedUp(); }}>Show secret key</button>
             ) : (
               <>
-                <div className="lr-secret">{wallet.exportSecret()}</div>
+                <div className="ape-secret">{wallet.exportSecret()}</div>
                 <div style={{display:'flex',gap:8,marginTop:8}}>
-                  <button className="lr-copy" style={{flex:1,padding:'10px 0'}} onClick={()=>{ try{navigator.clipboard.writeText(wallet.exportSecret());}catch(e){} }}>COPY KEY</button>
-                  <button className="lr-copy" style={{flex:1,padding:'10px 0'}} onClick={()=>setRevealed(false)}>HIDE</button>
+                  <button className="ape-copy" style={{flex:1,padding:'10px 0'}} onClick={()=>{ try{navigator.clipboard.writeText(wallet.exportSecret());}catch(e){} }}>COPY KEY</button>
+                  <button className="ape-copy" style={{flex:1,padding:'10px 0'}} onClick={()=>setRevealed(false)}>HIDE</button>
                 </div>
               </>
             )}
-            <div className="lr-ssub" style={{marginTop:8}}>Save this somewhere safe. Anyone with it controls this wallet. Import into Phantom ("Import private key") to recover.</div>
+            <div className="ape-ssub" style={{marginTop:8}}>Save this somewhere safe. Anyone with it controls this wallet. Import into Phantom ("Import private key") to recover.</div>
           </div>
 
-          <div className="lr-warn">🔥 <b>Hot burner.</b> Keep only ape-money here. The key is stored on this device — clear your browser and it's gone unless you backed it up.</div>
-          <div style={{textAlign:'center'}}><span className="lr-nc">● Non-custodial · your keys</span></div>
+          <div className="ape-warn">🔥 <b>Hot burner.</b> Keep only ape-money here. The key is stored on this device — clear your browser and it's gone unless you backed it up.</div>
+          <div style={{textAlign:'center'}}><span className="ape-nc">● Non-custodial · your keys</span></div>
         </div>
       </div>
     </div>
@@ -813,73 +813,73 @@ function TradeSheet(props) {
   const read = riskRead(token);
 
   return (
-    <div className="lr-overlay" onClick={onClose}>
-      <div className="lr-sheet" onClick={e=>e.stopPropagation()}>
-        <div className="lr-dhead">
-          <button className="lr-x" onClick={onClose}>×</button>
-          <div className="lr-dav"><TokenFace token={token} /></div>
+    <div className="ape-overlay" onClick={onClose}>
+      <div className="ape-sheet" onClick={e=>e.stopPropagation()}>
+        <div className="ape-dhead">
+          <button className="ape-x" onClick={onClose}>×</button>
+          <div className="ape-dav"><TokenFace token={token} /></div>
           <div>
-            <div className="lr-dsym">${token.sym}</div>
-            <div className="lr-dsub">{formatPrice(token.price)}{Number.isFinite(token.change)&&token.change!==0 ? <> · <span style={{color:token.change<0?'var(--red)':'var(--green)'}}>{formatPct(token.change)}</span></> : null}</div>
+            <div className="ape-dsym">${token.sym}</div>
+            <div className="ape-dsub">{formatPrice(token.price)}{Number.isFinite(token.change)&&token.change!==0 ? <> · <span style={{color:token.change<0?'var(--red)':'var(--green)'}}>{formatPct(token.change)}</span></> : null}</div>
           </div>
         </div>
 
-        <div className={'lr-tcard ' + (read.tier==='ok'?'':read.tier)}>
-          <div className="lr-tcnum" style={{color:riskColor(read.tier)}}>{read.score}<span style={{fontSize:14,color:'var(--ink3)'}}>/{RISK_CEIL}</span></div>
-          <div><div className="lr-tcv">{read.verdict}</div><div className="lr-tcs">Vibe check · our read of the on-chain signals — not a safety guarantee</div></div>
+        <div className={'ape-tcard ' + (read.tier==='ok'?'':read.tier)}>
+          <div className="ape-tcnum" style={{color:riskColor(read.tier)}}>{read.score}<span style={{fontSize:14,color:'var(--ink3)'}}>/{RISK_CEIL}</span></div>
+          <div><div className="ape-tcv">{read.verdict}</div><div className="ape-tcs">Vibe check · our read of the on-chain signals — not a safety guarantee</div></div>
         </div>
-        <div className="lr-checks">{read.knowns.map((c,i)=><span key={i} className={'lr-chk '+c[0]}>{c[1]}</span>)}</div>
-        <div className="lr-dyor">⚠ Can't be checked: {read.unknowns.join(' · ')}. Even a clean read can rug — only ape what you can lose.</div>
+        <div className="ape-checks">{read.knowns.map((c,i)=><span key={i} className={'ape-chk '+c[0]}>{c[1]}</span>)}</div>
+        <div className="ape-dyor">⚠ Can't be checked: {read.unknowns.join(' · ')}. Even a clean read can rug — only ape what you can lose.</div>
 
-        <div className={'lr-modetabs' + (isBuy?'':' sell')}>
-          <div className="lr-mind" />
-          <button className={'lr-mtab'+(isBuy?' active':'')} onClick={()=>setMode('buy')}>🍭 BUY</button>
-          <button className={'lr-mtab'+(!isBuy?' active':'')} onClick={()=>setMode('sell')}>💸 SELL</button>
+        <div className={'ape-modetabs' + (isBuy?'':' sell')}>
+          <div className="ape-mind" />
+          <button className={'ape-mtab'+(isBuy?' active':'')} onClick={()=>setMode('buy')}>🍭 BUY</button>
+          <button className={'ape-mtab'+(!isBuy?' active':'')} onClick={()=>setMode('sell')}>💸 SELL</button>
         </div>
 
-        <div className="lr-row">
-          <div className="lr-rowtop">
-            <span className="lr-rlabel">{isBuy?'You pay':'You sell'}</span>
-            <span className="lr-rbal">
+        <div className="ape-row">
+          <div className="ape-rowtop">
+            <span className="ape-rlabel">{isBuy?'You pay':'You sell'}</span>
+            <span className="ape-rbal">
               {isBuy ? <>Wallet: <b>{formatSol((solBalance&&solBalance.uiAmount)||0)} SOL</b></> : <>You own: <b>{formatTokens(ownedUi)} ${token.sym}</b></>}
-              {isBuy && availSol > 0 ? <button className="lr-max" onClick={()=>setAmount(String(Math.floor(availSol*10000)/10000))}>MAX</button> : null}
+              {isBuy && availSol > 0 ? <button className="ape-max" onClick={()=>setAmount(String(Math.floor(availSol*10000)/10000))}>MAX</button> : null}
             </span>
           </div>
-          <div className="lr-rmid">
-            <div className="lr-chip">{isBuy ? <><span className="lr-chiplogo">◎</span><span>SOL</span></> : <><span className="lr-chiplogo"><TokenIconSmall token={token} /></span><span>{token.sym}</span></>}</div>
-            <input className="lr-amt" type="text" inputMode="decimal" placeholder={isBuy?'0.00':'0'} value={amount}
+          <div className="ape-rmid">
+            <div className="ape-chip">{isBuy ? <><span className="ape-chiplogo">◎</span><span>SOL</span></> : <><span className="ape-chiplogo"><TokenIconSmall token={token} /></span><span>{token.sym}</span></>}</div>
+            <input className="ape-amt" type="text" inputMode="decimal" placeholder={isBuy?'0.00':'0'} value={amount}
               onChange={e=>{ const val=e.target.value.replace(/[^\d.]/g,''); if(val.split('.').length>2)return; if(!isBuy&&Number(val)>100){setAmount('100');return;} setAmount(val); }} />
           </div>
         </div>
 
-        <div className="lr-presets">
-          {presets.map(pv => <button key={pv} className={'lr-pchip'+(Number(amount)===pv?' active':'')} onClick={()=>setAmount(String(pv))}>{isBuy?(pv+' SOL'):(pv+'%')}</button>)}
+        <div className="ape-presets">
+          {presets.map(pv => <button key={pv} className={'ape-pchip'+(Number(amount)===pv?' active':'')} onClick={()=>setAmount(String(pv))}>{isBuy?(pv+' SOL'):(pv+'%')}</button>)}
         </div>
 
         {swapParams && Number(amount) > 0 && (
-          <div className="lr-details">
-            <div className="lr-drow"><span>Route</span><span className="lr-dval">pump.fun bonding curve</span></div>
+          <div className="ape-details">
+            <div className="ape-drow"><span>Route</span><span className="ape-dval">pump.fun bonding curve</span></div>
             {isBuy ? <>
-              <div className="lr-drow"><span>Platform fee (3%)</span><span className="lr-dval">{formatSol(Number(swapParams.feeLamports)/1e9)} SOL</span></div>
-              <div className="lr-drow"><span>Wallet pays</span><span className="lr-dval">{formatSol(Number(swapParams.totalLamports)/1e9)} SOL</span></div>
-              <div className="lr-drow"><span>You get (est.)</span><span className="lr-dval good">{est&&est.tokens>0?'≈ '+formatTokens(est.tokens)+' '+token.sym:'—'}</span></div>
+              <div className="ape-drow"><span>Platform fee (3%)</span><span className="ape-dval">{formatSol(Number(swapParams.feeLamports)/1e9)} SOL</span></div>
+              <div className="ape-drow"><span>Wallet pays</span><span className="ape-dval">{formatSol(Number(swapParams.totalLamports)/1e9)} SOL</span></div>
+              <div className="ape-drow"><span>You get (est.)</span><span className="ape-dval good">{est&&est.tokens>0?'≈ '+formatTokens(est.tokens)+' '+token.sym:'—'}</span></div>
             </> : <>
-              <div className="lr-drow"><span>Selling</span><span className="lr-dval">{formatTokens(swapParams.tradeTokensUi)} {token.sym} ({Math.min(100,Number(amount)).toFixed(0)}%)</span></div>
-              <div className="lr-drow"><span>Platform fee (3%)</span><span className="lr-dval">≈ {Number(swapParams.feeLamports)/1e9>0?formatSol(Number(swapParams.feeLamports)/1e9):'—'} SOL</span></div>
-              <div className="lr-drow"><span>You get (est.)</span><span className="lr-dval good">{est&&est.sol>0?'≈ '+formatSol(est.sol)+' SOL':'—'}</span></div>
+              <div className="ape-drow"><span>Selling</span><span className="ape-dval">{formatTokens(swapParams.tradeTokensUi)} {token.sym} ({Math.min(100,Number(amount)).toFixed(0)}%)</span></div>
+              <div className="ape-drow"><span>Platform fee (3%)</span><span className="ape-dval">≈ {Number(swapParams.feeLamports)/1e9>0?formatSol(Number(swapParams.feeLamports)/1e9):'—'} SOL</span></div>
+              <div className="ape-drow"><span>You get (est.)</span><span className="ape-dval good">{est&&est.sol>0?'≈ '+formatSol(est.sol)+' SOL':'—'}</span></div>
             </>}
           </div>
         )}
 
-        {error && <div className="lr-banner">{error}</div>}
+        {error && <div className="ape-banner">{error}</div>}
 
-        <button className={'lr-confirm'+(isBuy?'':' sell')} disabled={disabled} onClick={go}>
+        <button className={'ape-confirm'+(isBuy?'':' sell')} disabled={disabled} onClick={go}>
           {confirming ? (isBuy?'Buying…':'Selling…')
             : !amount||Number(amount)<=0 ? (isBuy?'Enter SOL amount':'Enter percentage')
             : !hasFunds ? (isBuy?'Not enough SOL':(ownedUi<=0?('No '+token.sym+' to sell'):'Need ~0.003 SOL for fees'))
             : (isBuy?('🍭 Buy '+amount+' SOL of $'+token.sym):('💸 Sell '+Math.min(100,Number(amount))+'% of $'+token.sym))}
         </button>
-        <p className="lr-tfoot">pump.fun · 3% fee · trading wallet · instant, no pop-up</p>
+        <p className="ape-tfoot">pump.fun · 3% fee · trading wallet · instant, no pop-up</p>
       </div>
     </div>
   );
@@ -904,29 +904,29 @@ function TokenTile(props) {
   };
 
   return (
-    <div className={'lr-tile' + (isFresh?' new':'')} style={{ animationDelay: (idx*0.04)+'s' }} onClick={()=>onOpen(token)}>
-      <div className="lr-face">
+    <div className={'ape-tile' + (isFresh?' new':'')} style={{ animationDelay: (idx*0.04)+'s' }} onClick={()=>onOpen(token)}>
+      <div className="ape-face">
         <TokenFace token={token} />
-        <span className="lr-agep">{token.age || 'new'}</span>
-        <div className="lr-trust">
+        <span className="ape-agep">{token.age || 'new'}</span>
+        <div className="ape-trust">
           <svg width="40" height="40"><circle cx="20" cy="20" r="15.7" fill="none" stroke="rgba(255,255,255,.1)" strokeWidth="3.4" />
             <circle cx="20" cy="20" r="15.7" fill="none" stroke={col} strokeWidth="3.4" strokeLinecap="round" strokeDasharray={C+' '+C} strokeDashoffset={off} /></svg>
           <span className="tnum" style={{color:col}}>{sc}</span><span className="tlbl" style={{color:col}}>Vibe</span>
         </div>
-        {token.bond != null ? <div className="lr-curve"><i style={{width:token.bond+'%'}} /></div> : null}
+        {token.bond != null ? <div className="ape-curve"><i style={{width:token.bond+'%'}} /></div> : null}
       </div>
-      <div className="lr-body">
-        <div className="lr-symrow"><span className="lr-sym">${token.sym}</span>{Number.isFinite(token.change)&&token.change!==0 ? <span className={'lr-chg'+(token.change<0?' down':'')}>{formatPct(token.change)}</span> : null}</div>
-        <div className="lr-name">{token.name}</div>
-        <div className="lr-statline"><span className="price">{formatPrice(token.price)}</span>·<span>Liq <b>{token.liquidity>0?'$'+format(token.liquidity):'—'}</b></span></div>
-        <button className={'lr-ape'+(busy?' filled':'')} disabled={busy} onClick={ape}>
-          {busy ? <><span className="lr-spinner" /> Aping…</> : <><span className="b">⚡</span> Ape {quickAmount} ◎</>}
-          {Array.from({length:coins}).map((_,i)=><span key={i} className="lr-coinfx" style={{'--cx':((Math.random()-.5)*70)+'px',animationDelay:(i*.05)+'s'}}>🪙</span>)}
+      <div className="ape-body">
+        <div className="ape-symrow"><span className="ape-sym">${token.sym}</span>{Number.isFinite(token.change)&&token.change!==0 ? <span className={'ape-chg'+(token.change<0?' down':'')}>{formatPct(token.change)}</span> : null}</div>
+        <div className="ape-name">{token.name}</div>
+        <div className="ape-statline"><span className="price">{formatPrice(token.price)}</span>·<span>Liq <b>{token.liquidity>0?'$'+format(token.liquidity):'—'}</b></span></div>
+        <button className={'ape-ape'+(busy?' filled':'')} disabled={busy} onClick={ape}>
+          {busy ? <><span className="ape-spinner" /> Aping…</> : <><span className="b">⚡</span> Ape {quickAmount} ◎</>}
+          {Array.from({length:coins}).map((_,i)=><span key={i} className="ape-coinfx" style={{'--cx':((Math.random()-.5)*70)+'px',animationDelay:(i*.05)+'s'}}>🪙</span>)}
         </button>
         {ownedUi > 0 ? (
           <>
-            <div className="lr-owned"><span>You own</span><b>{formatTokens(ownedUi)}</b></div>
-            <div className="lr-sells">{sellPresets.map(p => <button key={p} className="lr-sellbtn" disabled={busy} onClick={e=>{e.stopPropagation(); onSell(token, p);}}>{p===100?'All':p+'%'}</button>)}</div>
+            <div className="ape-owned"><span>You own</span><b>{formatTokens(ownedUi)}</b></div>
+            <div className="ape-sells">{sellPresets.map(p => <button key={p} className="ape-sellbtn" disabled={busy} onClick={e=>{e.stopPropagation(); onSell(token, p);}}>{p===100?'All':p+'%'}</button>)}</div>
           </>
         ) : null}
       </div>
@@ -1054,8 +1054,8 @@ export default function Ape() {
     try {
       const sim = await connection.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true, commitment: 'processed' });
       simLogs = (sim && sim.value && sim.value.logs) || null;
-      if (sim && sim.value && sim.value.err) { console.error('[lr-sim]', JSON.stringify(sim.value.err)); throw new Error(describeSimLogs(simLogs, JSON.stringify(sim.value.err))); }
-    } catch (simErr) { if (simErr instanceof Error && /sim failed/i.test(simErr.message)) throw simErr; console.warn('[lr-sim] skip', simErr && simErr.message); }
+      if (sim && sim.value && sim.value.err) { console.error('[ape-sim]', JSON.stringify(sim.value.err)); throw new Error(describeSimLogs(simLogs, JSON.stringify(sim.value.err))); }
+    } catch (simErr) { if (simErr instanceof Error && /sim failed/i.test(simErr.message)) throw simErr; console.warn('[ape-sim] skip', simErr && simErr.message); }
 
     // sign locally — INSTANT, no popup
     tx.sign([wallet.keypair]);
@@ -1170,50 +1170,50 @@ export default function Ape() {
   const pokeMascot = () => { setBubble(mascotLines[Math.floor(Math.random()*mascotLines.length)]); setBubbleShown(true); setTimeout(()=>setBubbleShown(false), 3500); };
 
   return (
-    <div className="lr-root">
-      <div className="lr-app">
-        <div className="lr-top">
-          <div className="lr-brand" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
-            <div className="lr-radar" />
-            <span className="lr-bname">wonderland<span className="sl">//</span><span className="ra">radar</span></span>
+    <div className="ape-root">
+      <div className="ape-app">
+        <div className="ape-top">
+          <div className="ape-brand" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
+            <div className="ape-radar" />
+            <span className="ape-bname">wonderland<span className="sl">//</span><span className="ra">radar</span></span>
           </div>
-          <div className="lr-wbtn" onClick={() => setWalletOpen(true)}>
-            <span className="lr-wdot" /><span className="lr-sol">◎</span> <b>{formatSol((solBalance && solBalance.uiAmount) || 0)}</b>
-            {!wallet.backedUp ? <span className="lr-nudge" title="Back up your wallet" /> : null}
+          <div className="ape-wbtn" onClick={() => setWalletOpen(true)}>
+            <span className="ape-wdot" /><span className="ape-sol">◎</span> <b>{formatSol((solBalance && solBalance.uiAmount) || 0)}</b>
+            {!wallet.backedUp ? <span className="ape-nudge" title="Back up your wallet" /> : null}
           </div>
         </div>
 
-        <div className="lr-qbar">
-          <span className="lr-qlabel"><span className="b">⚡</span>Quick buy</span>
-          {buyPresets.map(v => <button key={v} className={'lr-qamt'+(v===quickAmount?' active':'')} onClick={()=>setQuickAmount(v)}><span>{v}</span><span className="lr-sol">◎</span></button>)}
-          <button className="lr-qedit" onClick={()=>setPresetsOpen(true)}>✎</button>
-          <span className="lr-qinstant"><span className="d" />INSTANT</span>
+        <div className="ape-qbar">
+          <span className="ape-qlabel"><span className="b">⚡</span>Quick buy</span>
+          {buyPresets.map(v => <button key={v} className={'ape-qamt'+(v===quickAmount?' active':'')} onClick={()=>setQuickAmount(v)}><span>{v}</span><span className="ape-sol">◎</span></button>)}
+          <button className="ape-qedit" onClick={()=>setPresetsOpen(true)}>✎</button>
+          <span className="ape-qinstant"><span className="d" />INSTANT</span>
         </div>
 
         {moon.length > 0 && (
-          <div className="lr-ribbon">
-            <span className="lr-rlbl">🚀 Mooning</span>
-            {moon.map(t => <span key={t.mint} className="lr-rchip" onClick={()=>setTradeOpen({ token: t, mode: 'buy' })}>{t.emoji} ${t.sym} <span className="up">{formatPct(t.change)}</span></span>)}
+          <div className="ape-ribbon">
+            <span className="ape-rlbl">🚀 Mooning</span>
+            {moon.map(t => <span key={t.mint} className="ape-rchip" onClick={()=>setTradeOpen({ token: t, mode: 'buy' })}>{t.emoji} ${t.sym} <span className="up">{formatPct(t.change)}</span></span>)}
           </div>
         )}
 
-        <div className="lr-hero">
+        <div className="ape-hero">
           <h1>just <span className="g">hatched</span> 🥚</h1>
-          <div className="lr-meta"><span className={'live'+(recentError?' warn':'')} />{recentLoading?'syncing…':recentError?'feed down':<>{freshTokens.length} fresh · tap to ape</>}</div>
+          <div className="ape-meta"><span className={'live'+(recentError?' warn':'')} />{recentLoading?'syncing…':recentError?'feed down':<>{freshTokens.length} fresh · tap to ape</>}</div>
         </div>
 
-        <div className="lr-controls">
-          <button className={'lr-seg'+(lane==='fresh'?' active':'')} onClick={()=>setLane('fresh')}>🐣 Just hatched</button>
-          <button className={'lr-seg'+(lane==='recent'?' active':'')} onClick={()=>setLane('recent')}>🌈 On radar</button>
-          <span className="lr-seg-div" />
-          <button className={'lr-seg'+(sortBy==='newest'?' active':'')} onClick={()=>setSortBy('newest')}>🆕 Freshest</button>
-          <button className={'lr-seg'+(sortBy==='trust'?' active':'')} onClick={()=>setSortBy('trust')}>🛡️ Safest</button>
-          <button className={'lr-seg'+(sortBy==='volume'?' active':'')} onClick={()=>setSortBy('volume')}>🔥 Loudest</button>
+        <div className="ape-controls">
+          <button className={'ape-seg'+(lane==='fresh'?' active':'')} onClick={()=>setLane('fresh')}>🐣 Just hatched</button>
+          <button className={'ape-seg'+(lane==='recent'?' active':'')} onClick={()=>setLane('recent')}>🌈 On radar</button>
+          <span className="ape-seg-div" />
+          <button className={'ape-seg'+(sortBy==='newest'?' active':'')} onClick={()=>setSortBy('newest')}>🆕 Freshest</button>
+          <button className={'ape-seg'+(sortBy==='trust'?' active':'')} onClick={()=>setSortBy('trust')}>🛡️ Safest</button>
+          <button className={'ape-seg'+(sortBy==='volume'?' active':'')} onClick={()=>setSortBy('volume')}>🔥 Loudest</button>
         </div>
 
-        <div className="lr-grid">
+        <div className="ape-grid">
           {filtered.length === 0 ? (
-            <div className="lr-empty">
+            <div className="ape-empty">
               <span className="e">{lane==='fresh'?'🥚':'🍿'}</span>
               {recentLoading ? <><b>Warming up the radar…</b><div className="sub">Pulling fresh pump.fun launches.</div></>
                 : recentError ? <><b>Feed offline</b><div className="sub">Retrying automatically.</div><div className="err">{recentError}</div></>
@@ -1227,30 +1227,30 @@ export default function Ape() {
         </div>
       </div>
 
-      {bubbleShown ? <div className="lr-mbubble">{bubble}</div> : null}
-      <div className="lr-mascot" onClick={pokeMascot}><span className="e">🐰</span></div>
+      {bubbleShown ? <div className="ape-mbubble">{bubble}</div> : null}
+      <div className="ape-mascot" onClick={pokeMascot}><span className="e">🐰</span></div>
 
       {presetsOpen ? <PresetsModal buyPresets={buyPresets} setBuyPresets={setBuyPresets} sellPresets={sellPresets} setSellPresets={setSellPresets} onClose={()=>setPresetsOpen(false)} /> : null}
       {walletOpen ? <WalletDrawer wallet={wallet} solBalance={solBalance} solPrice={solPrice} onWithdraw={onWithdraw} busy={withdrawing} onClose={()=>setWalletOpen(false)} /> : null}
       {tradeOpen ? <TradeSheet token={tradeOpen.token} initialMode={tradeOpen.mode} onClose={()=>setTradeOpen(null)} onConfirm={onSheetConfirm}
         buyPresets={buyPresets} sellPresets={sellPresets} solBalance={solBalance} tokenBalance={balances[tradeOpen.token.mint]} solPrice={solPrice} /> : null}
 
-      <div className="lr-toasts">
+      <div className="ape-toasts">
         {toasts.map(t => (
-          <div key={t.id} className={'lr-toast '+t.kind}>
+          <div key={t.id} className={'ape-toast '+t.kind}>
             <span className="em">{t.emoji}</span>
             <div className="tb">{t.body}</div>
             <div className="ta">
-              {t.solscan ? <a className="lr-taction" href={t.solscan} target="_blank" rel="noreferrer">VIEW</a> : null}
-              {t.tweetText ? <button className="lr-taction tw" onClick={()=>openTwitterShare(t.tweetText, t.shareUrl)}><svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>SHARE</button> : null}
+              {t.solscan ? <a className="ape-taction" href={t.solscan} target="_blank" rel="noreferrer">VIEW</a> : null}
+              {t.tweetText ? <button className="ape-taction tw" onClick={()=>openTwitterShare(t.tweetText, t.shareUrl)}><svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>SHARE</button> : null}
             </div>
           </div>
         ))}
       </div>
 
       {confettiKey > 0 && (
-        <div className="lr-confetti" key={confettiKey}>
-          {confettiPieces.map(p => <div key={p.i} className="lr-cpiece" style={{ background: p.color, animationDelay: p.delay+'s', '--dx': p.dx+'px', '--dy': p.dy+'px', '--dr': p.dr+'deg' }} />)}
+        <div className="ape-confetti" key={confettiKey}>
+          {confettiPieces.map(p => <div key={p.i} className="ape-cpiece" style={{ background: p.color, animationDelay: p.delay+'s', '--dx': p.dx+'px', '--dy': p.dy+'px', '--dr': p.dr+'deg' }} />)}
         </div>
       )}
     </div>
