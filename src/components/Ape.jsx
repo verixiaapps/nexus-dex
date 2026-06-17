@@ -1150,7 +1150,20 @@ export default function Ape() {
   const activeList = lane === 'fresh' ? freshTokens : recentTokens;
   const filtered = useMemo(() => {
     let l = activeList.slice();
-    const seen = new Set(); l = l.filter(t => { if (!t || !t.mint || seen.has(t.mint)) return false; seen.add(t.mint); return true; });
+    // Dedup by mint AND by sym|name|liquidity — the feed sometimes returns the
+    // same token twice, and copycat scams use identical symbols/names. The
+    // composite key catches both cases.
+    const seen = new Set();
+    const seenAlt = new Set();
+    l = l.filter(t => {
+      if (!t || !t.mint) return false;
+      if (seen.has(t.mint)) return false;
+      const altKey = (t.sym || '') + '|' + (t.name || '') + '|' + (t.liquidity || 0);
+      if (seenAlt.has(altKey)) return false;
+      seen.add(t.mint);
+      seenAlt.add(altKey);
+      return true;
+    });
     if (sortBy === 'newest') l = l.sort((a,b)=>(a.ageMs||0)-(b.ageMs||0));
     else if (sortBy === 'volume') l = l.sort((a,b)=>(b.volume24h||0)-(a.volume24h||0));
     else if (sortBy === 'trust') l = l.sort((a,b)=>riskRead(b).score-riskRead(a).score);
