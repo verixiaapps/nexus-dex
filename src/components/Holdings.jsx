@@ -263,21 +263,14 @@ const MIN_TOKEN_VALUE_USD = 1;
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
 
 // =====================================================================
-// RPC — matches the LaunchRadar / SwapWidget pattern: a single
-// `new Connection(RPC_POOL[0], 'confirmed')`. The xstock route never
-// touches Connection — it uses /api/solana-rpc directly.
+// RPC — dRPC single endpoint, no fallbacks.
+// Server-side /embed/config.js builds `https://lb.drpc.live/solana/${DRPC_API_KEY}`
+// and injects it as window.__VERIXIA_CONFIG__.rpc. Both Connection-based
+// drawers (Jupiter, Pumpfun) and /api/solana-rpc proxy calls (xstock,
+// fetchPortfolio) all route to the same dRPC endpoint as a result.
 // =====================================================================
 const RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
-const RPC_POOL = [
-  RUNTIME_CFG.rpc,
-  (typeof process !== 'undefined' && process.env && process.env.REACT_APP_SOLANA_RPC) || '',
-  (typeof process !== 'undefined' && process.env && process.env.REACT_APP_ALCHEMY_RPC) || '',
-  'https://solana-rpc.publicnode.com',
-  'https://solana.drpc.org',
-  'https://rpc.ankr.com/solana',
-  'https://api.mainnet-beta.solana.com',
-].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
-const RPC_URL = RPC_POOL[0];
+const RPC_URL = RUNTIME_CFG.rpc || '';
 
 // =====================================================================
 // BRAND TOKENS (xStock route)
