@@ -116,6 +116,17 @@ const HP_CSS = `
 .hp-search:focus{border-color:var(--lav);box-shadow:0 0 0 4px rgba(183,148,246,.10)}
 .hp-search::placeholder{color:var(--ink-3)}
 
+.hp-moonpay{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:12px 22px 0;padding:13px 16px 13px 18px;border-radius:16px;background:linear-gradient(135deg,rgba(160,231,255,.32),rgba(127,255,212,.28));border:1px solid rgba(127,255,212,.45);color:var(--ink);text-decoration:none;box-shadow:0 6px 16px rgba(127,255,212,.18);transition:transform .15s,box-shadow .15s;position:relative;z-index:2;-webkit-tap-highlight-color:transparent}
+.hp-moonpay:hover{transform:translateY(-1px);box-shadow:0 10px 20px rgba(127,255,212,.25)}
+.hp-moonpay:active{transform:translateY(0)}
+.hp-moonpay-left{display:flex;align-items:center;gap:11px;min-width:0}
+.hp-moonpay-icon{width:34px;height:34px;border-radius:50%;flex-shrink:0;display:grid;place-items:center;background:linear-gradient(135deg,#B794F6,#7FFFD4);color:#fff;font-family:"Instrument Serif",serif;font-size:18px;line-height:1;box-shadow:0 2px 6px rgba(183,148,246,.35)}
+.hp-moonpay-text{min-width:0}
+.hp-moonpay-title{font-family:"Instrument Serif",serif;font-size:16px;line-height:1.05;letter-spacing:-.01em;color:var(--ink)}
+.hp-moonpay-title em{font-style:italic;background:linear-gradient(90deg,#B794F6,#7FFFD4);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.hp-moonpay-sub{font-family:"JetBrains Mono",monospace;font-size:9px;font-weight:700;color:var(--ink-2);letter-spacing:1.2px;text-transform:uppercase;margin-top:3px}
+.hp-moonpay-arrow{flex-shrink:0;font-size:18px;color:var(--ink);font-family:initial;line-height:1}
+
 .hp-sort-head{display:flex;justify-content:space-between;align-items:center;padding:24px 26px 12px;position:relative;z-index:2}
 .hp-sort-label{font-size:10px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;background:linear-gradient(90deg,#FF8FBE,#B794F6);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
 .hp-sort-meta{font-size:10px;color:var(--ink-2);font-weight:600;letter-spacing:.8px}
@@ -267,11 +278,13 @@ const ATA_PROGRAM_ID         = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25ef
 const SOL_RESERVE = 0.01;
 
 // =====================================================================
-// RPC — matches LaunchRadar / SwapWidget exactly. `new Connection(...)`
-// must point at a real public RPC node, not the `/api/solana-rpc` proxy,
-// because `confirmTransaction` opens a WebSocket subscription. The proxy
-// is still used for the portfolio batch read (`fetchPortfolio`), which
-// is fine since that's a one-shot HTTP POST.
+// RPC — matches the working files exactly:
+//   • jupiter route → `new Connection(RPC_POOL[0], 'confirmed')`, single
+//     RPC (same as SwapWidget.jsx / MemeWonderland TradeSheet.handleSwap).
+//   • pumpfun route → same single Connection (same as LaunchRadar.jsx
+//     executeSwap).
+//   • xstock route → raw fetch to /api/solana-rpc for every call (same
+//     as Stocks.jsx TradeModal.handleSubmit). See xstock helpers below.
 // =====================================================================
 const RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
 const RPC_POOL = [
@@ -316,9 +329,10 @@ function getTokenRoute(token) {
   if (!token?.mint) return 'jupiter';
   if (BRAND_TOKENS[token.mint]) return 'xstock';
   if (isPumpFunMint(token.mint)) return 'pumpfun';
-  // No Jupiter price → almost certainly an ungraduated pump.fun bonding-curve
-  // token whose mint doesn't end in "pump". Route through PumpPortal.
-  if (token.hasPrice === false) return 'pumpfun';
+  // Default everything else to jupiter. If a token genuinely has no
+  // Jupiter route, the quote endpoint returns a clear "no route"
+  // message — which is much better than blindly calling PumpPortal
+  // for non-pump tokens and getting "Bad Request".
   return 'jupiter';
 }
 
@@ -697,6 +711,155 @@ function deserializeJupInstructionX(ix) {
   });
 }
 
+// ── ALT + blockhash + assemble + simulate + send — ALL via /api/solana-rpc
+// (copied verbatim from Stocks.jsx — the xstock path never touches Connection).
+async function fetchLookupTableAccountsX(altAddresses) {
+  if (!altAddresses?.length) return [];
+  const res = await fetchWithTimeout('/api/solana-rpc', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'getMultipleAccounts',
+      params: [altAddresses, { encoding: 'base64', commitment: 'confirmed' }],
+    }),
+  }, 10_000);
+  const json = await res.json();
+  const values = json?.result?.value || [];
+  const out = [];
+  for (let i = 0; i < altAddresses.length; i++) {
+    const acc = values[i];
+    if (!acc?.data?.[0]) continue;
+    const dataBytes = Uint8Array.from(atob(acc.data[0]), c => c.charCodeAt(0));
+    out.push(new AddressLookupTableAccount({
+      key:   new PublicKey(altAddresses[i]),
+      state: AddressLookupTableAccount.deserialize(dataBytes),
+    }));
+  }
+  return out;
+}
+
+async function fetchTokenBalanceX({ ownerPubkey, mint, decimals }) {
+  const res = await fetchWithTimeout('/api/solana-rpc', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'getTokenAccountsByOwner',
+      params: [ ownerPubkey, { mint }, { encoding: 'jsonParsed', commitment: 'confirmed' } ],
+    }),
+  }, 8_000);
+  const json = await res.json();
+  const accs = json?.result?.value || [];
+  let atomic = 0n;
+  for (const a of accs) {
+    const raw = a?.account?.data?.parsed?.info?.tokenAmount?.amount;
+    if (raw) atomic += BigInt(raw);
+  }
+  const ui = Number(atomic) / 10 ** decimals;
+  return { atomic, ui };
+}
+
+async function assembleSwapTxX({ swapInstructions, feeIxs, userPublicKey, prependFee }) {
+  const altAddrs = swapInstructions.addressLookupTableAddresses || [];
+  const altAccounts = await fetchLookupTableAccountsX(altAddrs);
+
+  const computeBudgetIxs = (swapInstructions.computeBudgetInstructions || []).map(deserializeJupInstructionX);
+  const setupIxs         = (swapInstructions.setupInstructions || []).map(deserializeJupInstructionX);
+  const swapIx           = swapInstructions.swapInstruction ? deserializeJupInstructionX(swapInstructions.swapInstruction) : null;
+  const cleanupIx        = swapInstructions.cleanupInstruction ? deserializeJupInstructionX(swapInstructions.cleanupInstruction) : null;
+
+  const allIxs = [];
+  for (const ix of computeBudgetIxs) allIxs.push(ix);
+  if (prependFee) for (const ix of feeIxs) allIxs.push(ix);
+  for (const ix of setupIxs)        allIxs.push(ix);
+  if (swapIx)    allIxs.push(swapIx);
+  if (cleanupIx) allIxs.push(cleanupIx);
+  if (!prependFee) for (const ix of feeIxs) allIxs.push(ix);
+
+  const bhRes = await fetchWithTimeout('/api/solana-rpc', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'getLatestBlockhash',
+      params: [{ commitment: 'confirmed' }],
+    }),
+  }, 8_000);
+  const bhJson = await bhRes.json();
+  const blockhash = bhJson?.result?.value?.blockhash;
+  if (!blockhash) throw new Error('Could not fetch recent blockhash');
+
+  const message = new TransactionMessage({
+    payerKey:        new PublicKey(userPublicKey),
+    recentBlockhash: blockhash,
+    instructions:    allIxs,
+  }).compileToV0Message(altAccounts);
+
+  return new VersionedTransaction(message);
+}
+
+const JUPITER_ERROR_CODES = {
+  6000: 'No swap route available',
+  6001: 'Price moved — try a slightly different amount',
+  6002: 'Routing calculation error — try again',
+  6003: 'Configuration error',
+  6004: 'Invalid slippage value',
+  6005: 'Insufficient liquidity along route',
+  6006: 'Invalid input mint',
+  6007: 'Invalid output mint',
+  6008: 'Account setup error',
+  6009: 'Order constraint not supported',
+  6010: 'Invalid route plan',
+  6011: 'Invalid referral authority',
+  6012: 'Token ledger mismatch',
+  6013: 'Invalid token ledger',
+  6014: 'Token program incompatibility — this brand may need different routing',
+};
+
+function parseSimErrorX(err, logs) {
+  if (!err) return 'Transaction would fail';
+  if (typeof err === 'string') return err;
+  if (err?.InstructionError) {
+    const [idx, detail] = err.InstructionError;
+    if (detail && typeof detail === 'object' && 'Custom' in detail) {
+      const code = Number(detail.Custom);
+      const known = JUPITER_ERROR_CODES[code];
+      if (known) return known;
+      return `Program error 0x${code.toString(16)} at instruction ${idx}`;
+    }
+    if (typeof detail === 'string') return `${detail} at instruction ${idx}`;
+  }
+  const arr = Array.isArray(logs) ? logs : [];
+  const errLog = arr.find(l => /error|failed|insufficient|slippage/i.test(String(l)));
+  if (errLog) return String(errLog).slice(0, 140);
+  return 'Trade unavailable — try a different amount or brand';
+}
+
+async function simulateBeforeSignX(serializedTxBase64) {
+  try {
+    const res = await fetchWithTimeout('/api/solana-rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 1, method: 'simulateTransaction',
+        params: [serializedTxBase64, {
+          encoding:               'base64',
+          commitment:             'processed',
+          replaceRecentBlockhash: true,
+          sigVerify:              false,
+        }],
+      }),
+    }, 12_000);
+    const json = await res.json();
+    if (json?.error) return { ok: false, message: json.error.message || 'Simulation RPC error' };
+    const value = json?.result?.value;
+    if (!value)     return { ok: true,  warning: 'No sim result' };
+    if (value.err)  return { ok: false, message: parseSimErrorX(value.err, value.logs) };
+    return { ok: true };
+  } catch (e) {
+    console.warn('[hp-xstock sim]', e?.message || e);
+    return { ok: true, warning: 'Pre-sim unavailable' };
+  }
+}
+
 // Renders a token icon for a given mint. Resolves SOL/USDC to known logos,
 // uses token meta for others, falls back to a colored letter badge.
 function MintIcon({ mint, meta, size = 22 }) {
@@ -774,16 +937,16 @@ function HoldingRow({ token, onBuy, onSell, idx }) {
       </div>
       <div className="hp-h-right">
         <div className="hp-h-value">{val > 0 ? fmtUsd(val) : '—'}</div>
-        <div className="hp-h-actions">
-          {!isSol && (
+        {!isSol && (
+          <div className="hp-h-actions">
             <button type="button" className="hp-act-btn hp-act-buy" onClick={() => onBuy(token)}>
               BUY
             </button>
-          )}
-          <button type="button" className="hp-act-btn hp-act-sell" onClick={() => onSell(token)}>
-            {isSol ? 'SWAP' : 'SELL'}
-          </button>
-        </div>
+            <button type="button" className="hp-act-btn hp-act-sell" onClick={() => onSell(token)}>
+              SELL
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -805,8 +968,11 @@ function TradeDrawer({
   onConnectWallet,
   onTradeComplete,
 }) {
-  // Wallet is passed in from the page (Holdings) so there is a single wallet
-  // source — no second useWallet() here that could disagree with the page.
+  // Single signing wallet for the whole page; passed down to TradeDrawer.
+  // Connection matches SwapWidget / LaunchRadar exactly: single
+  // `new Connection(RPC_POOL[0])`. Used only by jupiter & pumpfun routes.
+  // The xstock route never touches Connection — it uses /api/solana-rpc
+  // directly (Stocks pattern).
   const connection = useMemo(() => new Connection(RPC_URL, 'confirmed'), []);
 
   const isSol = token.mint === SOL_MINT;
@@ -868,22 +1034,23 @@ function TradeDrawer({
     return 0;
   }, [inputMint, solPrice, token.mint, token.price]);
 
-  // USDC balance for xstock BUY
+  // USDC balance for xstock BUY — uses /api/solana-rpc proxy (Stocks pattern).
   const [usdcBalance, setUsdcBalance] = useState(0);
   useEffect(() => {
     if (!isXstock || !publicKey || mode !== 'buy') return;
     let cancelled = false;
     (async () => {
       try {
-        const usdcMintPk = new PublicKey(USDC_SOLANA);
-        const ata = deriveAtaX(publicKey, usdcMintPk, TOKEN_PROGRAM_ID);
-        const acc = await connection.getParsedAccountInfo(ata);
-        const ui = Number(acc?.value?.data?.parsed?.info?.tokenAmount?.uiAmount || 0);
-        if (!cancelled) setUsdcBalance(ui);
+        const r = await fetchTokenBalanceX({
+          ownerPubkey: publicKey.toBase58(),
+          mint:        USDC_SOLANA,
+          decimals:    USDC_DECIMALS,
+        });
+        if (!cancelled) setUsdcBalance(r.ui);
       } catch { if (!cancelled) setUsdcBalance(0); }
     })();
     return () => { cancelled = true; };
-  }, [isXstock, publicKey, mode, connection]);
+  }, [isXstock, publicKey, mode]);
 
   const effInputBalanceUi = (isXstock && mode === 'buy') ? usdcBalance : inputBalanceUi;
 
@@ -1181,7 +1348,8 @@ function TradeDrawer({
     return { sig, latest };
   }, [build, inputMint, inputDecimals, rawAmount, connection, publicKey, signTransaction]);
 
-  // XSTOCK (verbatim from Stocks.jsx TradeModal.handleSubmit)
+  // XSTOCK (verbatim from Stocks.jsx TradeModal.handleSubmit — all RPC
+  // calls go through /api/solana-rpc, no Connection involved).
   const executeXstock = useCallback(async () => {
     const b = build;
     if (!b || b.kind !== 'xstock') throw new Error('No xStock quote.');
@@ -1218,60 +1386,35 @@ function TradeDrawer({
       userPublicKey: publicKey.toBase58(),
     });
 
-    const altAddrs = swapIxs.addressLookupTableAddresses || [];
-    const altAccounts = [];
-    if (altAddrs.length > 0) {
-      const infos = await connection.getMultipleAccountsInfo(altAddrs.map(a => new PublicKey(a)));
-      for (let i = 0; i < altAddrs.length; i++) {
-        if (!infos[i]) continue;
-        altAccounts.push(new AddressLookupTableAccount({
-          key:   new PublicKey(altAddrs[i]),
-          state: AddressLookupTableAccount.deserialize(infos[i].data),
-        }));
-      }
-    }
+    const tx = await assembleSwapTxX({
+      swapInstructions: swapIxs,
+      feeIxs,
+      userPublicKey:    publicKey.toBase58(),
+      prependFee:       mode === 'buy',
+    });
 
-    const computeBudgetIxs = (swapIxs.computeBudgetInstructions || []).map(deserializeJupInstructionX);
-    const setupIxs         = (swapIxs.setupInstructions || []).map(deserializeJupInstructionX);
-    const swapIx           = swapIxs.swapInstruction ? deserializeJupInstructionX(swapIxs.swapInstruction) : null;
-    const cleanupIx        = swapIxs.cleanupInstruction ? deserializeJupInstructionX(swapIxs.cleanupInstruction) : null;
-
-    const allIxs = [];
-    for (const ix of computeBudgetIxs) allIxs.push(ix);
-    if (mode === 'buy') for (const ix of feeIxs) allIxs.push(ix);
-    for (const ix of setupIxs)        allIxs.push(ix);
-    if (swapIx)    allIxs.push(swapIx);
-    if (cleanupIx) allIxs.push(cleanupIx);
-    if (mode === 'sell') for (const ix of feeIxs) allIxs.push(ix);
-
-    const latest = await connection.getLatestBlockhash('confirmed');
-    const message = new TransactionMessage({
-      payerKey:        publicKey,
-      recentBlockhash: latest.blockhash,
-      instructions:    allIxs,
-    }).compileToV0Message(altAccounts);
-    const tx = new VersionedTransaction(message);
-
-    try {
-      const sim = await connection.simulateTransaction(tx, {
-        replaceRecentBlockhash: true,
-        sigVerify: false,
-      });
-      if (sim.value.err) {
-        throw new Error(describeSimLogs(sim.value.logs, JSON.stringify(sim.value.err)));
-      }
-    } catch (simErr) {
-      if (simErr?.message && /sim failed|insufficient|slippage|expired/i.test(simErr.message)) throw simErr;
-      console.warn('[hp xstock sim non-fatal]', simErr);
-    }
+    const serializedForSim = btoa(String.fromCharCode(...tx.serialize()));
+    const sim = await simulateBeforeSignX(serializedForSim);
+    if (!sim.ok) throw new Error(sim.message || 'Simulation failed');
 
     const signed = await signTransaction(tx);
-    const sig = await connection.sendRawTransaction(signed.serialize(), {
-      skipPreflight: true,
-      maxRetries: 5,
-    });
-    return { sig, latest };
-  }, [build, mode, rawAmount, connection, publicKey, signTransaction]);
+
+    const serialized = btoa(String.fromCharCode(...signed.serialize()));
+    const submitRes = await fetchWithTimeout('/api/solana-rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 1, method: 'sendTransaction',
+        params: [serialized, { encoding: 'base64', skipPreflight: true, preflightCommitment: 'confirmed', maxRetries: 5 }],
+      }),
+    }, 20_000);
+    const submitJson = await submitRes.json();
+    if (submitJson.error) throw new Error(submitJson.error.message || 'Submit failed');
+
+    const sig = submitJson.result;
+    // No blockhash for poll-style confirm — caller will poll via getSignatureStatus.
+    return { sig, latest: null };
+  }, [build, mode, rawAmount, publicKey, signTransaction]);
 
   // PUMP.FUN (verbatim from LaunchRadar executeSwap)
   const executePumpfun = useCallback(async () => {
@@ -1369,7 +1512,12 @@ function TradeDrawer({
 
       const { sig, latest, raw } = res;
 
-      // Confirm with rebroadcast for pump.fun, standard race+poll for others
+      // Confirmation strategy:
+      //   pumpfun: poll + rebroadcast (LaunchRadar)
+      //   xstock:  poll signature status only (Stocks doesn't await confirm
+      //            in its handleSubmit — it returns success on submit;
+      //            here we wait briefly so the UI shows the right state).
+      //   jupiter: confirmTransaction with polling fallback (SwapWidget)
       let confirmed = false;
       if (build.kind === 'pumpfun') {
         let onchainErr = null;
@@ -1391,6 +1539,30 @@ function TradeDrawer({
         }
         if (onchainErr) {
           throw new Error('Trade failed on-chain — price likely moved past slippage.');
+        }
+      } else if (build.kind === 'xstock') {
+        // Poll-only confirm via /api/solana-rpc (Stocks doesn't even await
+        // this — but we do so the UI doesn't lie about pending state).
+        const deadline = Date.now() + 30_000;
+        while (Date.now() < deadline) {
+          try {
+            const r = await fetchWithTimeout('/api/solana-rpc', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                jsonrpc: '2.0', id: 1, method: 'getSignatureStatuses',
+                params: [[sig], { searchTransactionHistory: true }],
+              }),
+            }, 6_000);
+            const j = await r.json();
+            const st = j?.result?.value?.[0];
+            if (st?.err) throw new Error('Swap tx failed on-chain.');
+            const cs = st?.confirmationStatus;
+            if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
+          } catch (e) {
+            if (/failed on-chain/i.test(String(e.message))) throw e;
+          }
+          await new Promise(r => setTimeout(r, 2000));
         }
       } else {
         try {
@@ -1872,6 +2044,25 @@ export default function Holdings({ onConnectWallet }) {
             </span>
           </div>
         </div>
+
+        <a
+          className="hp-moonpay"
+          href={
+            'https://buy.moonpay.com/?defaultCurrencyCode=sol&baseCurrencyCode=usd' +
+            (walletAddress ? '&walletAddress=' + encodeURIComponent(walletAddress) : '')
+          }
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <span className="hp-moonpay-left">
+            <span className="hp-moonpay-icon">◎</span>
+            <span className="hp-moonpay-text">
+              <span className="hp-moonpay-title">Buy <em>Solana</em> with USD</span>
+              <span className="hp-moonpay-sub">via MoonPay · card or bank</span>
+            </span>
+          </span>
+          <span className="hp-moonpay-arrow">→</span>
+        </a>
 
         <div className="hp-search-wrap">
           <input
