@@ -104,6 +104,8 @@ crypto-exchange-alternative
 crypto-exchange-without-kyc
 crypto-freedom
 crypto-freedom-exchange
+crypto-gems
+crypto-launch-tracker
 crypto-liquidity
 crypto-liquidity-app
 crypto-marketplace
@@ -139,6 +141,8 @@ dexscreener-vs-gmgn-which-is-better
 digital-asset-exchange
 digital-assets
 dogecoin-exchange
+early-crypto-projects
+emerging-crypto-tokens
 exchange-without-account
 fast-crypto-swaps
 fast-stablecoin-bridge
@@ -165,6 +169,8 @@ gmgn-vs-bullx-slippage
 gmgn-vs-bullx-speed
 gmgn-vs-bullx-which-is-better
 helium-exchange
+hidden-gem-crypto
+hot-crypto-tokens
 injective-exchange
 instant-crypto-swaps
 is-slippage-normal-when-swapping-act
@@ -179,6 +185,7 @@ is-slippage-normal-when-swapping-render
 kaspa-exchange
 liquidity-pools
 liquidity-provider
+low-cap-crypto-tokens
 low-fee-crypto-swaps
 lowest-fee-ada-swap
 lowest-fee-btc-swap
@@ -204,12 +211,14 @@ meme-coin-tracker
 meme-coin-trading
 meme-token-exchange
 meme-token-swaps
+micro-cap-crypto-tokens
 mkr-exchange
 move-crypto-between-chains
 multi-chain-token-exchange
 multichain-swaps
 multichain-trading
 near-exchange
+new-crypto-launches
 new-crypto-tokens
 new-meme-coins
 new-solana-tokens
@@ -1395,6 +1404,7 @@ swap-wif-to-w
 swap-wif-to-wen
 swap-without-kyc
 token-exchange
+token-launches
 token-marketplace
 token-swaps
 top-meme-coins
