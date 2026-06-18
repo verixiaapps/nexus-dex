@@ -9,7 +9,15 @@ const bs58: any = (bs58module as any).default || bs58module;
 
 const PROGRAM_ID = new PublicKey("71bEAUToad7j8k8As9LwsGWBYTLxVJoP2SBNB3S3RLHs");
 const SUPER_ADMIN = new PublicKey("GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA");
-const RPC_URL = process.env.RPC_URL || "https://api.devnet.solana.com";
+
+// RPC — dRPC devnet, no fallback. Set DRPC_API_KEY in Railway.
+const DRPC_API_KEY = process.env.DRPC_API_KEY;
+if (!DRPC_API_KEY) {
+  console.error("DRPC_API_KEY env var required (no fallback configured)");
+  process.exit(1);
+}
+const RPC_URL = `https://lb.drpc.live/solana-devnet/${DRPC_API_KEY}`;
+
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || "10000");
 const GAP_SECONDS = 30;
 const PRICE_URL = "https://api.coinbase.com/v2/prices/SOL-USD/spot";
@@ -84,7 +92,7 @@ async function endRound(program: any, configPda: PublicKey, cranker: Keypair, ep
 async function main() {
  const cranker = loadKeypair();
  console.log("[crank] Cranker:", cranker.publicKey.toBase58());
- console.log("[crank] RPC:", RPC_URL);
+ console.log("[crank] RPC: dRPC solana-devnet (key set)");
 
  const connection = new Connection(RPC_URL, "confirmed");
  const wallet = new anchor.Wallet(cranker);
