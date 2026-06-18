@@ -35,6 +35,13 @@ const NODE_SCHEME_MAP = {
   events:  require.resolve('events'),
 };
 
+// Route every REACT_APP_DRPC_RPC_URL reference in the bundle to the same-origin
+// /api/solana-rpc proxy that already exists in server.js. This removes the
+// build-time env var dependency entirely — the bundle no longer needs Railway
+// to have REACT_APP_DRPC_RPC_URL set, and there's no CORS issue because the
+// browser is just hitting its own origin.
+const RPC_PROXY_EXPR = '(typeof window !== "undefined" ? (window.location.origin + "/api/solana-rpc") : "")';
+
 module.exports = function override(config) {
   config.resolve = config.resolve || {};
 
@@ -56,6 +63,9 @@ module.exports = function override(config) {
     new webpack.NormalModuleReplacementPlugin(/^node:(.+)$/, (resource) => {
       const mod = resource.request.replace(/^node:/, '');
       if (NODE_SCHEME_MAP[mod]) resource.request = NODE_SCHEME_MAP[mod];
+    }),
+    new webpack.DefinePlugin({
+      'process.env.REACT_APP_DRPC_RPC_URL': RPC_PROXY_EXPR,
     }),
   ]);
 
