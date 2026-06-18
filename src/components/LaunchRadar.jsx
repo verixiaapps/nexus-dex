@@ -386,10 +386,14 @@ const DEFAULT_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
 const DEFAULT_SELL_PRESETS = [25, 50, 100];
 
 // ── RPC ──────────────────────────────────────────────────────────────
-// Single dRPC endpoint. No fallbacks.
-// REACT_APP_DRPC_RPC_URL holds the FULL URL with key embedded.
-const RPC_URL = process.env.REACT_APP_DRPC_RPC_URL || '';
+// Same-origin server proxy → Alchemy mainnet. The server (server.js)
+// holds the Alchemy API key and forwards via /api/solana-rpc. All
+// Connection instances in this file route through the proxy.
+const RPC_URL = (typeof window !== 'undefined' && window.location)
+  ? window.location.origin + '/api/solana-rpc'
+  : 'http://localhost:3001/api/solana-rpc';
 const BAL_COMMITMENT = 'processed';
+
 
 const _connCache = new Map();
 const getConn = (commitment, url = RPC_URL) => {
