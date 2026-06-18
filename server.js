@@ -1,5 +1,5 @@
 require('dotenv').config();
- 
+
 const express   = require('express');
 const cors      = require('cors');
 const path      = require('path');
@@ -83,9 +83,9 @@ const JUPITER_LEGACY_BASE   = (process.env.JUPITER_QUOTE_BASE || 'https://api.ju
 const JUPITER_TOKENS_BASE   = 'https://lite-api.jup.ag/tokens/v2';
 const JUPITER_PRICE_BASE    = 'https://lite-api.jup.ag/price/v3';
 
-// Solana RPC — dRPC. Set DRPC_API_KEY in Railway. No fallbacks anywhere.
-const DRPC_API_KEY = process.env.DRPC_API_KEY || '';
-const DRPC_RPC_URL = DRPC_API_KEY ? `https://lb.drpc.live/solana/${DRPC_API_KEY}` : '';
+// Solana RPC — dRPC. Set DRPC_RPC_URL in Railway to the FULL URL (api key
+// already embedded). No URL construction here, no fallbacks anywhere.
+const DRPC_RPC_URL = (process.env.DRPC_RPC_URL || '').trim();
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 
@@ -135,10 +135,11 @@ async function safeJson(response) {
 function scrubSecrets(s) {
   if (s == null) return '';
   return String(s)
-    .replace(/api-key=[^&\s"']+/gi,             'api-key=***')
-    .replace(/\/solana\/[A-Za-z0-9_-]+/g,       '/solana/***')   // dRPC URLs
-    .replace(/x-api-key["':\s]+[^&\s"',}]+/gi,  'x-api-key=***')
-    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi,      'Bearer ***');
+    .replace(/api-key=[^&\s"']+/gi,                       'api-key=***')
+    // dRPC URLs — match any path under lb.drpc.live (covers /solana/, /lambda/, etc.)
+    .replace(/(lb\.drpc\.(?:live|org)\/)[^\s"'?]+/gi,     '$1***/***')
+    .replace(/x-api-key["':\s]+[^&\s"',}]+/gi,            'x-api-key=***')
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi,                'Bearer ***');
 }
 
 function logError(tag, err) {
@@ -794,6 +795,11 @@ app.get('/api/whale-events', async (req, res) => {
 
 /* ========================================================================
  * Solana RPC — dRPC (single endpoint, no fallbacks)
+ *
+ * dRPC's Solana endpoint doesn't accept batched JSON-RPC arrays. The client
+ * (GetStarted.jsx portfolio load) sends 3 calls per refresh as an array, so
+ * we unroll batches into parallel single requests, then reassemble the
+ * response as an array. Single requests pass through untouched.
  * ===================================================================== */
 const RPC_TIMEOUT_MS = 10_000;
 
@@ -801,12 +807,39 @@ function getSolanaRpcUrl() {
   return DRPC_RPC_URL;
 }
 
+async function _drpcSingle(single) {
+  const id = single?.id ?? null;
+  try {
+    const r = await fetchWithTimeout(
+      DRPC_RPC_URL,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(single) },
+      RPC_TIMEOUT_MS,
+    );
+    const text = await r.text();
+    if (!r.ok) {
+      return { jsonrpc: '2.0', id, error: { code: r.status, message: 'dRPC HTTP ' + r.status + ': ' + text.slice(0, 200) } };
+    }
+    try { return JSON.parse(text); }
+    catch { return { jsonrpc: '2.0', id, error: { code: -32700, message: 'Non-JSON response from upstream' } }; }
+  } catch (e) {
+    return { jsonrpc: '2.0', id, error: { code: -32000, message: String(e?.message || e) } };
+  }
+}
+
 async function forwardRpc(body) {
   if (!DRPC_RPC_URL) {
-    const err = new Error('DRPC_API_KEY is not set');
+    const err = new Error('DRPC_RPC_URL is not set');
     err.status = 500;
     throw err;
   }
+
+  // Batched request → split into parallel singles, reassemble as array.
+  if (Array.isArray(body)) {
+    const results = await Promise.all(body.map(_drpcSingle));
+    return { status: 200, parsed: results, raw: null };
+  }
+
+  // Single request — original path.
   const r = await fetchWithTimeout(
     DRPC_RPC_URL,
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) },
@@ -863,7 +896,7 @@ app.get('/api/health', (req, res) => {
       jupiter:        Boolean(JUPITER_ENABLED),
       jupiterApiKey:  Boolean(JUPITER_API_KEY),
       jupiterSeoKey:  Boolean(JUPITER_API_KEY_SEO),
-      drpcRpc:        Boolean(DRPC_API_KEY),
+      drpcRpc:        Boolean(DRPC_RPC_URL),
       chainflip:      true,
     },
     jupiter: {
@@ -877,8 +910,9 @@ app.get('/api/health', (req, res) => {
     chainflip: { network: 'mainnet', brokerCommissionBps: 0 },
     solanaRpc: {
       provider:  'drpc',
-      keySet:    Boolean(DRPC_API_KEY),
+      urlSet:    Boolean(DRPC_RPC_URL),
       timeoutMs: RPC_TIMEOUT_MS,
+      batching:  'server-side unroll',
     },
     time: new Date().toISOString(),
   });
@@ -1373,7 +1407,6 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('  Jupiter Swap V2: ' + JUPITER_SWAP_V2_BASE + (JUPITER_API_KEY ? ' (main key set)' : ' (no main key)') + (JUPITER_API_KEY_SEO ? ' (SEO key set)' : ' (no SEO key)'));
   console.log('  Jupiter Price:   ' + JUPITER_PRICE_BASE);
   console.log('  Chainflip:       mainnet (SOL → BTC, broker commission disabled)');
-  console.log('  Solana RPC:      drpc' + (DRPC_API_KEY ? ' (key set)' : ' (NO KEY — set DRPC_API_KEY)') + ' (no fallback)');
+  console.log('  Solana RPC:      drpc' + (DRPC_RPC_URL ? ' (url set)' : ' (NO URL — set DRPC_RPC_URL)') + ' (no fallback, batches unrolled server-side)');
   console.log('  Allowed origins: ' + allowedOrigins.join(', '));
 });
- 
