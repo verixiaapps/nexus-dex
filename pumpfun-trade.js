@@ -18,9 +18,10 @@
 //   LaunchRadar.jsx's swapParams BUY branch.
 //
 // RPC
-//   Single endpoint: dRPC. Reads the FULL URL from process.env.DRPC_RPC_URL
-//   (api key already embedded in the URL). No fallbacks — if it's missing,
-//   the route fails with a clear 500.
+//   Alchemy URLs hardcoded (matches server.js). Defaults to mainnet. To
+//   override: set DRPC_RPC_URL (legacy var name, kept for compat). To switch
+//   to devnet: set SOLANA_NETWORK=devnet. Variable name retained as
+//   DRPC_RPC_URL throughout to avoid breaking other modules.
 //
 // DEPENDENCIES
 //     npm install @pump-fun/pump-sdk @coral-xyz/anchor bn.js @solana/web3.js
@@ -55,14 +56,17 @@ function callMath(fn, { global, feeConfig, mintSupply, bondingCurve, amount }) {
   return fn(global, bondingCurve, amount);
 }
 
-// ONE RPC for everything here: dRPC only. Reads the FULL URL (api key already
-// embedded) from DRPC_RPC_URL. No other env vars, no provider fallback.
+// ── Solana RPC URL resolution ─────────────────────────────────────────────
+// MUST MATCH server.js. If you rotate the Alchemy key, change BOTH files.
+// Override via DRPC_RPC_URL env var. Switch network via SOLANA_NETWORK=devnet.
+const _ALCHEMY_MAINNET = 'https://solana-mainnet.g.alchemy.com/v2/3iScOZl86KTeWqY8qisKC';
+const _ALCHEMY_DEVNET  = 'https://solana-devnet.g.alchemy.com/v2/3iScOZl86KTeWqY8qisKC';
+
 function getRpcUrl() {
-  const url = (process.env.DRPC_RPC_URL || '').trim();
-  if (!url) {
-    throw new Error('pumpfun-trade: DRPC_RPC_URL is not set. Set it in the server env to the full dRPC URL (api key embedded).');
-  }
-  return url;
+  const override = (process.env.DRPC_RPC_URL || '').trim();
+  if (override) return override;
+  const net = (process.env.SOLANA_NETWORK || 'mainnet').toLowerCase();
+  return net === 'devnet' ? _ALCHEMY_DEVNET : _ALCHEMY_MAINNET;
 }
 
 // Cached instances for the process.
