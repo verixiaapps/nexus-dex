@@ -72,7 +72,11 @@ if (typeof window !== 'undefined' && !window.Buffer) { window.Buffer = Buffer; }
 // holds the Alchemy key and forwards requests via /api/solana-rpc. No env var,
 // no build-time inlining required.
 function bootstrap() {
-  const SOLANA_RPC = '/api/solana-rpc';
+  const SOLANA_RPC =
+  (typeof window !== 'undefined' && window.location?.origin
+    ? window.location.origin
+    : 'https://swap.verixiaapps.com') + '/api/solana-rpc';
+
 
   const WC_PROJECT_ID = process.env.REACT_APP_WALLETCONNECT_PROJECT_ID;
 
