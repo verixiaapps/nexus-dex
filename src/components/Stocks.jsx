@@ -464,9 +464,10 @@ const TOKEN_2022_PROGRAM_ID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqC
 const ATA_PROGRAM_ID        = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
 
 // ── RPC ──────────────────────────────────────────────────────────────
-// Single dRPC endpoint. No fallbacks.
-// REACT_APP_DRPC_RPC_URL holds the FULL URL with key embedded.
-const RPC_URL = process.env.REACT_APP_DRPC_RPC_URL || '';
+// Same-origin server proxy → Alchemy mainnet. server.js holds the API
+// key and forwards via /api/solana-rpc. No env var needed.
+const RPC_URL = '/api/solana-rpc';
+
 
 // =====================================================================
 // US GEO BLOCK — ADMIN_WALLETS bypass everywhere
