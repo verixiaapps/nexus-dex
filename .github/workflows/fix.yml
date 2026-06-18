@@ -1,181 +1,39 @@
-name: Find Bad PublicKey
-
-# Scans src/ for every `new PublicKey(...)` call.
-#  - For literal strings, actually tries to construct a PublicKey and reports
-#    which ones throw.
-#  - For variable inputs, lists the location so you can verify what value
-#    feeds in at build time.
-# Outputs the answer in plain English under VERDICT at the bottom.
+name: Find What Broke
 
 on:
-  workflow_dispatch:
-  push:
-    branches: [main]
+ push:
+ workflow_dispatch:
 
 jobs:
-  scan-publickey:
-    name: Scan PublicKey calls
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+ scan:
+   runs-on: ubuntu-latest
+   steps:
+     - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
+     - name: Scan for unguarded URLs from env vars
+       run: |
+         echo "=== Every transport / provider / client call ==="
+         grep -rnE "createPublicClient|createWalletClient|http\(|JsonRpcProvider|configureChains|getDefaultConfig|WalletConnect|Alchemy|Infura" \
+           --include="*.js" --include="*.jsx" --include="*.ts" --include="*.tsx" \
+           src/ 2>/dev/null || echo "  (no matches)"
 
-      - name: Install @solana/web3.js
-        run: |
-          mkdir -p scan
-          cd scan
-          npm init -y > /dev/null
-          npm install @solana/web3.js --no-audit --no-fund
+         echo ""
+         echo "=== Every process.env.* reference ==="
+         grep -rnE "process\.env\.[A-Z_]+" \
+           --include="*.js" --include="*.jsx" --include="*.ts" --include="*.tsx" \
+           src/ 2>/dev/null || echo "  (no matches)"
 
-      - name: Write scanner script
-        run: |
-          cat > scan/find.js << 'SCRIPT'
-          const fs   = require('fs');
-          const path = require('path');
-          const { PublicKey } = require('@solana/web3.js');
+         echo ""
+         echo "=== Env vars used in code vs .env.example ==="
+         USED=$(grep -rhoE "process\.env\.[A-Z_]+" --include="*.js" --include="*.jsx" --include="*.ts" --include="*.tsx" src/ 2>/dev/null | sort -u | sed 's/process\.env\.//')
+         EXAMPLE=$(grep -oE "^[A-Z_]+" .env.example 2>/dev/null | sort -u)
+         for v in $USED; do
+           if ! echo "$EXAMPLE" | grep -qx "$v"; then
+             echo "  MISSING from .env.example: $v"
+           fi
+         done
 
-          const SRC_DIR = path.join(process.cwd(), 'src');
-          const EXTS    = new Set(['.js', '.jsx', '.ts', '.tsx']);
-
-          function walk(dir, out = []) {
-            if (!fs.existsSync(dir)) return out;
-            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-              if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
-              const full = path.join(dir, entry.name);
-              if (entry.isDirectory()) walk(full, out);
-              else if (EXTS.has(path.extname(entry.name))) out.push(full);
-            }
-            return out;
-          }
-
-          // new PublicKey('...')  or  new PublicKey("...")  or  new PublicKey(`...`)
-          const LITERAL_RE  = /new\s+PublicKey\s*\(\s*['"`]([^'"`]*)['"`]\s*\)/g;
-          // new PublicKey(<anything-not-quoted>) — variable/expression
-          const VARIABLE_RE = /new\s+PublicKey\s*\(\s*([^'"`)][^)]*?)\s*\)/g;
-
-          function lineOf(content, index) {
-            return content.slice(0, index).split('\n').length;
-          }
-
-          // Crude module-level heuristic: walk back through braces. If we end
-          // up still inside an unclosed brace, we're inside a function/block.
-          function atModuleLevel(content, index) {
-            let depth = 0;
-            for (let i = index - 1; i >= 0; i--) {
-              const c = content[i];
-              if (c === '}') depth++;
-              else if (c === '{') {
-                if (depth === 0) return false;
-                depth--;
-              }
-            }
-            return true;
-          }
-
-          const literals  = [];
-          const variables = [];
-
-          for (const file of walk(SRC_DIR)) {
-            const rel = path.relative(process.cwd(), file);
-            const src = fs.readFileSync(file, 'utf8');
-
-            LITERAL_RE.lastIndex = 0;
-            for (let m; (m = LITERAL_RE.exec(src)); ) {
-              const literal = m[1];
-              let valid = false, err = null;
-              try { new PublicKey(literal); valid = true; }
-              catch (e) { err = e.message; }
-              literals.push({
-                file: rel,
-                line: lineOf(src, m.index),
-                literal,
-                valid,
-                err,
-                moduleLevel: atModuleLevel(src, m.index),
-              });
-            }
-
-            VARIABLE_RE.lastIndex = 0;
-            for (let m; (m = VARIABLE_RE.exec(src)); ) {
-              const expr = m[1].trim();
-              // Skip if it actually started with a quote (covered by LITERAL_RE)
-              if (/^['"`]/.test(expr)) continue;
-              variables.push({
-                file: rel,
-                line: lineOf(src, m.index),
-                expr,
-                moduleLevel: atModuleLevel(src, m.index),
-              });
-            }
-          }
-
-          const line = (s = '') => console.log(s);
-          const hdr  = (s)      => { line(); line('═══ ' + s + ' ═══'); line(); };
-
-          hdr('Hardcoded literals: new PublicKey("...")');
-          if (literals.length === 0) {
-            line('  (none found)');
-          } else {
-            for (const f of literals) {
-              const flag = f.valid ? '✓        ' : '✗ INVALID';
-              const where = f.moduleLevel ? '[MODULE]' : '[scoped]';
-              line('  ' + flag + ' ' + where + ' ' + f.file + ':' + f.line);
-              line('              "' + f.literal + '"  (' + f.literal.length + ' chars)');
-              if (!f.valid) line('              ERROR: ' + f.err);
-            }
-          }
-
-          hdr('Variable / expression inputs: new PublicKey(expr)');
-          if (variables.length === 0) {
-            line('  (none found)');
-          } else {
-            line('  Cannot validate these without running the code. Module-level ones');
-            line('  marked ⚠ are the prime suspects for boot-time crashes.');
-            line('');
-            for (const f of variables) {
-              const where = f.moduleLevel ? '⚠ [MODULE]' : '  [scoped]';
-              line('  ' + where + ' ' + f.file + ':' + f.line);
-              line('              new PublicKey(' + f.expr.slice(0, 100) + ')');
-            }
-          }
-
-          hdr('VERDICT');
-          const badLiterals = literals.filter(f => !f.valid);
-          if (badLiterals.length > 0) {
-            line('  ✗ ' + badLiterals.length + ' INVALID hardcoded PublicKey literal(s) found:');
-            for (const f of badLiterals) {
-              line('     ' + f.file + ':' + f.line + '  "' + f.literal + '"');
-            }
-            line('');
-            line('  → Fix the address(es) above. This is your blank-page crash.');
-            process.exit(1);
-          }
-
-          const moduleVars = variables.filter(f => f.moduleLevel);
-          if (moduleVars.length > 0) {
-            line('  All hardcoded literals are valid base58 addresses.');
-            line('');
-            line('  But ' + moduleVars.length + ' module-level construction(s) take a variable input that');
-            line('  could be invalid at runtime (env var unset, wrong format, etc.):');
-            for (const f of moduleVars) {
-              line('     ' + f.file + ':' + f.line + '  new PublicKey(' + f.expr.slice(0, 80) + ')');
-            }
-            line('');
-            line('  Check each: confirm the variable resolves to a 32-44 char base58 address');
-            line('  at build time. If any depends on process.env.REACT_APP_*, that var must');
-            line('  be set in your Railway BUILD environment, not just runtime.');
-            process.exit(1);
-          }
-
-          line('  No invalid PublicKey literals found and no module-level variable');
-          line('  constructions detected. The crash may be coming from:');
-          line('    - A dependency that internally constructs a PublicKey with bad data');
-          line('    - A function that runs during render (e.g. a component default prop)');
-          line('    - A different code path; share the SwapWidget.jsx / Stocks.jsx etc.');
-          SCRIPT
-
-      - name: Run scanner
-        run: node scan/find.js
+         echo ""
+         echo "=== Recent commits touching RPC / chain / env config ==="
+         git log --oneline -20 -- src/ 2>/dev/null | head -20
+       continue-on-error: true
