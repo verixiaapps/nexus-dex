@@ -1,3 +1,4 @@
+```jsx
 // MemeWonderland.jsx — pastel wonderland. Jupiter swap, full 3% fee → FEE_WALLET.
 // Sections: Hero · Top Signal · Narratives · Whale Radar · Breaking Out · New Launches · Trending · Live Feed.
 
@@ -433,31 +434,24 @@ const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV')
 const FEE_BPS    = 300; // 3% total fee taken from input
 const SLIPPAGE_BPS = 500;
 
-// PUBLIC FREE RPCs ONLY — no env override, no paid endpoints.
-const RPC_POOL = [
-  'https://solana-rpc.publicnode.com',
-  'https://solana.drpc.org',
-  'https://rpc.ankr.com/solana',
-  'https://api.mainnet-beta.solana.com',
-];
+// dRPC single endpoint — no fallbacks.
+// REACT_APP_DRPC_RPC_URL holds the FULL URL with key embedded.
+const RPC_URL = process.env.REACT_APP_DRPC_RPC_URL || '';
 
 const _connCache = new Map();
-const getConn = (url, commitment) => {
-  const key = url + '|' + commitment;
-  let c = _connCache.get(key);
-  if (!c) { c = new Connection(url, commitment); _connCache.set(key, c); }
+const getConn = (commitment) => {
+  let c = _connCache.get(commitment);
+  if (!c) { c = new Connection(RPC_URL, commitment); _connCache.set(commitment, c); }
   return c;
 };
 
-// Race all RPCs; rejects only when ALL fail.
+// Single-RPC wrapper. Same `(label, op) => Promise` signature so all
+// existing rpcRace(...) call sites work unchanged.
 const rpcRace = (label, op, commitment = 'confirmed') => {
-  const conns = RPC_POOL.map(u => getConn(u, commitment));
-  return Promise.any(conns.map((c, i) =>
-    op(c).catch(e => {
-      console.warn(`[rpc] ${label} failed on ${RPC_POOL[i]}:`, e?.message);
-      throw e;
-    })
-  )).catch(() => { throw new Error(`${label}: all RPCs failed`); });
+  return op(getConn(commitment)).catch(e => {
+    console.warn(`[rpc] ${label} failed:`, e?.message);
+    throw new Error(`${label}: dRPC failed`);
+  });
 };
 
 const POLL_TOKENS  = 10_000;
@@ -872,8 +866,8 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
   useMwCSS();
 
   const wallet = useWallet();
-  // Connection from the public RPC pool, used for tx assembly + send.
-  const connection = useMemo(() => getConn(RPC_POOL[0], 'confirmed'), []);
+  // Single dRPC connection used for tx assembly + send.
+  const connection = useMemo(() => getConn('confirmed'), []);
 
   const [tokens, setTokens] = useState([]);
   const [, setLoading] = useState(true);
@@ -1643,7 +1637,7 @@ function TradeSheet({
       const signed = await wallet.signTransaction(tx);
       const serialized = signed.serialize();
 
-      // Race the send across all RPCs — first to accept wins.
+      // Send via dRPC.
       const sig = await rpcRace('sendTx', c => c.sendRawTransaction(serialized, {
         skipPreflight: false,
         maxRetries: 3,
