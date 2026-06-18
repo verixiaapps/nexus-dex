@@ -1,4 +1,3 @@
-```jsx
 // LaunchRadar.jsx — Solana new launches + per-card BUY/SELL modal trade flow.
 // 
 // TRADE PATH: /api/pumpfun/trade (your existing pumpfun-trade.js).
