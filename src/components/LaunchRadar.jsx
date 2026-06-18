@@ -1,3 +1,4 @@
+```jsx
 // LaunchRadar.jsx — Solana new launches + per-card BUY/SELL modal trade flow.
 // 
 // TRADE PATH: /api/pumpfun/trade (your existing pumpfun-trade.js).
@@ -387,10 +388,8 @@ const DEFAULT_SELL_PRESETS = [25, 50, 100];
 
 // ── RPC ──────────────────────────────────────────────────────────────
 // Single dRPC endpoint. No fallbacks.
-const DRPC_API_KEY =
-  (typeof process !== 'undefined' && process.env && process.env.DRPC_API_KEY) || '';
-
-const RPC_URL = 'https://lb.drpc.live/solana/' + DRPC_API_KEY;
+// REACT_APP_DRPC_RPC_URL holds the FULL URL with key embedded.
+const RPC_URL = process.env.REACT_APP_DRPC_RPC_URL || '';
 const BAL_COMMITMENT = 'processed';
 
 const _connCache = new Map();
