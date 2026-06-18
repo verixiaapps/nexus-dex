@@ -264,6 +264,7 @@ const MW_CSS = `
 .mw-amount-input{background:none;border:none;color:var(--ink);font-family:"Instrument Serif",serif;font-size:34px;flex:1;outline:none;min-width:0;width:100%}
 .mw-currency{display:flex;align-items:center;gap:8px;background:var(--glass-strong);padding:8px 12px 8px 8px;border-radius:999px;font-weight:600;font-size:13px;border:1px solid var(--border);flex-shrink:0}
 .mw-currency-icon{width:22px;height:22px;border-radius:50%;background:linear-gradient(135deg,#B794F6,#7FFFD4)}
+.mw-amount-usd{font-size:11px;color:var(--ink-2);font-weight:500;margin-top:6px;padding-left:4px}
 .mw-presets{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-top:12px}
 .mw-preset{background:var(--glass);border:1.5px solid var(--border);color:var(--ink-2);padding:11px 0;border-radius:12px;font-family:inherit;font-weight:700;font-size:12px;cursor:pointer;transition:all .15s}
 .mw-preset.mw-selected{background:linear-gradient(135deg,#7FFFD4,#A0E7FF);border-color:var(--mint);color:var(--ink);box-shadow:0 4px 12px rgba(127,255,212,.4)}
@@ -489,6 +490,19 @@ function formatPrice(p) {
 function formatPct(p) {
   if (!Number.isFinite(p)) return '0%';
   return (p >= 0 ? '+' : '') + p.toFixed(p < 10 && p > -10 ? 2 : 1) + '%';
+}
+// Format a USD value sensibly across the full range we'll see. Big balances
+// → "$1,234.50". Mid → "$12.34". Tiny → "$0.07" (the case that exposed the
+// bug — 0.001 SOL × ~$74 ≈ $0.07, NOT $37). Sub-cent → "<$0.01" so we never
+// show a confusing "$0.00".
+function formatUsd(n) {
+  if (!Number.isFinite(n) || n <= 0) return '$0.00';
+  if (n >= 1e9)  return '$' + (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6)  return '$' + (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  if (n >= 1)    return '$' + n.toFixed(2);
+  if (n >= 0.01) return '$' + n.toFixed(2);
+  return '<$0.01';
 }
 function ageMs(iso) { return iso ? Date.now() - new Date(iso).getTime() : Infinity; }
 function ageStr(ms) {
@@ -1444,7 +1458,19 @@ function TradeSheet({
   const inputBalStatus = balStateFor ? balStateFor(inputMint) : 'idle';
   const balanceKnown = inputBalStatus === 'ok';
   const amtNum = parseFloat(amount) || 0;
-  const usdValue = (amtNum * (isSell ? (token.price || 0) : (solPrice || 0))).toFixed(2);
+
+  // ── PRICE-PER-UNIT for the input token. SOL → solPrice. Token → token.price.
+  const unitPriceUsd = isSell ? (token.price || 0) : (solPrice || 0);
+
+  // USD value of what the user is ABOUT TO TRADE (the amount typed).
+  const tradeUsdValue = amtNum * unitPriceUsd;
+
+  // USD value of the user's WALLET BALANCE. THIS is what should appear next
+  // to "Bal:" — fixes the bug where 0.001 SOL was showing as ~$37 (because
+  // the trade-amount USD was being reused as if it were balance USD).
+  const balanceUsdValue = inputBalance && unitPriceUsd > 0
+    ? inputBalance.uiAmount * unitPriceUsd
+    : null;
 
   const rawAmount = useMemo(() => {
     if (!amount) return '';
@@ -1727,18 +1753,22 @@ function TradeSheet({
               ? `Insufficient ${inputSymbol}`
               : (isSell ? '💸 SELL ' + token.sym : '⚡ BUY ' + token.sym);
 
-  // Honest balance display.
+  // Honest balance display — the $ figure here ALWAYS reflects the balance,
+  // not the trade amount.
   let balanceDisplay;
   if (!wallet.publicKey) {
-    balanceDisplay = `~$${usdValue}`;
+    balanceDisplay = <span className="mw-muted-deep">Not connected</span>;
   } else if (inputBalStatus === 'loading' || inputBalStatus === 'idle') {
-    balanceDisplay = <>Bal: <b>…</b> · ~${usdValue}</>;
+    balanceDisplay = <>Bal: <b>…</b></>;
   } else if (inputBalStatus === 'fail') {
-    balanceDisplay = <><span className="mw-bal-err">RPC unreachable</span> · ~${usdValue}</>;
+    balanceDisplay = <span className="mw-bal-err">RPC unreachable</span>;
   } else if (inputBalance) {
-    balanceDisplay = <>Bal: <b>{format(inputBalance.uiAmount)}</b> · ~${usdValue}</>;
+    balanceDisplay = <>
+      Bal: <b>{format(inputBalance.uiAmount)}</b>
+      {balanceUsdValue != null ? <> · {formatUsd(balanceUsdValue)}</> : null}
+    </>;
   } else {
-    balanceDisplay = <>Bal: <b>0</b> · ~${usdValue}</>;
+    balanceDisplay = <>Bal: <b>0</b> · $0.00</>;
   }
 
   return (
@@ -1795,6 +1825,11 @@ function TradeSheet({
               {inputSymbol}
             </div>
           </div>
+          {/* USD value of the trade amount lives here now, so it can't be
+              mistaken for the balance's USD value. */}
+          {amtNum > 0 && unitPriceUsd > 0 && (
+            <div className="mw-amount-usd">≈ {formatUsd(tradeUsdValue)}</div>
+          )}
 
           <div className="mw-presets">
             {['0.1', '0.5', '1', 'MAX'].map(p => (
