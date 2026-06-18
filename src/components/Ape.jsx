@@ -288,29 +288,18 @@ const SOL_RESERVE = 0.01;
 const DEFAULT_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
 const DEFAULT_SELL_PRESETS = [25, 50, 100];
 
-const ALCHEMY_RPC =
-  (typeof process !== 'undefined' && process.env && process.env.REACT_APP_ALCHEMY_RPC) || '';
-const BAL_RPC_POOL = [
-  ALCHEMY_RPC,
-  'https://solana-rpc.publicnode.com',
-  'https://solana.drpc.org',
-  'https://api.mainnet-beta.solana.com',
-].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
-const RPC_URL = BAL_RPC_POOL[0];
+// Solana RPC — dRPC only, no fallbacks. Reads the FULL URL (api key embedded)
+// from REACT_APP_DRPC_RPC_URL. CRA bakes REACT_APP_* vars at build time, so
+// this must be present in env when `npm run build` runs.
+const RPC_URL = (process.env.REACT_APP_DRPC_RPC_URL || '').trim();
 const BAL_COMMITMENT = 'processed';
 const _connCache = new Map();
-const getConn = (commitment, url = RPC_URL) => {
-  const key = url + '|' + commitment;
-  let c = _connCache.get(key);
-  if (!c) { c = new Connection(url, commitment); _connCache.set(key, c); }
+const getConn = (commitment) => {
+  let c = _connCache.get(commitment);
+  if (!c) { c = new Connection(RPC_URL, commitment); _connCache.set(commitment, c); }
   return c;
 };
-const balRpcRace = (op) => {
-  const conns = BAL_RPC_POOL.map(u => getConn(BAL_COMMITMENT, u));
-  return Promise.any(conns.map((c, i) =>
-    op(c).catch(e => { console.warn('[ape-bal] ' + BAL_RPC_POOL[i] + ':', e && e.message); throw e; })
-  )).catch(() => { throw new Error('All balance RPCs failed'); });
-};
+const balConn = () => getConn(BAL_COMMITMENT);
 const POLL_RECENT = 5000, POLL_SOL = 30000, POLL_BALANCE = 30000;
 
 /* ===================== LOCAL BURNER WALLET =====================
@@ -988,26 +977,27 @@ export default function Ape() {
         into[mint] = { amount: String(amt), decimals: Number((info.tokenAmount && info.tokenAmount.decimals) != null ? info.tokenAmount.decimals : 6), uiAmount: Number((info.tokenAmount && info.tokenAmount.uiAmount) || 0) };
       }
     };
-    const solP = balRpcRace(c => c.getBalance(owner, BAL_COMMITMENT)).then(l => setBalances(prev => ({ ...prev, [SOL_MINT]: { amount: String(l), decimals: 9, uiAmount: l/1e9 } }))).catch(e=>console.warn('[lr] SOL',e&&e.message));
-    const tokP = balRpcRace(c => c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, BAL_COMMITMENT)).then(a => setBalances(prev => { const n={...prev}; mergeAccs(n,a); return n; })).catch(e=>console.warn('[lr] SPL',e&&e.message));
-    const t22P = balRpcRace(c => c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, BAL_COMMITMENT)).then(a => setBalances(prev => { const n={...prev}; mergeAccs(n,a); return n; })).catch(e=>console.warn('[lr] T22',e&&e.message));
+    const c = balConn();
+    const solP = c.getBalance(owner, BAL_COMMITMENT).then(l => setBalances(prev => ({ ...prev, [SOL_MINT]: { amount: String(l), decimals: 9, uiAmount: l/1e9 } }))).catch(e=>console.warn('[ape-bal] SOL',e&&e.message));
+    const tokP = c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, BAL_COMMITMENT).then(a => setBalances(prev => { const n={...prev}; mergeAccs(n,a); return n; })).catch(e=>console.warn('[ape-bal] SPL',e&&e.message));
+    const t22P = c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, BAL_COMMITMENT).then(a => setBalances(prev => { const n={...prev}; mergeAccs(n,a); return n; })).catch(e=>console.warn('[ape-bal] T22',e&&e.message));
     await Promise.allSettled([solP, tokP, t22P]);
   }, [wallet.publicKey]);
   useEffect(() => { refreshBalances(); }, [refreshBalances]);
   useEffect(() => { const id = setInterval(refreshBalances, POLL_BALANCE); return () => clearInterval(id); }, [refreshBalances]);
 
   const refreshSol = useCallback(async () => {
-    try { const l = await balRpcRace(c => c.getBalance(wallet.publicKey, BAL_COMMITMENT)); setBalances(prev => ({ ...prev, [SOL_MINT]: { amount: String(l), decimals: 9, uiAmount: l/1e9 } })); } catch (e) { console.warn('[lr] SOL', e&&e.message); }
+    try { const l = await balConn().getBalance(wallet.publicKey, BAL_COMMITMENT); setBalances(prev => ({ ...prev, [SOL_MINT]: { amount: String(l), decimals: 9, uiAmount: l/1e9 } })); } catch (e) { console.warn('[ape-bal] SOL', e&&e.message); }
   }, [wallet.publicKey]);
   const refreshOneToken = useCallback(async (mintStr) => {
     if (!mintStr || mintStr === SOL_MINT) return;
     let mintPk; try { mintPk = new PublicKey(mintStr); } catch (e) { return; }
     try {
-      const accs = await balRpcRace(c => c.getParsedTokenAccountsByOwner(wallet.publicKey, { mint: mintPk }, BAL_COMMITMENT));
+      const accs = await balConn().getParsedTokenAccountsByOwner(wallet.publicKey, { mint: mintPk }, BAL_COMMITMENT);
       let best = null;
       for (const acc of ((accs && accs.value) || [])) { const info = acc.account && acc.account.data && acc.account.data.parsed && acc.account.data.parsed.info; const amt = info && info.tokenAmount && info.tokenAmount.amount; if (amt == null) continue; const ui = Number((info.tokenAmount && info.tokenAmount.uiAmount)||0); if (!best || ui > best.uiAmount) best = { amount: String(amt), decimals: Number((info.tokenAmount && info.tokenAmount.decimals)!=null?info.tokenAmount.decimals:6), uiAmount: ui }; }
       setBalances(prev => ({ ...prev, [mintStr]: best || { amount:'0', decimals:6, uiAmount:0 } }));
-    } catch (e) { console.warn('[lr] one-token', e&&e.message); }
+    } catch (e) { console.warn('[ape-bal] one-token', e&&e.message); }
   }, [wallet.publicKey]);
 
   const solBalance = balances[SOL_MINT];
