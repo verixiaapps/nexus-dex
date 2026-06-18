@@ -1,4 +1,3 @@
-```jsx
 /**
  * NEXUS · SolToBtcChainflip.jsx
  * SOL → Native BTC via Chainflip (single-signature, two-tx atomic flow).
