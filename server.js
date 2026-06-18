@@ -88,11 +88,11 @@ const JUPITER_PRICE_BASE    = 'https://lite-api.jup.ag/price/v3';
 // file: client code hits /api/solana-rpc (same-origin) and the server proxies.
 //
 // To switch to devnet:    set SOLANA_NETWORK=devnet
-// To override entirely:   set SOLANA_RPC_URL
+// To override entirely:   set DRPC_RPC_URL (legacy var name, kept for compat)
 const ALCHEMY_MAINNET_URL = 'https://solana-mainnet.g.alchemy.com/v2/3iScOZl86KTeWqY8qisKC';
 const ALCHEMY_DEVNET_URL  = 'https://solana-devnet.g.alchemy.com/v2/3iScOZl86KTeWqY8qisKC';
 const SOLANA_NETWORK      = (process.env.SOLANA_NETWORK || 'mainnet').toLowerCase();
-const SOLANA_RPC_URL      = (process.env.SOLANA_RPC_URL || '').trim() ||
+const DRPC_RPC_URL        = (process.env.DRPC_RPC_URL || '').trim() ||
   (SOLANA_NETWORK === 'devnet' ? ALCHEMY_DEVNET_URL : ALCHEMY_MAINNET_URL);
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
@@ -160,6 +160,8 @@ function scrubSecrets(s) {
   if (s == null) return '';
   return String(s)
     .replace(/api-key=[^&\s"']+/gi,                       'api-key=***')
+    // dRPC URLs (legacy)
+    .replace(/(lb\.drpc\.(?:live|org)\/)[^\s"'?]+/gi,     '$1***/***')
     // Alchemy URLs — strip the API key segment after /v2/
     .replace(/(solana-(?:mainnet|devnet)\.g\.alchemy\.com\/v2\/)[^\s"'?]+/gi, '$1***')
     .replace(/x-api-key["':\s]+[^&\s"',}]+/gi,            'x-api-key=***')
@@ -828,14 +830,14 @@ app.get('/api/whale-events', async (req, res) => {
 const RPC_TIMEOUT_MS = 10_000;
 
 function getSolanaRpcUrl() {
-  return SOLANA_RPC_URL;
+  return DRPC_RPC_URL;
 }
 
-async function _rpcSingle(single) {
+async function _drpcSingle(single) {
   const id = single?.id ?? null;
   try {
     const r = await fetchWithTimeout(
-      SOLANA_RPC_URL,
+      DRPC_RPC_URL,
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(single) },
       RPC_TIMEOUT_MS,
     );
@@ -851,7 +853,7 @@ async function _rpcSingle(single) {
 }
 
 async function forwardRpc(body) {
-  if (!SOLANA_RPC_URL) {
+  if (!DRPC_RPC_URL) {
     const err = new Error('Solana RPC URL is not configured');
     err.status = 500;
     throw err;
@@ -859,13 +861,13 @@ async function forwardRpc(body) {
 
   // Batched request → split into parallel singles, reassemble as array.
   if (Array.isArray(body)) {
-    const results = await Promise.all(body.map(_rpcSingle));
+    const results = await Promise.all(body.map(_drpcSingle));
     return { status: 200, parsed: results, raw: null };
   }
 
   // Single request — original path.
   const r = await fetchWithTimeout(
-    SOLANA_RPC_URL,
+    DRPC_RPC_URL,
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) },
     RPC_TIMEOUT_MS,
   );
@@ -920,7 +922,7 @@ app.get('/api/health', (req, res) => {
       jupiter:        Boolean(JUPITER_ENABLED),
       jupiterApiKey:  Boolean(JUPITER_API_KEY),
       jupiterSeoKey:  Boolean(JUPITER_API_KEY_SEO),
-      solanaRpc:      Boolean(SOLANA_RPC_URL),
+      solanaRpc:      Boolean(DRPC_RPC_URL),
       chainflip:      true,
     },
     jupiter: {
@@ -935,7 +937,7 @@ app.get('/api/health', (req, res) => {
     solanaRpc: {
       provider:  'alchemy',
       network:   SOLANA_NETWORK,
-      urlSet:    Boolean(SOLANA_RPC_URL),
+      urlSet:    Boolean(DRPC_RPC_URL),
       timeoutMs: RPC_TIMEOUT_MS,
       batching:  'server-side unroll',
     },
@@ -1382,19 +1384,28 @@ app.all('/api/*', (req, res) => res.status(404).json({ error: 'API route not fou
 /* ========================================================================
  * Embed runtime config
  *
- * IMPORTANT: We expose the SERVER PROXY path ('/api/solana-rpc'), NOT the
- * raw Alchemy URL. The Alchemy API key never leaves the server — all client
- * RPC traffic goes through the proxy, where it's rate-limited and bot-filtered.
+ * FIXED: emits an ABSOLUTE URL for `rpc`. Previously this was the relative
+ * path '/api/solana-rpc', which fails when fed to `new Connection()` /
+ * `<ConnectionProvider endpoint=...>` from @solana/web3.js — web3.js does
+ * `new URL(endpoint)` internally and rejects anything that isn't http(s).
+ *
+ * The Alchemy API key still never leaves the server — the client just
+ * hits the same-origin proxy at /api/solana-rpc.
  * ===================================================================== */
 app.get('/embed/config.js', (req, res) => {
+  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https')
+    .split(',')[0].trim();
+  const host  = req.headers['x-forwarded-host'] || req.headers.host;
+  const origin = `${proto}://${host}`;
+
   const cfg = {
-    rpc: '/api/solana-rpc',
+    rpc: `${origin}/api/solana-rpc`,
     wcProjectId: process.env.WALLETCONNECT_PROJECT_ID
               || process.env.REACT_APP_WALLETCONNECT_PROJECT_ID
               || '',
   };
   res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-  res.setHeader('Cache-Control', 'public, max-age=300');
+  res.setHeader('Cache-Control', 'no-store');
   res.send('window.__VERIXIA_CONFIG__=' + JSON.stringify(cfg) + ';');
 });
 
