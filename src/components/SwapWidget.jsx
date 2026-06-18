@@ -1,8 +1,10 @@
 // SwapWidget.jsx — atomic single-transaction Jupiter swap.
 //
 // VISUAL REDESIGN — Wonderland-light, sky+pink accents to match the
-// new conversion-first homepage. All trading/RPC/Jupiter logic preserved
+// new conversion-first homepage. All trading/Jupiter logic preserved
 // verbatim. Class prefix stays sw-.
+//
+// RPC: single drpc endpoint, no fallback pool. API key from DRPC_API_KEY env.
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Buffer } from 'buffer';
@@ -304,32 +306,17 @@ const USDC_MINT  = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const PRIORITY_FEE_MICROLAMPORTS = 50_000;
 const SLIPPAGE_BPS = 500;
 
-// PUBLIC FREE RPCs ONLY — no runtime override, no paid endpoints.
-const RPC_POOL = [
-  'https://solana-rpc.publicnode.com',
-  'https://solana.drpc.org',
-  'https://rpc.ankr.com/solana',
-  'https://api.mainnet-beta.solana.com',
-];
+// SINGLE RPC — drpc only, no fallback.
+const DRPC_API_KEY = process.env.REACT_APP_DRPC_API_KEY;
+const RPC_URL = `https://lb.drpc.live/solana/${DRPC_API_KEY}`;
 
 const BAL_COMMITMENT = 'processed';
 
 const _connCache = new Map();
-const getConn = (url, commitment) => {
-  const key = url + '|' + commitment;
-  let c = _connCache.get(key);
-  if (!c) { c = new Connection(url, commitment); _connCache.set(key, c); }
+const getConn = (commitment) => {
+  let c = _connCache.get(commitment);
+  if (!c) { c = new Connection(RPC_URL, commitment); _connCache.set(commitment, c); }
   return c;
-};
-
-const rpcRace = (label, op, commitment = BAL_COMMITMENT) => {
-  const conns = RPC_POOL.map(u => getConn(u, commitment));
-  return Promise.any(conns.map((c, i) =>
-    op(c).catch(e => {
-      console.warn(`[rpc] ${label} failed on ${RPC_POOL[i]}:`, e?.message);
-      throw e;
-    })
-  )).catch(() => { throw new Error(`${label}: all RPCs failed`); });
 };
 
 /* ─── HELPERS — UNCHANGED ─────────────────────────────────────────── */
@@ -373,7 +360,7 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
   useSwCSS();
 
   const wallet = useWallet();
-  const connection = useMemo(() => getConn(RPC_POOL[0], 'confirmed'), []);
+  const connection = useMemo(() => getConn('confirmed'), []);
 
   const [tokens, setTokens]               = useState([]);
   const [tokensLoading, setTokensLoading] = useState(true);
@@ -428,12 +415,13 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
     return () => { cancelled = true; };
   }, []);
 
-  /* balances — UNCHANGED */
+  /* balances — drpc only, no fallback */
   const refreshBalances = useCallback(async () => {
     if (!wallet.publicKey) { setBalances({}); setBalError(null); return; }
     setBalLoading(true);
     setBalError(null);
     const owner = wallet.publicKey;
+    const conn = getConn(BAL_COMMITMENT);
 
     const mergeAccs = (into, accs) => {
       if (!accs || !accs.value) return;
@@ -449,7 +437,7 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
       }
     };
 
-    const solP = rpcRace('getBalance', c => c.getBalance(owner, BAL_COMMITMENT))
+    const solP = conn.getBalance(owner, BAL_COMMITMENT)
       .then(lamports => {
         setBalances(prev => {
           const next = { ...prev };
@@ -460,8 +448,8 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
       })
       .catch(e => console.warn('[swap] SOL balance failed', e?.message));
 
-    const tokP = rpcRace('tokenAccs', c =>
-      c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, BAL_COMMITMENT)
+    const tokP = conn.getParsedTokenAccountsByOwner(
+      owner, { programId: TOKEN_PROGRAM_ID }, BAL_COMMITMENT
     ).then(accs => {
       setBalances(prev => {
         const next = { ...prev };
@@ -471,8 +459,8 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
       });
     }).catch(e => console.warn('[swap] SPL accounts failed', e?.message));
 
-    const tok22P = rpcRace('tokenAccs2022', c =>
-      c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, BAL_COMMITMENT)
+    const tok22P = conn.getParsedTokenAccountsByOwner(
+      owner, { programId: TOKEN_2022_PROGRAM_ID }, BAL_COMMITMENT
     ).then(accs => {
       setBalances(prev => {
         const next = { ...prev };
