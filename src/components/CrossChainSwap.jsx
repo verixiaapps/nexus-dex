@@ -3,7 +3,8 @@
  * Chainflip native, two-tx atomic, fee in SOL.
  * 
  * SOLANA-SIDE
- *   • RPC: dRPC only (REACT_APP_DRPC_RPC_URL) — no fallback pool.
+ *   • RPC: same-origin server proxy at /api/solana-rpc — the Alchemy key
+ *     stays server-side and never reaches the browser bundle.
  *   • SOL price: lite-api.jup.ag/price/v3 (no key).
  *   • Honest balance state: per-source 'idle'|'loading'|'ok'|'fail'.
  *     UI shows '…' or 'RPC down' — never silent zero.
@@ -39,11 +40,13 @@ import {
 } from '@solana/spl-token';
 
 // =====================================================================
-// Solana RPC — dRPC only, no fallbacks. Reads the FULL URL (api key
-// embedded) from REACT_APP_DRPC_RPC_URL. CRA bakes REACT_APP_* vars at
-// build time, so this must be present when `npm run build` runs.
+// Solana RPC — same-origin server proxy. ALL client RPC traffic goes through
+// /api/solana-rpc, which forwards to Alchemy. The Alchemy API key NEVER
+// reaches the browser bundle, so view-source / scraping can't extract it.
 // =====================================================================
-const RPC_URL = (process.env.REACT_APP_DRPC_RPC_URL || '').trim();
+const RPC_URL = (typeof window !== 'undefined' && window.location)
+  ? window.location.origin + '/api/solana-rpc'
+  : 'http://localhost:3001/api/solana-rpc';
 const connection = new Connection(RPC_URL, { commitment: 'confirmed' });
 
 async function rpcCall(label, fn) {
@@ -759,7 +762,7 @@ const ToTokenModal = ({ open, onClose, onSelect }) => {
 export default function CrossChainSwap({ onConnectWallet }) {
   useCcCSS();
 
-  // useConnection() removed — we own a single dRPC connection above.
+  // useConnection() removed — we own a single proxied connection above.
   const { publicKey, signAllTransactions, connected } = useWallet();
   const pubkey = publicKey || null;
   const wcon   = !!connected && !!pubkey;
@@ -809,7 +812,7 @@ export default function CrossChainSwap({ onConnectWallet }) {
     return () => { alive = false; clearInterval(id); };
   }, []);
 
-  // Wallet balances — single dRPC call, honest per-call status.
+  // Wallet balances — single proxied RPC call, honest per-call status.
   useEffect(() => {
     if (!pubkey) {
       setSolBalance(null); setTokenBalance(null);
