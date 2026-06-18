@@ -135,15 +135,10 @@ const apiLimiter = rateLimit({
   skip: r => r.path === '/health' || r.path === '/api/health',
 });
 app.use('/api/', apiLimiter);
-
-// Tighter per-IP limit on RPC routes — stops one tab spamming refresh from
-// blowing through Alchemy's 500 CU/s ceiling and 429-ing real users.
-const rpcLimiter = rateLimit({
-  windowMs: 60_000, max: 30,
-  standardHeaders: true, legacyHeaders: false,
-  message: { error: 'RPC rate limit exceeded — slow down' },
-});
-app.use(['/api/solana-rpc', '/api/helius/das'], rpcLimiter);
+// Note: no separate per-IP limit on /api/solana-rpc — Ape's trade-confirm
+// loop can make ~95 RPC calls per trade, so a tight per-route limit would
+// block legit users mid-trade. The global 600/min cap + bot UA blocker
+// above are the protection layer.
 
 /* ========================================================================
  * Shared helpers
@@ -1453,4 +1448,3 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('  Solana RPC:      alchemy ' + SOLANA_NETWORK + ' (key embedded, batches unrolled server-side)');
   console.log('  Allowed origins: ' + allowedOrigins.join(', '));
 });
- 
