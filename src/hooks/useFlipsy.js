@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import * as anchor from '@coral-xyz/anchor';
 import { Connection, PublicKey, SystemProgram } from '@solana/web3.js';
-
+ 
 // Flipsy program ID. Reads from env at build time. Falls back to the System
 // Program (all 1s — valid base58) so the import doesn't throw if the env var
 // is missing — the hook will then surface "No IDL on chain" through its
