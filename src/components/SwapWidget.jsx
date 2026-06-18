@@ -304,22 +304,24 @@ const USDC_MINT  = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const PRIORITY_FEE_MICROLAMPORTS = 50_000;
 const SLIPPAGE_BPS = 500;
 
-// Single dRPC endpoint. No fallbacks.
-// REACT_APP_DRPC_RPC_URL holds the FULL URL with the api key embedded.
-// CRA only bundles env vars with the REACT_APP_ prefix. If missing, every
-// RPC call will fail (401/404). The console error below fires on load to
-// make that obvious.
+/* ─── CONFIG ──────────────────────────────────────────── */
+const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
+const FEE_BPS    = 300;
+const SOL_MINT   = 'So11111111111111111111111111111111111111112';
+const USDC_MINT  = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+
+const PRIORITY_FEE_MICROLAMPORTS = 50_000;
+const SLIPPAGE_BPS = 500;
+
 // ── RPC ──────────────────────────────────────────────────────────────
-// Same-origin server proxy → Alchemy mainnet. The server (server.js)
-// holds the Alchemy API key and forwards via /api/solana-rpc. All
-// Connection instances in this file route through the proxy.
+// Same-origin server proxy → Alchemy mainnet. server.js holds the API
+// key and forwards via /api/solana-rpc. All Connection instances route
+// through the proxy.
 const RPC_URL = (typeof window !== 'undefined' && window.location)
   ? window.location.origin + '/api/solana-rpc'
   : 'http://localhost:3001/api/solana-rpc';
 const BAL_COMMITMENT = 'processed';
 
-
-const BAL_COMMITMENT = 'processed';
 
 const _connCache = new Map();
 const getConn = (commitment) => {
