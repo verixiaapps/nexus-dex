@@ -305,6 +305,10 @@ const getConn = (commitment) => {
   return c;
 };
 const balConn = () => getConn(BAL_COMMITMENT);
+// Single-RPC wrapper — mirrors LaunchRadar exactly. Keeps the same
+// `(op) => Promise` signature so call sites like
+// `balRpcRace(c => c.getBalance(...))` work the same way.
+const balRpcRace = (op) => op(getConn(BAL_COMMITMENT));
 const POLL_RECENT = 5000, POLL_SOL = 30000, POLL_BALANCE = 30000;
 
 /* ===================== LOCAL BURNER WALLET =====================
@@ -972,37 +976,86 @@ export default function Ape() {
   }, []);
 
   const [balances, setBalances] = useState({});
+  // refreshBalances — mirrors LaunchRadar exactly: each RPC call wrapped in
+  // balRpcRace, all three fired in parallel via Promise.allSettled, merged
+  // into state independently so one failing doesn't blank the others.
   const refreshBalances = useCallback(async () => {
     const owner = wallet.publicKey;
     const mergeAccs = (into, accs) => {
       if (!accs || !accs.value) return;
       for (const acc of accs.value) {
-        const info = acc.account && acc.account.data && acc.account.data.parsed && acc.account.data.parsed.info; if (!info) continue;
-        const mint = info.mint, amt = info.tokenAmount && info.tokenAmount.amount; if (!mint || amt == null) continue;
-        into[mint] = { amount: String(amt), decimals: Number((info.tokenAmount && info.tokenAmount.decimals) != null ? info.tokenAmount.decimals : 6), uiAmount: Number((info.tokenAmount && info.tokenAmount.uiAmount) || 0) };
+        const info = acc.account && acc.account.data && acc.account.data.parsed && acc.account.data.parsed.info;
+        if (!info) continue;
+        const mint = info.mint;
+        const amt = info.tokenAmount && info.tokenAmount.amount;
+        if (!mint || amt == null) continue;
+        into[mint] = {
+          amount:   String(amt),
+          decimals: Number((info.tokenAmount && info.tokenAmount.decimals) != null ? info.tokenAmount.decimals : 6),
+          uiAmount: Number((info.tokenAmount && info.tokenAmount.uiAmount) || 0),
+        };
       }
     };
-    const c = balConn();
-    const solP = c.getBalance(owner, BAL_COMMITMENT).then(l => setBalances(prev => ({ ...prev, [SOL_MINT]: { amount: String(l), decimals: 9, uiAmount: l/1e9 } }))).catch(e=>console.warn('[ape-bal] SOL',e&&e.message));
-    const tokP = c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, BAL_COMMITMENT).then(a => setBalances(prev => { const n={...prev}; mergeAccs(n,a); return n; })).catch(e=>console.warn('[ape-bal] SPL',e&&e.message));
-    const t22P = c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, BAL_COMMITMENT).then(a => setBalances(prev => { const n={...prev}; mergeAccs(n,a); return n; })).catch(e=>console.warn('[ape-bal] T22',e&&e.message));
-    await Promise.allSettled([solP, tokP, t22P]);
+    const solP = balRpcRace(c => c.getBalance(owner, BAL_COMMITMENT))
+      .then(lamports => {
+        setBalances(prev => ({
+          ...prev,
+          [SOL_MINT]: { amount: String(lamports), decimals: 9, uiAmount: lamports / 1e9 },
+        }));
+      })
+      .catch(e => console.warn('[ape-bal] SOL balance failed', e && e.message));
+    const tokP = balRpcRace(c =>
+      c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, BAL_COMMITMENT))
+      .then(accs => {
+        setBalances(prev => { const next = { ...prev }; mergeAccs(next, accs); return next; });
+      })
+      .catch(e => console.warn('[ape-bal] SPL accounts failed', e && e.message));
+    const tok22P = balRpcRace(c =>
+      c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, BAL_COMMITMENT))
+      .then(accs => {
+        setBalances(prev => { const next = { ...prev }; mergeAccs(next, accs); return next; });
+      })
+      .catch(e => console.warn('[ape-bal] Token-2022 accounts failed', e && e.message));
+    await Promise.allSettled([solP, tokP, tok22P]);
   }, [wallet.publicKey]);
   useEffect(() => { refreshBalances(); }, [refreshBalances]);
   useEffect(() => { const id = setInterval(refreshBalances, POLL_BALANCE); return () => clearInterval(id); }, [refreshBalances]);
 
+  // aggressiveRefresh — ported verbatim from LaunchRadar. After a trade or
+  // withdraw, fires three FULL balance refreshes at 1.5s / 4s / 8s so the UI
+  // catches up to chain state even when the post-confirm balance lags.
+  const aggressiveRefresh = useCallback(() => {
+    [1500, 4000, 8000].forEach(ms => setTimeout(refreshBalances, ms));
+  }, [refreshBalances]);
+
   const refreshSol = useCallback(async () => {
-    try { const l = await balConn().getBalance(wallet.publicKey, BAL_COMMITMENT); setBalances(prev => ({ ...prev, [SOL_MINT]: { amount: String(l), decimals: 9, uiAmount: l/1e9 } })); } catch (e) { console.warn('[ape-bal] SOL', e&&e.message); }
+    try {
+      const lamports = await balRpcRace(c => c.getBalance(wallet.publicKey, BAL_COMMITMENT));
+      setBalances(prev => ({ ...prev, [SOL_MINT]: { amount: String(lamports), decimals: 9, uiAmount: lamports / 1e9 } }));
+    } catch (e) { console.warn('[ape-bal] SOL balance failed', e && e.message); }
   }, [wallet.publicKey]);
   const refreshOneToken = useCallback(async (mintStr) => {
     if (!mintStr || mintStr === SOL_MINT) return;
     let mintPk; try { mintPk = new PublicKey(mintStr); } catch (e) { return; }
     try {
-      const accs = await balConn().getParsedTokenAccountsByOwner(wallet.publicKey, { mint: mintPk }, BAL_COMMITMENT);
+      const accs = await balRpcRace(c =>
+        c.getParsedTokenAccountsByOwner(wallet.publicKey, { mint: mintPk }, BAL_COMMITMENT));
       let best = null;
-      for (const acc of ((accs && accs.value) || [])) { const info = acc.account && acc.account.data && acc.account.data.parsed && acc.account.data.parsed.info; const amt = info && info.tokenAmount && info.tokenAmount.amount; if (amt == null) continue; const ui = Number((info.tokenAmount && info.tokenAmount.uiAmount)||0); if (!best || ui > best.uiAmount) best = { amount: String(amt), decimals: Number((info.tokenAmount && info.tokenAmount.decimals)!=null?info.tokenAmount.decimals:6), uiAmount: ui }; }
-      setBalances(prev => ({ ...prev, [mintStr]: best || { amount:'0', decimals:6, uiAmount:0 } }));
-    } catch (e) { console.warn('[ape-bal] one-token', e&&e.message); }
+      for (const acc of ((accs && accs.value) || [])) {
+        const info = acc.account && acc.account.data && acc.account.data.parsed && acc.account.data.parsed.info;
+        const amt = info && info.tokenAmount && info.tokenAmount.amount;
+        if (amt == null) continue;
+        const ui = Number((info.tokenAmount && info.tokenAmount.uiAmount) || 0);
+        if (!best || ui > best.uiAmount) {
+          best = {
+            amount: String(amt),
+            decimals: Number((info.tokenAmount && info.tokenAmount.decimals) != null ? info.tokenAmount.decimals : 6),
+            uiAmount: ui,
+          };
+        }
+      }
+      setBalances(prev => ({ ...prev, [mintStr]: best || { amount: '0', decimals: 6, uiAmount: 0 } }));
+    } catch (e) { console.warn('[ape-bal] one-token', e && e.message); }
   }, [wallet.publicKey]);
 
   const solBalance = balances[SOL_MINT];
@@ -1092,9 +1145,12 @@ export default function Ape() {
     } else {
       pushToast({ kind: 'error', emoji: '⏳', body: <><b>Not confirmed</b><br/>Sent but didn't confirm. Check Solscan before retrying.</>, solscan: 'https://solscan.io/tx/' + sig, duration: 13000 });
     }
-    refreshSol(); [1200, 3000, 6000].forEach(ms => setTimeout(() => { refreshSol(); refreshOneToken(token.mint); }, ms));
+    // Post-trade refresh — matches LaunchRadar exactly.
+    refreshSol();
+    [1200, 3000, 6000].forEach(ms => setTimeout(() => { refreshSol(); refreshOneToken(token.mint); }, ms));
+    aggressiveRefresh();
     return { confirmed };
-  }, [executeSwap, fireConfetti, pushToast, refreshSol, refreshOneToken, solPrice]);
+  }, [executeSwap, fireConfetti, pushToast, refreshSol, refreshOneToken, aggressiveRefresh, solPrice]);
 
   const onApe = useCallback(async (token) => {
     if (busyMint) return;
@@ -1136,10 +1192,13 @@ export default function Ape() {
       const tx = new VersionedTransaction(msg); tx.sign([wallet.keypair]);
       const sig = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false, maxRetries: 5 });
       pushToast({ kind: 'success', emoji: '✅', body: <><b>Sent {solAmt} SOL</b></>, solscan: 'https://solscan.io/tx/' + sig });
+      // Post-withdraw refresh — same aggressive cadence as a trade.
+      refreshSol();
       [1500, 4000].forEach(ms => setTimeout(refreshSol, ms));
+      aggressiveRefresh();
     } catch (e) { pushToast({ kind: 'error', emoji: '😵', body: friendlyError(e) }); }
     finally { setWithdrawing(false); }
-  }, [connection, wallet.keypair, wallet.publicKey, pushToast, refreshSol]);
+  }, [connection, wallet.keypair, wallet.publicKey, pushToast, refreshSol, aggressiveRefresh]);
 
   const freshTokens = useMemo(() => recentTokens.filter(t => Number.isFinite(t.ageMs) && t.ageMs < freshThresholdMs), [recentTokens, freshThresholdMs]);
   const activeList = lane === 'fresh' ? freshTokens : recentTokens;
