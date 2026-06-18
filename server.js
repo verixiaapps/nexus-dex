@@ -88,11 +88,11 @@ const JUPITER_PRICE_BASE    = 'https://lite-api.jup.ag/price/v3';
 // file: client code hits /api/solana-rpc (same-origin) and the server proxies.
 //
 // To switch to devnet:    set SOLANA_NETWORK=devnet
-// To override entirely:   set DRPC_RPC_URL (legacy var name, kept for compat)
+// To override entirely:   set SOLANA_RPC_URL
 const ALCHEMY_MAINNET_URL = 'https://solana-mainnet.g.alchemy.com/v2/3iScOZl86KTeWqY8qisKC';
 const ALCHEMY_DEVNET_URL  = 'https://solana-devnet.g.alchemy.com/v2/3iScOZl86KTeWqY8qisKC';
 const SOLANA_NETWORK      = (process.env.SOLANA_NETWORK || 'mainnet').toLowerCase();
-const DRPC_RPC_URL        = (process.env.DRPC_RPC_URL || '').trim() ||
+const SOLANA_RPC_URL      = (process.env.SOLANA_RPC_URL || '').trim() ||
   (SOLANA_NETWORK === 'devnet' ? ALCHEMY_DEVNET_URL : ALCHEMY_MAINNET_URL);
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
@@ -160,8 +160,6 @@ function scrubSecrets(s) {
   if (s == null) return '';
   return String(s)
     .replace(/api-key=[^&\s"']+/gi,                       'api-key=***')
-    // dRPC URLs (legacy)
-    .replace(/(lb\.drpc\.(?:live|org)\/)[^\s"'?]+/gi,     '$1***/***')
     // Alchemy URLs — strip the API key segment after /v2/
     .replace(/(solana-(?:mainnet|devnet)\.g\.alchemy\.com\/v2\/)[^\s"'?]+/gi, '$1***')
     .replace(/x-api-key["':\s]+[^&\s"',}]+/gi,            'x-api-key=***')
@@ -830,14 +828,14 @@ app.get('/api/whale-events', async (req, res) => {
 const RPC_TIMEOUT_MS = 10_000;
 
 function getSolanaRpcUrl() {
-  return DRPC_RPC_URL;
+  return SOLANA_RPC_URL;
 }
 
-async function _drpcSingle(single) {
+async function _rpcSingle(single) {
   const id = single?.id ?? null;
   try {
     const r = await fetchWithTimeout(
-      DRPC_RPC_URL,
+      SOLANA_RPC_URL,
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(single) },
       RPC_TIMEOUT_MS,
     );
@@ -853,7 +851,7 @@ async function _drpcSingle(single) {
 }
 
 async function forwardRpc(body) {
-  if (!DRPC_RPC_URL) {
+  if (!SOLANA_RPC_URL) {
     const err = new Error('Solana RPC URL is not configured');
     err.status = 500;
     throw err;
@@ -861,13 +859,13 @@ async function forwardRpc(body) {
 
   // Batched request → split into parallel singles, reassemble as array.
   if (Array.isArray(body)) {
-    const results = await Promise.all(body.map(_drpcSingle));
+    const results = await Promise.all(body.map(_rpcSingle));
     return { status: 200, parsed: results, raw: null };
   }
 
   // Single request — original path.
   const r = await fetchWithTimeout(
-    DRPC_RPC_URL,
+    SOLANA_RPC_URL,
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) },
     RPC_TIMEOUT_MS,
   );
@@ -922,7 +920,7 @@ app.get('/api/health', (req, res) => {
       jupiter:        Boolean(JUPITER_ENABLED),
       jupiterApiKey:  Boolean(JUPITER_API_KEY),
       jupiterSeoKey:  Boolean(JUPITER_API_KEY_SEO),
-      solanaRpc:      Boolean(DRPC_RPC_URL),
+      solanaRpc:      Boolean(SOLANA_RPC_URL),
       chainflip:      true,
     },
     jupiter: {
@@ -937,7 +935,7 @@ app.get('/api/health', (req, res) => {
     solanaRpc: {
       provider:  'alchemy',
       network:   SOLANA_NETWORK,
-      urlSet:    Boolean(DRPC_RPC_URL),
+      urlSet:    Boolean(SOLANA_RPC_URL),
       timeoutMs: RPC_TIMEOUT_MS,
       batching:  'server-side unroll',
     },
