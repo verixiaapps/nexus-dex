@@ -1,3 +1,4 @@
+```jsx
 // SwapWidget.jsx — atomic single-transaction Jupiter swap.
 //
 // VISUAL REDESIGN — Wonderland-light, sky+pink accents to match the
@@ -304,16 +305,15 @@ const USDC_MINT  = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const PRIORITY_FEE_MICROLAMPORTS = 50_000;
 const SLIPPAGE_BPS = 500;
 
-// Single dRPC connection. No fallbacks. REACT_APP_DRPC_API_KEY env var required.
-// Client-side: CRA only bundles env vars with the REACT_APP_ prefix. If it's
-// missing, every RPC call will fail (401/404). The console error below fires
-// on load to make that obvious.
-const DRPC_API_KEY =
-  (typeof process !== 'undefined' && process.env && process.env.REACT_APP_DRPC_API_KEY) || '';
-if (!DRPC_API_KEY && typeof console !== 'undefined') {
-  console.error('[swap] REACT_APP_DRPC_API_KEY is not set — all RPC calls will fail.');
+// Single dRPC endpoint. No fallbacks.
+// REACT_APP_DRPC_RPC_URL holds the FULL URL with the api key embedded.
+// CRA only bundles env vars with the REACT_APP_ prefix. If missing, every
+// RPC call will fail (401/404). The console error below fires on load to
+// make that obvious.
+const RPC_URL = process.env.REACT_APP_DRPC_RPC_URL || '';
+if (!RPC_URL && typeof console !== 'undefined') {
+  console.error('[swap] REACT_APP_DRPC_RPC_URL is not set — all RPC calls will fail.');
 }
-const RPC_URL = 'https://lb.drpc.live/solana/' + DRPC_API_KEY;
 
 const BAL_COMMITMENT = 'processed';
 
