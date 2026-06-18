@@ -2,8 +2,17 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import * as anchor from '@coral-xyz/anchor';
 import { Connection, PublicKey, SystemProgram } from '@solana/web3.js';
 
-// CHANGE THIS LINE after mainnet deploy:
-const PROGRAM_ID = new PublicKey('REPLACE_AFTER_DEPLOY');
+// Flipsy program ID. Reads from env at build time. Falls back to the System
+// Program (all 1s — valid base58) so the import doesn't throw if the env var
+// is missing — the hook will then surface "No IDL on chain" through its
+// normal error path instead of taking down the whole app.
+//
+// TODO: set REACT_APP_FLIPSY_PROGRAM_ID in your Railway/build env to the
+// deployed Flipsy program ID before shipping the Flipsy page.
+const PROGRAM_ID = new PublicKey(
+  process.env.REACT_APP_FLIPSY_PROGRAM_ID || '11111111111111111111111111111111',
+);
+
 // Switch when going to mainnet:
 const FLIPSY_RPC = 'https://api.devnet.solana.com';
 // const FLIPSY_RPC = 'https://api.mainnet-beta.solana.com';
