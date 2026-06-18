@@ -4,10 +4,9 @@ import { Connection, PublicKey, SystemProgram } from '@solana/web3.js';
 
 // CHANGE THIS LINE after mainnet deploy:
 const PROGRAM_ID = new PublicKey('REPLACE_AFTER_DEPLOY');
-// dRPC devnet, path-based with API key. No fallback.
-// Format per https://drpc.org/docs/gettingstarted/firstrequest — confirm the exact
-// URL on your dRPC dashboard's "Solana Devnet" endpoint page.
-const FLIPSY_RPC = `https://lb.drpc.live/solana-devnet/${process.env.DRPC_API_KEY}`;
+// Switch when going to mainnet:
+const FLIPSY_RPC = 'https://api.devnet.solana.com';
+// const FLIPSY_RPC = 'https://api.mainnet-beta.solana.com';
 
 const PRICE_URL = 'https://api.coinbase.com/v2/prices/SOL-USD/spot';
 const POLL_PRICE_MS = 2_500;
@@ -106,6 +105,7 @@ export function useFlipsy(wallet) {
   const [recentRounds, setRecentRounds] = useState([]);
   const [userBets, setUserBets] = useState({});
   const [balance, setBalance] = useState(0);
+  const [balanceStatus, setBalanceStatus] = useState('idle');
   const [loading, setLoading] = useState(true);
   const [programConfig, setProgramConfig] = useState(null);
   const [chainError, setChainError] = useState(null);
@@ -296,10 +296,16 @@ export function useFlipsy(wallet) {
 
         let walletBalanceUsd = 0;
         if (walletPk) {
+          if (!cancelled) setBalanceStatus('loading');
           try {
             const lamports = await connection.getBalance(walletPk);
             walletBalanceUsd = solToUsd(lamportsToSol(lamports), price);
-          } catch (_) {}
+            if (!cancelled) setBalanceStatus('ok');
+          } catch (_) {
+            if (!cancelled) setBalanceStatus('fail');
+          }
+        } else {
+          if (!cancelled) setBalanceStatus('idle');
         }
 
         if (cancelled) return;
@@ -380,13 +386,13 @@ export function useFlipsy(wallet) {
     } catch (e) { console.warn('[flipsy] round fetch:', e); }
 
     const configPda = findConfigPda();
-    let superAdmin;
+    let authorityPk;
     try {
       const cfg = await writeProgram.account.config.fetch(configPda);
-      superAdmin = toPubkey(cfg.authority || cfg.admin);
+      authorityPk = toPubkey(cfg.authority || cfg.admin);
       claimForfeitDelay = bnToNumber(cfg.claimForfeitDelay) || DEFAULT_CLAIM_FORFEIT_DELAY;
     } catch (e) { throw new Error('Failed to load program config'); }
-    if (!superAdmin) throw new Error('Program authority missing');
+    if (!authorityPk) throw new Error('Program authority missing');
 
     const nowTs = Math.floor(Date.now() / 1000);
     if (resolvedAt > 0 && nowTs > resolvedAt + claimForfeitDelay) {
@@ -402,7 +408,7 @@ export function useFlipsy(wallet) {
           .accounts({
             config: configPda, round: roundPda,
             bet: findBetPda(epoch, walletPk, bet.betIndex),
-            vault: vaultPda, authority: superAdmin, user: walletPk,
+            vault: vaultPda, authority: authorityPk, user: walletPk,
           })
           .rpc();
       } catch (e) {
@@ -416,6 +422,7 @@ export function useFlipsy(wallet) {
 
   return {
     livePrice, liveRound, upcomingRounds, recentRounds, userBets, balance,
+    balanceStatus,
     placeBet, claim, loading, programConfig, chainError,
   };
 }
