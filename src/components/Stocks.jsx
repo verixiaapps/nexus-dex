@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
-import {  
+import {
   VersionedTransaction,
   TransactionInstruction,
   TransactionMessage,
@@ -273,14 +273,42 @@ body.nexus-scroll-locked{overflow:hidden}
   font-variant-numeric:tabular-nums;line-height:1;
 }
 
-.st-you-own{
-  margin-top:10px;padding:10px 14px;border-radius:14px;
-  background:linear-gradient(135deg,rgba(127,255,212,.18),rgba(160,231,255,.18));
-  border:1px solid rgba(127,255,212,.40);
-  display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:11px;
+/* WALLET BALANCE PILLS — USDC always shown, brand shown when held.
+   Both display USD value alongside. */
+.st-balances{
+  margin-top:10px;
+  display:grid;grid-template-columns:1fr 1fr;gap:8px;
 }
-.st-you-own-label{color:var(--green);font-weight:700;letter-spacing:1.2px;font-size:10px}
-.st-you-own-val{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums;text-align:right}
+.st-balances.st-bal-one{grid-template-columns:1fr}
+.st-bal-pill{
+  padding:10px 14px;border-radius:14px;
+  background:var(--glass-strong);
+  border:1px solid var(--border);
+  display:flex;flex-direction:column;gap:4px;
+  min-width:0;
+}
+.st-bal-pill.st-bal-usdc{
+  background:linear-gradient(135deg,rgba(127,255,212,.18),rgba(160,231,255,.18));
+  border-color:rgba(127,255,212,.40);
+}
+.st-bal-label{
+  font-size:9px;font-weight:700;letter-spacing:1.4px;
+  color:var(--ink-2);
+  display:flex;align-items:center;gap:5px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.st-bal-pill.st-bal-usdc .st-bal-label{color:var(--green)}
+.st-bal-amt{
+  font-family:"Instrument Serif",serif;font-size:20px;line-height:1;
+  color:var(--ink);font-variant-numeric:tabular-nums;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.st-bal-usd{
+  font-size:11px;font-weight:600;color:var(--ink-2);
+  font-variant-numeric:tabular-nums;
+}
+.st-bal-pill.st-bal-usdc .st-bal-usd{color:var(--green);opacity:.85}
+
 .st-muted-soft{color:var(--ink-2);font-weight:500}
 .st-muted-deep{color:var(--ink-3);font-weight:500}
 .st-muted{color:var(--ink-3)}
@@ -352,10 +380,14 @@ body.nexus-scroll-locked{overflow:hidden}
 .st-receive-loading{color:var(--lav)}
 .st-receive-val{
   font-family:"Instrument Serif",serif;font-size:30px;line-height:1;
-  color:var(--ink);font-variant-numeric:tabular-nums;margin-bottom:10px;
+  color:var(--ink);font-variant-numeric:tabular-nums;margin-bottom:6px;
 }
 .st-receive-val.st-muted{color:var(--ink-3)}
-.st-receive-meta{border-top:1px solid var(--border);padding-top:8px}
+.st-receive-usd{
+  font-size:13px;font-weight:600;color:var(--ink-2);
+  font-variant-numeric:tabular-nums;margin-bottom:10px;
+}
+.st-receive-meta{border-top:1px solid var(--border);padding-top:8px;margin-top:4px}
 .st-receive-meta-row{display:flex;justify-content:space-between;padding:3px 0;font-size:11px}
 .st-receive-meta-row span:first-child{color:var(--ink-2);font-weight:500}
 .st-receive-meta-row span:last-child{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
@@ -1048,6 +1080,8 @@ function TradeModal({ open, brand, icon, price, onClose, walletPubkey, onConnect
   const netOutUsdc  = !isBuy ? Math.max(0, grossOut - platformFeeUsd) : 0;
   const outAmount   = isBuy ? grossOut : netOutUsdc;
   const priceImpactPct = quote?.priceImpactPct ? Number(quote.priceImpactPct) * 100 : 0;
+  // USD value of the brand tokens you'll receive on BUY (for sanity-check).
+  const buyReceiveUsd = isBuy && price > 0 ? grossOut * price : 0;
 
   const brandAtomicNeeded = (() => {
     if (isBuy || !(usd > 0) || !(price > 0) || !brand) return 0n;
@@ -1158,6 +1192,9 @@ function TradeModal({ open, brand, icon, price, onClose, walletPubkey, onConnect
   ];
   const chips = isBuy ? buyChips : sellChips;
 
+  // Brand pill only shown when wallet holds some.
+  const showBrandPill = wcon && brandBal.loaded && brandBal.ui > 0;
+
   return (
     <>
       <div onClick={isBusy ? undefined : onClose} className={'st-modal-backdrop' + (isBusy ? ' st-busy' : '')}/>
@@ -1181,18 +1218,29 @@ function TradeModal({ open, brand, icon, price, onClose, walletPubkey, onConnect
               <span className="st-live-price-val">{fmtUsd(price)}</span>
             </div>
           )}
+
+          {/* Wallet balances — USDC always (it's how you pay/get paid),
+              brand only when held. Both show USD value. */}
           {wcon && (
-            <div className="st-you-own">
-              <span className="st-you-own-label">YOU OWN</span>
-              <span className="st-you-own-val">
-                {!brandBal.loaded
-                  ? '...'
-                  : brandBal.ui > 0
-                    ? <>{fmtAmt(brandBal.ui, 6)} {brand.symbol} <span className="st-muted-soft">· {fmtUsd(brandBal.ui * price, 2)}</span></>
-                    : <span className="st-muted">0 {brand.symbol}</span>}
-                {' '}
-                <span className="st-muted-deep">· {usdcBal.loaded ? fmtUsd(usdcBal.ui, 2) : '...'} USDC</span>
-              </span>
+            <div className={'st-balances' + (showBrandPill ? '' : ' st-bal-one')}>
+              <div className="st-bal-pill st-bal-usdc">
+                <span className="st-bal-label">USDC BALANCE</span>
+                <span className="st-bal-amt">
+                  {usdcBal.loaded ? fmtAmt(usdcBal.ui, 2) : '...'}
+                </span>
+                <span className="st-bal-usd">
+                  {usdcBal.loaded ? '≈ ' + fmtUsd(usdcBal.ui, 2) : ' '}
+                </span>
+              </div>
+              {showBrandPill && (
+                <div className="st-bal-pill">
+                  <span className="st-bal-label">{brand.symbol} BALANCE</span>
+                  <span className="st-bal-amt">{fmtAmt(brandBal.ui, 4)}</span>
+                  <span className="st-bal-usd">
+                    {price > 0 ? '≈ ' + fmtUsd(brandBal.ui * price, 2) : ' '}
+                  </span>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1256,6 +1304,10 @@ function TradeModal({ open, brand, icon, price, onClose, walletPubkey, onConnect
               <div className={'st-receive-val' + (outAtomic > 0 ? '' : ' st-muted')}>
                 {outAtomic > 0 ? (isBuy ? fmtAmt(outAmount, 6) + ' ' + brand.symbol : fmtUsd(outAmount, 2)) : '—'}
               </div>
+              {/* USD value of brand tokens received on BUY — easy gut-check. */}
+              {isBuy && outAtomic > 0 && buyReceiveUsd > 0 && (
+                <div className="st-receive-usd">≈ {fmtUsd(buyReceiveUsd, 2)}</div>
+              )}
               {quote && (
                 <div className="st-receive-meta">
                   {[
