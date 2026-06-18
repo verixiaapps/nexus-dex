@@ -37,7 +37,6 @@ const CSP_DIRECTIVES = [
   ['connect-src',     [
     "'self'",
     'https://api.jup.ag', 'https://lite-api.jup.ag', 'https://quote-api.jup.ag', 'https://token.jup.ag',
-    'https://li.quest',
     // Solana RPC — dRPC is the sole endpoint, server- and client-side. No fallbacks.
     'https://lb.drpc.live',
     'https://explorer-api.walletconnect.com',
@@ -87,9 +86,6 @@ const JUPITER_PRICE_BASE    = 'https://lite-api.jup.ag/price/v3';
 // Solana RPC — dRPC. Set DRPC_API_KEY in Railway. No fallbacks anywhere.
 const DRPC_API_KEY = process.env.DRPC_API_KEY || '';
 const DRPC_RPC_URL = DRPC_API_KEY ? `https://lb.drpc.live/solana/${DRPC_API_KEY}` : '';
-
-const LIFI_API     = 'https://li.quest/v1';
-const LIFI_API_KEY = process.env.LIFI_API_KEY || '';
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 
@@ -177,12 +173,11 @@ function setCachedJson(url, status, payload, ttlMs) {
 }
 
 /* ========================================================================
- * Launch Radar — LIVE feed via PumpPortal WebSocket  (NEW SECTION)
+ * Launch Radar — LIVE feed via PumpPortal WebSocket
  * ─────────────────────────────────────────────────────────────────────────
- * Self-contained. Does NOT modify any pre-existing route, helper, or
- * constant. Registered BEFORE the older /api/dex/launches route below,
- * so Express first-match-wins: this handler serves the request and the
- * legacy DexScreener-profiles route is dormant.
+ * Self-contained. Registered BEFORE the older /api/dex/launches route
+ * below, so Express first-match-wins: this handler serves the request and
+ * the legacy DexScreener-profiles route is dormant.
  *
  * DATA FLOW
  *   1. PumpPortal WS (wss://pumpportal.fun/api/data, subscribeNewToken)
@@ -193,77 +188,49 @@ function setCachedJson(url, status, payload, ttlMs) {
  *      DexScreener's /latest/dex/tokens/<mints> for price/liquidity
  *      enrichment, and returns the result.
  *
- * CONTRACT-ADDRESS INVARIANT (the rule)
+ * CONTRACT-ADDRESS INVARIANT
  *   The mint string from the WS is the canonical ID. It is NEVER
  *   transformed, substituted, or matched fuzzily. It flows verbatim:
  *       WS  →  DexScreener enrichment  →  card  →  /api/pumpfun/trade
- *   When bucketing DexScreener pairs, we accept a pair only if
- *   baseToken.address === mint OR quoteToken.address === mint
- *   (strict equality). _lrShape further requires that at least one
- *   pair belongs to dexId "pumpfun" or "pumpswap" — the same contract
- *   gate the legacy code uses.
- *
- * REQUIRES: `ws` (already a dep via alpha-watcher.js).
  * ===================================================================== */
 const _LR_DEX_BASE     = 'https://api.dexscreener.com';
 const _LR_PUMP_WS_URL  = 'wss://pumpportal.fun/api/data';
 const _LR_PUMP_DEX_IDS = new Set(['pumpfun', 'pumpswap']);
 const _LR_BASE58_RE    = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-const _LR_BUFFER_MAX   = 200;     // rolling window of newest mints
-const _LR_FEED_LIMIT   = 30;      // mints returned per response (matches DexScreener's batch limit)
-const _LR_CACHE_MS     = 3_000;   // /api/dex/launches response cache
+const _LR_BUFFER_MAX   = 200;
+const _LR_FEED_LIMIT   = 30;
+const _LR_CACHE_MS     = 3_000;
 
 const _LR_WebSocket = require('ws');
 
-// mint → { mint, sym, name, uri, pool, createdAt }
-// Map preserves insertion order — oldest at the head, newest at the tail.
 const _lrBuf = new Map();
 let _lrWs = null;
 let _lrWsReconnect = null;
 let _lrWsConnectedAt = 0;
 
-// Per-mint live stats derived from PumpPortal `subscribeTokenTrade` events.
-//   mint → { traders: Set<string>, vSol: number, lastUpdate: number }
-// vSol is the bonding curve's virtual SOL reserves IN SOL UNITS (not lamports).
-// traders is the set of every wallet that has bought or sold this mint while
-// we've been subscribed — a tight upper bound on holders for fresh tokens
-// (most fresh-launch traders still hold). For mature tokens it overstates,
-// but for the radar's "Just Hatched" focus this is close to truth.
-// CONTRACT-ADDRESS GATE: the map key is the canonical mint string from the
-// WS message, identical to _lrBuf's key. Entries are only created for mints
-// already in _lrBuf — wrong/spoofed mints from the trade stream are dropped.
 const _lrTradeStats   = new Map();
-const _LR_TRADERS_MAX = 5_000;   // per-mint memory cap on the Set
+const _LR_TRADERS_MAX = 5_000;
 
 function _lrAddMint(msg) {
   const mint = msg?.mint;
   if (!mint || typeof mint !== 'string') return;
   if (!_LR_BASE58_RE.test(mint)) return;
   if (msg.txType && msg.txType !== 'create') return;
-  if (_lrBuf.has(mint)) return;                              // dedupe
+  if (_lrBuf.has(mint)) return;
   _lrBuf.set(mint, {
-    mint,                                                    // canonical, unchanged
+    mint,
     sym:  String(msg.symbol || '???').slice(0, 24),
     name: String(msg.name || msg.symbol || 'Unknown').slice(0, 96),
     uri:  msg.uri || null,
     pool: msg.pool || 'pump',
     createdAt: Date.now(),
   });
-  // Trim oldest entries until we're back under the cap.
   while (_lrBuf.size > _LR_BUFFER_MAX) {
     const oldestKey = _lrBuf.keys().next().value;
     if (oldestKey == null) break;
     _lrBuf.delete(oldestKey);
     _lrTradeStats.delete(oldestKey);
   }
-  // Seed _lrTradeStats from the create event itself so LIQ + HOLDERS render
-  // at t=0 — before any organic trade arrives. vSolInBondingCurve is the
-  // bonding curve's initial virtual SOL reserve (SOL units, not lamports);
-  // traderPublicKey on a 'create' frame is the dev wallet.
-  // Safe to .set() unconditionally: this mint just passed the _lrBuf.has()
-  // dedupe gate above, so _lrTradeStats can't already hold an entry for it
-  // (_lrTrackTrade requires _lrBuf.has(mint), which only becomes true on the
-  // _lrBuf.set above — single-threaded, no race).
   const initVSol = Number(msg.vSolInBondingCurve);
   const creator  = msg.traderPublicKey;
   const hasVSol  = Number.isFinite(initVSol) && initVSol > 0;
@@ -274,14 +241,9 @@ function _lrAddMint(msg) {
     if (hasDev)  s.traders.add(creator);
     _lrTradeStats.set(mint, s);
   }
-  // Subscribe to trade events for this newly-tracked mint so we can fill
-  // holders + on-curve liquidity even when pump.fun's frontend API is down.
   _lrSubTrades([mint]);
 }
 
-// Send a subscribeTokenTrade frame for one or more mints. PumpPortal accepts
-// a batch in `keys`. Silent no-op if the WS isn't open — re-subscription is
-// handled by ws.on('open') when the connection reopens.
 function _lrSubTrades(keys) {
   if (!_lrWs || _lrWs.readyState !== _LR_WebSocket.OPEN) return;
   if (!Array.isArray(keys) || keys.length === 0) return;
@@ -289,13 +251,10 @@ function _lrSubTrades(keys) {
   catch (e) { console.warn('[lr-ws] subscribeTokenTrade send failed:', e?.message); }
 }
 
-// Update per-mint trade stats from a PumpPortal trade event.
-// Strict mint gate: only mints already in _lrBuf are tracked, so a trade
-// arriving for some other mint (rogue or stale subscription) is ignored.
 function _lrTrackTrade(msg) {
   const mint = msg?.mint;
   if (!mint || typeof mint !== 'string' || !_LR_BASE58_RE.test(mint)) return;
-  if (!_lrBuf.has(mint)) return;                       // contract-address gate
+  if (!_lrBuf.has(mint)) return;
 
   let s = _lrTradeStats.get(mint);
   if (!s) {
@@ -309,7 +268,6 @@ function _lrTrackTrade(msg) {
     s.traders.add(trader);
   }
 
-  // vSolInBondingCurve is reported in SOL (NOT lamports).
   const vSol = Number(msg.vSolInBondingCurve);
   if (Number.isFinite(vSol) && vSol > 0) s.vSol = vSol;
 
@@ -333,8 +291,6 @@ function _lrConnectWs() {
     console.log('[lr-ws] connected → subscribeNewToken');
     try { ws.send(JSON.stringify({ method: 'subscribeNewToken' })); }
     catch (e) { console.warn('[lr-ws] subscribe send failed:', e?.message); }
-    // Re-subscribe to trades for everything already in the buffer. On a fresh
-    // boot _lrBuf is empty; this only does work on reconnects.
     const existing = [..._lrBuf.keys()];
     if (existing.length > 0) {
       try { ws.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: existing })); }
@@ -346,8 +302,6 @@ function _lrConnectWs() {
     try {
       const m = JSON.parse(raw.toString());
       const tx = m?.txType;
-      // PumpPortal sends 'create' frames from subscribeNewToken and
-      // 'buy' / 'sell' frames from subscribeTokenTrade. Route accordingly.
       if (!tx || tx === 'create')        _lrAddMint(m);
       else if (tx === 'buy' || tx === 'sell') _lrTrackTrade(m);
     } catch { /* malformed frame — ignore */ }
@@ -362,17 +316,11 @@ function _lrConnectWs() {
 
   ws.on('error', (err) => {
     console.warn('[lr-ws] error:', err?.message);
-    // The 'close' event will follow and trigger reconnect.
   });
 }
 
-// Kick off the WS subscriber on boot.
 _lrConnectWs();
 
-// Shape one mint's DexScreener pairs → token row.
-// Identity check is strict: a pair counts only when baseToken.address ===
-// mint OR quoteToken.address === mint (exact equality). Contract gate: at
-// least one of those qualifying pairs must be on dexId pumpfun or pumpswap.
 function _lrShape(mint, pairs, wsMeta) {
   if (!Array.isArray(pairs) || pairs.length === 0) return null;
   const ours = pairs.filter(p =>
@@ -389,7 +337,7 @@ function _lrShape(mint, pairs, wsMeta) {
   const quote = best.quoteToken || {};
   const me    = base.address === mint ? base : quote;
   return {
-    mint,                                                    // unchanged from WS
+    mint,
     sym:            me.symbol || wsMeta?.sym || '???',
     name:           me.name   || wsMeta?.name || me.symbol || 'Unknown',
     icon:           best.info?.imageUrl || null,
@@ -406,22 +354,9 @@ function _lrShape(mint, pairs, wsMeta) {
   };
 }
 
-/* ------------------------------------------------------------------------
- * Pump.fun frontend-API enrichment — holders + on-curve liquidity.
- *
- * SOURCE: https://frontend-api.pump.fun/coins/{mint}  (undocumented, no key)
- *
- * CONTRACT-ADDRESS GATE: response is only trusted when its `mint` field
- * EXACTLY equals the requested mint. Mismatch → discard, nothing written.
- *
- * Defensive about field names + failures. First response logs its key
- * list so we can adjust if pump.fun changes the schema. If pump.fun is
- * rate-limiting / Cloudflare-blocking the server IP, this silently
- * leaves the token's existing DexScreener-derived values alone.
- * ---------------------------------------------------------------------- */
 const _LR_PF_BASE     = 'https://frontend-api.pump.fun/coins';
 const _LR_PF_CACHE_MS = 30_000;
-const _lrPfCache  = new Map();    // mint → { holders, liquidityUsd, imageUrl, ts }
+const _lrPfCache  = new Map();
 let   _lrPfLogged = false;
 
 async function _lrFetchPumpInfo(mint, solPriceUsd) {
@@ -441,7 +376,6 @@ async function _lrFetchPumpInfo(mint, solPriceUsd) {
       return null;
     }
     const d = await r.json();
-    // CONTRACT-ADDRESS GATE — only trust the response if it's for the mint we asked for.
     if (!d || typeof d !== 'object' || d.mint !== mint) {
       if (!_lrPfLogged) {
         _lrPfLogged = true;
@@ -454,14 +388,11 @@ async function _lrFetchPumpInfo(mint, solPriceUsd) {
       console.log('[lr-pf] sample fields:', Object.keys(d).join(','));
     }
     const holders = Number(d.holder_count ?? d.num_holders ?? d.holders ?? 0) || 0;
-    // ── IMAGE: pump.fun returns the CDN-hosted image directly. Strict mint
-    //    gate above already guarantees this image belongs to this mint.
     const imageUrl = (typeof d.image_uri === 'string' && d.image_uri) ||
                      (typeof d.image     === 'string' && d.image)     || null;
     let liquidityUsd = 0;
     const vSol = Number(d.virtual_sol_reserves ?? d.virtualSolReserves ?? 0);
     if (vSol > 0 && solPriceUsd > 0) {
-      // Pump curve is single-sided; DexScreener-style "liquidity" doubles the SOL side.
       liquidityUsd = (vSol / 1e9) * solPriceUsd * 2;
     }
     const out = { holders, liquidityUsd, imageUrl, ts: Date.now() };
@@ -476,29 +407,13 @@ async function _lrFetchPumpInfo(mint, solPriceUsd) {
   }
 }
 
-/* ------------------------------------------------------------------------
- * Metaplex / pump.fun off-chain JSON metadata — image fallback only.
- *
- * SOURCE: the `uri` field stored verbatim in _lrBuf at WS arrival. Typically
- * an Arweave / IPFS gateway URL of a Metaplex-style JSON document:
- *     { name, symbol, description, image, ... }
- *
- * CONTRACT-ADDRESS GATE: the uri itself is keyed under the canonical mint
- * in _lrBuf — never re-derived, never substituted. A wrong uri would just
- * yield an image for a different token, which is no worse than a missing
- * image; we never use the URI for trading or balance lookups.
- *
- * Read-only. Cached per uri (NOT per mint, so we don't re-hit the same
- * Arweave URL many times). Failures are silent — DexScreener / pump.fun
- * icon paths remain authoritative.
- * ---------------------------------------------------------------------- */
 const _LR_META_CACHE_MS = 5 * 60_000;
-const _lrMetaCache = new Map();      // uri → { image, ts }
+const _lrMetaCache = new Map();
 let   _lrMetaLogged = false;
 
 async function _lrFetchMetaImage(uri) {
   if (!uri || typeof uri !== 'string') return null;
-  if (!/^https?:\/\//i.test(uri)) return null;            // ignore data:, ipfs://, etc.
+  if (!/^https?:\/\//i.test(uri)) return null;
   const hit = _lrMetaCache.get(uri);
   if (hit && Date.now() - hit.ts < _LR_META_CACHE_MS) return hit.image;
   try {
@@ -537,7 +452,6 @@ app.get('/api/dex/launches', async (req, res) => {
     const cached = getCachedJson(cacheKey);
     if (cached) return res.status(cached.status).json(cached.payload);
 
-    // Newest first — Map keys iterate in insertion order (oldest first).
     const allMints = [..._lrBuf.keys()];
     const mints = allMints.reverse().slice(0, _LR_FEED_LIMIT);
 
@@ -547,7 +461,6 @@ app.get('/api/dex/launches', async (req, res) => {
       return res.json(payload);
     }
 
-    // Batch enrichment via DexScreener (up to 30 mints per call).
     const enrichR = await fetchWithTimeout(
       _LR_DEX_BASE + '/latest/dex/tokens/' + mints.join(','),
       { headers: { Accept: 'application/json' } },
@@ -557,8 +470,6 @@ app.get('/api/dex/launches', async (req, res) => {
     const data = await enrichR.json();
     const pairs = Array.isArray(data?.pairs) ? data.pairs : [];
 
-    // Bucket pairs by mint — strict address equality only. A pair whose
-    // base/quote doesn't match a requested mint is silently dropped.
     const byMint = new Map();
     for (const m of mints) byMint.set(m, []);
     for (const p of pairs) {
@@ -573,17 +484,8 @@ app.get('/api/dex/launches', async (req, res) => {
       const shaped = _lrShape(m, byMint.get(m) || [], _lrBuf.get(m));
       if (shaped) tokens.push(shaped);
     }
-    // Final newest-first sort by DexScreener pairCreatedAt (falls back to
-    // WS arrival via _lrShape's pairCreatedAt assignment).
     tokens.sort((a, b) => Number(b.pairCreatedAt || 0) - Number(a.pairCreatedAt || 0));
 
-    // Enrichment — holders, on-curve liquidity, and token image.
-    //   1. Pump.fun frontend API     (holders + liquidity + image, strict mint match)
-    //   2. PumpPortal trade-stats    (live holders + liquidity from WS — fills in
-    //                                 when pump.fun is Cloudflare-blocked)
-    //   3. Metaplex JSON via WS uri  (image only, fresh-token fallback)
-    // Runs in parallel for all tokens. Per-source caches keep load low.
-    // Fails silently if a source is unreachable — DexScreener values remain.
     const _solP = await fetchSolPriceUsd().catch(() => 0);
     await Promise.all(tokens.map(async (t) => {
       const pf = await _lrFetchPumpInfo(t.mint, _solP);
@@ -592,15 +494,11 @@ app.get('/api/dex/launches', async (req, res) => {
         if (!(t.liquidity > 0) && pf.liquidityUsd > 0) t.liquidity = pf.liquidityUsd;
         if (!t.icon && pf.imageUrl)                    t.icon      = pf.imageUrl;
       }
-      // PumpPortal trade-stats fallback. Map key is the verbatim mint, set in
-      // _lrTrackTrade only when _lrBuf already has the mint → no cross-token leak.
       const ts = _lrTradeStats.get(t.mint);
       if (ts) {
         if (!(t.holders   > 0) && ts.traders.size > 0)            t.holders   = ts.traders.size;
         if (!(t.liquidity > 0) && ts.vSol > 0 && _solP > 0)       t.liquidity = ts.vSol * _solP * 2;
       }
-      // Deeper image fallback — the WS-stored uri is keyed on the VERBATIM mint,
-      // so this can never bleed across tokens. Image is the only field consumed.
       if (!t.icon) {
         const wsMeta = _lrBuf.get(t.mint);
         const img    = wsMeta?.uri ? await _lrFetchMetaImage(wsMeta.uri) : null;
@@ -913,95 +811,7 @@ app.get('/api/whale-events', async (req, res) => {
 });
 
 /* ========================================================================
- * Alpha — fresh-wallet convergence detector
- * (requires ./alpha-watcher.js at the same folder and `npm install ws`)
- * ===================================================================== */
-const alpha = require('./alpha-watcher');
-alpha.mountRoutes(app);
-app.get('/nexus-dex/index.html', (req, res) => res.sendFile(path.join(__dirname, 'alpha.html')));
-app.get('/nexus-dex',            (req, res) => res.sendFile(path.join(__dirname, 'alpha.html')));
-
-/* ========================================================================
- * LI.FI
- * ===================================================================== */
-function buildLifiHeaders() {
-  const h = { Accept: 'application/json' };
-  if (LIFI_API_KEY) h['x-lifi-api-key'] = LIFI_API_KEY;
-  return h;
-}
-
-app.get('/api/lifi/tokens', async (req, res) => {
-  try {
-    const qs = queryStringOf(req);
-    const cacheKey = 'lifi:tokens' + qs;
-    const c = getCachedJson(cacheKey);
-    if (c) return res.status(c.status).json(c.payload);
-    const r = await fetchWithTimeout(`${LIFI_API}/tokens${qs}`, { headers: buildLifiHeaders() }, 20_000);
-    const result = await safeJson(r);
-    if (r.ok && result.parsed !== null) setCachedJson(cacheKey, r.status, result.parsed, 300_000);
-    return respondJsonOrError(res, r, result);
-  } catch (e) {
-    if (e.name === 'AbortError') return res.status(504).json({ error: 'LI.FI tokens timed out' });
-    logError('lifi-tokens', e);
-    return res.status(500).json({ error: e.message || 'Unknown error' });
-  }
-});
-
-app.get('/api/lifi/chains', async (req, res) => {
-  try {
-    const qs = queryStringOf(req);
-    const cacheKey = 'lifi:chains' + qs;
-    const c = getCachedJson(cacheKey);
-    if (c) return res.status(c.status).json(c.payload);
-    const r = await fetchWithTimeout(`${LIFI_API}/chains${qs}`, { headers: buildLifiHeaders() }, 12_000);
-    const result = await safeJson(r);
-    if (r.ok && result.parsed !== null) setCachedJson(cacheKey, r.status, result.parsed, 600_000);
-    return respondJsonOrError(res, r, result);
-  } catch (e) {
-    if (e.name === 'AbortError') return res.status(504).json({ error: 'LI.FI chains timed out' });
-    logError('lifi-chains', e);
-    return res.status(500).json({ error: e.message || 'Unknown error' });
-  }
-});
-
-app.get('/api/lifi/quote', async (req, res) => {
-  try {
-    const params = new URLSearchParams(req.query);
-    params.set('skipSimulation', 'true');
-    const r = await fetchWithTimeout(`${LIFI_API}/quote?${params}`, { headers: buildLifiHeaders() }, 15_000);
-    return respondJsonOrError(res, r, await safeJson(r));
-  } catch (e) {
-    if (e.name === 'AbortError') return res.status(504).json({ error: 'LI.FI timed out' });
-    logError('lifi-quote', e);
-    return res.status(500).json({ error: e.message || 'Unknown error' });
-  }
-});
-
-app.get('/api/lifi/status', async (req, res) => {
-  try {
-    const params = new URLSearchParams(req.query);
-    const r = await fetchWithTimeout(`${LIFI_API}/status?${params}`, { headers: buildLifiHeaders() }, 10_000);
-    return respondJsonOrError(res, r, await safeJson(r));
-  } catch (e) {
-    if (e.name === 'AbortError') return res.status(504).json({ error: 'LI.FI status timed out' });
-    logError('lifi-status', e);
-    return res.status(500).json({ error: e.message || 'Unknown error' });
-  }
-});
-
-/* ========================================================================
  * Solana RPC — dRPC (single endpoint, no fallbacks)
- * ─────────────────────────────────────────────────────────────────────────
- * All Solana RPC traffic — server-side proxy routes (/api/solana-rpc,
- * /api/helius/das) and client-side connections (via /embed/config.js) —
- * resolves to https://lb.drpc.live/solana/${DRPC_API_KEY}. If the key is
- * missing, RPC calls return a clear error rather than silently routing
- * to a public endpoint.
- *
- * getSolanaRpcUrl() returns the dRPC URL and is injected into the browser
- * via /embed/config.js. NOTE: this exposes the key to anyone who can load
- * the page (same model as the previous Alchemy setup — domain-scoped key
- * recommended on the dRPC dashboard).
  * ===================================================================== */
 const RPC_TIMEOUT_MS = 10_000;
 
@@ -1009,8 +819,6 @@ function getSolanaRpcUrl() {
   return DRPC_RPC_URL;
 }
 
-// Forward an RPC body to dRPC. Returns { status, parsed, raw }.
-// No fallback — if dRPC fails, the caller surfaces the error.
 async function forwardRpc(body) {
   if (!DRPC_RPC_URL) {
     const err = new Error('DRPC_API_KEY is not set');
@@ -1074,7 +882,6 @@ app.get('/api/health', (req, res) => {
       jupiterApiKey:  Boolean(JUPITER_API_KEY),
       jupiterSeoKey:  Boolean(JUPITER_API_KEY_SEO),
       drpcRpc:        Boolean(DRPC_API_KEY),
-      lifiApiKey:     Boolean(LIFI_API_KEY),
       chainflip:      true,
     },
     jupiter: {
@@ -1085,7 +892,6 @@ app.get('/api/health', (req, res) => {
       keySet:    Boolean(JUPITER_API_KEY),
       seoKeySet: Boolean(JUPITER_API_KEY_SEO),
     },
-    lifi: { baseUrl: LIFI_API, keySet: Boolean(LIFI_API_KEY) },
     chainflip: { network: 'mainnet', brokerCommissionBps: 0 },
     solanaRpc: {
       provider:  'drpc',
@@ -1097,39 +903,15 @@ app.get('/api/health', (req, res) => {
 });
 
 /* ========================================================================
- * Launch Radar — DexScreener data + PumpPortal trades (NEW SECTION)
- * ─────────────────────────────────────────────────────────────────────────
- * Self-contained Launch Radar backend. Replaces ./pumpfun-trade.js — the
- * routes here register BEFORE the `require('./pumpfun-trade')...` line
- * further down, so this version wins (Express first-match-wins). After
- * adopting this, delete pumpfun-trade.js and the require line below.
- *
- *   GET  /api/dex/launches      — latest pump.fun / PumpSwap launches
- *   GET  /api/dex/token/:mint   — one token, shaped + hasPumpPair flag
- *   GET  /api/dex/sol-price     — SOL/USD from DexScreener
- *   POST /api/pumpfun/trade     — thin PumpPortal proxy. Returns base64
- *                                 tx; client decompiles, splices a 3%
- *                                 SOL fee, signs and sends.
- *
- * Contract gate: launches + token endpoints only return mints with at
- * least one pair on dexId "pumpfun" or "pumpswap". Anything in the UI
- * is guaranteed tradable via PumpPortal's pool="auto" routing.
- *
- * Re-uses existing helpers: fetchWithTimeout, safeJson, respondJsonOrError,
- * getCachedJson, setCachedJson, logError. AbortError → 504 like the rest.
+ * Launch Radar — DexScreener data + PumpPortal trades
  * ===================================================================== */
 const DEX_BASE          = 'https://api.dexscreener.com';
 const PUMPPORTAL_URL    = 'https://pumpportal.fun/api/trade-local';
 const PUMP_DEX_IDS      = new Set(['pumpfun', 'pumpswap']);
 const PUMP_BASE58_RE    = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-// 10% slippage on pump.fun trades. CLIENT MATH ASSUMES THIS — if you
-// change it, update the divisor (110n) in LaunchRadar.jsx's swapParams
-// BUY branch to match (100 + PUMP_SLIPPAGE_PCT).
 const PUMP_SLIPPAGE_PCT = 10;
-const PUMP_PRIORITY_FEE = 0.0001;  // SOL — PumpPortal sets compute-unit price
+const PUMP_PRIORITY_FEE = 0.0001;
 
-// Shape one mint's DexScreener pairs → internal token row. Returns null
-// unless at least one pair is pump.fun or PumpSwap (the contract gate).
 function _shapePumpToken(mint, pairs) {
   if (!Array.isArray(pairs) || pairs.length === 0) return null;
   const pumpPair = pairs.find(p => PUMP_DEX_IDS.has(String(p.dexId || '').toLowerCase()));
@@ -1158,71 +940,6 @@ function _shapePumpToken(mint, pairs) {
     decimals:       6,
   };
 }
-
-app.get('/api/dex/launches', async (req, res) => {
-  try {
-    const cacheKey = 'dex:launches';
-    const cached = getCachedJson(cacheKey);
-    if (cached) return res.status(cached.status).json(cached.payload);
-
-    const profR = await fetchWithTimeout(
-      DEX_BASE + '/token-profiles/latest/v1',
-      { headers: { Accept: 'application/json' } },
-      10_000,
-    );
-    if (!profR.ok) return respondJsonOrError(res, profR, await safeJson(profR));
-    const profiles = await profR.json();
-
-    const mints = [];
-    const seen  = new Set();
-    for (const p of (Array.isArray(profiles) ? profiles : [])) {
-      if (p.chainId !== 'solana') continue;
-      const a = p.tokenAddress;
-      if (!a || !PUMP_BASE58_RE.test(a) || seen.has(a)) continue;
-      seen.add(a);
-      mints.push(a);
-      if (mints.length >= 30) break;
-    }
-    if (mints.length === 0) {
-      const payload = { tokens: [] };
-      setCachedJson(cacheKey, 200, payload, 8_000);
-      return res.json(payload);
-    }
-
-    const enrichR = await fetchWithTimeout(
-      DEX_BASE + '/latest/dex/tokens/' + mints.join(','),
-      { headers: { Accept: 'application/json' } },
-      12_000,
-    );
-    if (!enrichR.ok) return respondJsonOrError(res, enrichR, await safeJson(enrichR));
-    const data = await enrichR.json();
-    const pairs = Array.isArray(data?.pairs) ? data.pairs : [];
-
-    const byMint = new Map();
-    for (const m of mints) byMint.set(m, []);
-    for (const p of pairs) {
-      const ba = p.baseToken?.address;
-      const qa = p.quoteToken?.address;
-      if (ba && byMint.has(ba)) byMint.get(ba).push(p);
-      if (qa && byMint.has(qa)) byMint.get(qa).push(p);
-    }
-
-    const tokens = [];
-    for (const m of mints) {
-      const shaped = _shapePumpToken(m, byMint.get(m) || []);
-      if (shaped) tokens.push(shaped);
-    }
-    tokens.sort((a, b) => Number(b.pairCreatedAt || 0) - Number(a.pairCreatedAt || 0));
-
-    const payload = { tokens };
-    setCachedJson(cacheKey, 200, payload, 8_000);
-    return res.json(payload);
-  } catch (e) {
-    if (e.name === 'AbortError') return res.status(504).json({ error: 'DexScreener launches timed out' });
-    logError('dex-launches', e);
-    return res.status(500).json({ error: e.message || 'Unknown error' });
-  }
-});
 
 app.get('/api/dex/token/:mint', async (req, res) => {
   try {
@@ -1285,8 +1002,6 @@ app.get('/api/dex/sol-price', async (req, res) => {
   }
 });
 
-// PumpPortal proxy. Returns binary tx → we base64-encode and wrap in JSON.
-// Cannot use safeJson here because PumpPortal returns octet-stream on success.
 app.post('/api/pumpfun/trade', async (req, res) => {
   try {
     const b = req.body || {};
@@ -1301,13 +1016,11 @@ app.post('/api/pumpfun/trade', async (req, res) => {
 
     let amountStr, denominatedInSol;
     if (action === 'buy') {
-      // Client sends LAMPORTS (the curve-budget portion sized for slippage).
       const lamports = BigInt(String(b.amount));
       if (lamports <= 0n) return res.status(400).json({ error: 'Amount must be > 0' });
       amountStr = (Number(lamports) / 1e9).toFixed(9);
       denominatedInSol = 'true';
     } else {
-      // Client sends RAW token units + decimals.
       const raw = BigInt(String(b.amount));
       if (raw <= 0n) return res.status(400).json({ error: 'Amount must be > 0' });
       const decimals = Number(b.decimals ?? 6);
@@ -1364,16 +1077,7 @@ app.post('/api/pumpfun/trade', async (req, res) => {
 });
 
 /* ========================================================================
- * Launch Radar — pump.fun bonding-curve trades
- * Builds buy/sell instructions server-side via @pump-fun/pump-sdk.
- * Mounted BEFORE the /api/* catch-all so the route resolves.
- * ===================================================================== */
-require('./pumpfun-trade').mountRoutes(app);
-
-/* ========================================================================
  * Launch Radar — Jupiter Ultra V3 proxy (Iris router; pre-grad bonding curves)
- * Added for LaunchRadar's multi-endpoint race. Re-uses the existing
- * JUPITER_API_KEY / JUPITER_ACCOUNT headers and existing helpers.
  * ===================================================================== */
 const JUPITER_ULTRA_BASE = 'https://api.jup.ag/ultra/v1';
 
@@ -1396,48 +1100,11 @@ app.get('/api/jupiter/ultra-order', async (req, res) => {
 
 /* ========================================================================
  * Chainflip — SOL → native BTC
- * ─────────────────────────────────────────────────────────────────────────
- * Self-contained section. Mounted BEFORE `app.all('/api/*', ...)`.
- *
- * Uses @chainflip/sdk server-side. The SDK handles the Q128 fixed-point
- * conversion of `slippageTolerancePercent` → `minPriceX128` on the wire
- * (the public REST endpoint will NOT accept the friendly form), validates
- * amounts against state-chain limits, and locks the schema to a known
- * version. The browser never touches the SDK — it only sees the three
- * thin JSON routes below.
- *
- *   GET  /api/chainflip/quote?amount=<lamports>
- *        → { quote }                                  // REGULAR only
- *
- *   POST /api/chainflip/channel
- *        body: { quote, destAddress, refundAddress }
- *        → { channel: { depositAddress, depositChannelId,
- *                       srcChainExpiryBlock, channelOpeningFee, ... } }
- *
- *   GET  /api/chainflip/status?id=<depositChannelId>
- *        → { status }                                 // v2 status object
- *
- * No broker URL is configured, so `brokerCommissionBps` is forced to 0.
- * The 3% platform fee is collected on-chain via a separate SOL transfer
- * in the client (SolToBtcChainflip.jsx), preserving the same atomic
- * two-tx pattern the Thor page uses.
- *
- * Requires: `npm i @chainflip/sdk` (server-side dep only, ~188KB).
- * Mainnet backend URL is baked into the SDK
- * (https://chainflip-swap.chainflip.io/). No env vars needed.
- *
- * Reuses existing helpers from server.js: logError. The /api/ rate
- * limiter already covers these paths.
  * ===================================================================== */
 const { SwapSDK, Chains, Assets } = require('@chainflip/sdk/swap');
 
-// One SDK instance, reused across requests. Quotes hit a stateless HTTP
-// backend, so this is safe to share. No broker URL → broker commission
-// disabled; we take our cut on-chain in SOL instead (see client).
 const chainflipSdk = new SwapSDK({ network: 'mainnet' });
 
-// Map SDK / SwapService errors to short, user-facing messages without
-// leaking internals. Falls back to the raw message if nothing matches.
 function _cfErrMsg(e) {
   const m = String(e?.message || e || 'Chainflip error');
   if (/below.*minimum|minimum.*deposit|too small/i.test(m)) return 'Amount below Chainflip minimum';
@@ -1482,13 +1149,12 @@ app.post('/api/chainflip/channel', async (req, res) => {
       destAddress,
       fillOrKillParams: {
         refundAddress,
-        retryDurationBlocks: 150,                                                       // ~15 min @ 6s state-chain blocks
+        retryDurationBlocks: 150,
         slippageTolerancePercent: Number(quote.recommendedSlippageTolerancePercent ?? 3),
         livePriceSlippageTolerancePercent: quote.recommendedLivePriceSlippageTolerancePercent,
       },
     });
 
-    // BigInts won't JSON-serialize; coerce the two that are present.
     return res.json({
       channel: {
         depositChannelId:        channel.depositChannelId,
@@ -1518,35 +1184,7 @@ app.get('/api/chainflip/status', async (req, res) => {
 });
 
 /* ========================================================================
- * Chainflip — Generic multi-route swaps (NEW SECTION, additive)
- * ─────────────────────────────────────────────────────────────────────────
- * Used by CrossChainSwap.jsx. Distinct routes from the SOL→BTC block above
- * (which the BTC page hardcodes). No shared state — own SDK instance,
- * own helpers, own validation. Mount this BEFORE `app.all('/api/*', ...)`.
- *
- *   GET  /api/cf/assets   — chains + asset matrix (hardcoded from docs)
- *   GET  /api/cf/quote    — ?srcChain&srcAsset&destChain&destAsset&amount
- *   POST /api/cf/channel  — body: { quote, destAddress, refundAddress }
- *                          opens a deposit channel for ANY supported route
- *   GET  /api/cf/status   — ?id=<depositChannelId>
- *
- * Chains (7): Bitcoin · Ethereum · Arbitrum · Polkadot · Solana · Assethub · Tron
- * Assets (per docs March 30 2026):
- *   Ethereum  — ETH, USDC, USDT, WBTC, FLIP
- *   Arbitrum  — ETH, USDC, USDT
- *   Bitcoin   — BTC
- *   Solana    — SOL, USDC, USDT
- *   Polkadot  — DOT
- *   Assethub  — SOL, USDC, USDT
- *   Tron      — TRX, USDT
- *
- * SAFETY NOTE: Chainflip absorbs (unrecoverable) any deposit outside
- * the min/max swap amount for an asset. The SDK's getQuoteV2 validates
- * this — we surface "Amount below/above Chainflip minimum/maximum" so
- * the user cannot proceed past quoting with an unsafe amount.
- *
- * Re-uses: logError from earlier in this file. The /api/ rate limiter
- * already covers these paths.
+ * Chainflip — Generic multi-route swaps
  * ===================================================================== */
 const _cfMod   = require('@chainflip/sdk/swap');
 const _cfMulti = new _cfMod.SwapSDK({ network: 'mainnet' });
@@ -1564,9 +1202,6 @@ function _cfMultiErr(e) {
 const _cfChainSet = new Set(['Bitcoin', 'Ethereum', 'Arbitrum', 'Polkadot', 'Solana', 'Assethub', 'Tron']);
 const _cfAssetSet = new Set(['BTC', 'ETH', 'USDC', 'USDT', 'FLIP', 'WBTC', 'DOT', 'SOL', 'TRX']);
 
-// Asset matrix — verified from Chainflip docs (March 30 2026 update).
-// Decimals are the protocol-side decimals for each (chain, asset). Update
-// if Chainflip adds chains/assets.
 const _cfMatrix = {
   updatedAt: '2026-03-30',
   chains: [
@@ -1663,7 +1298,7 @@ app.post('/api/cf/channel', async (req, res) => {
       destAddress,
       fillOrKillParams: {
         refundAddress,
-        retryDurationBlocks: 150,                                                       // ~15 min @ 6s state-chain blocks
+        retryDurationBlocks: 150,
         slippageTolerancePercent: Number(quote.recommendedSlippageTolerancePercent ?? 1),
         livePriceSlippageTolerancePercent: quote.recommendedLivePriceSlippageTolerancePercent,
       },
@@ -1705,10 +1340,6 @@ app.all('/api/*', (req, res) => res.status(404).json({ error: 'API route not fou
 
 /* ========================================================================
  * Embed runtime config
- * ─────────────────────────────────────────────────────────────────────────
- * The browser reads window.__VERIXIA_CONFIG__.rpc and uses it as the first
- * entry in each component's RPC_POOL — so client-side `new Connection(...)`
- * calls hit dRPC too. Single source of truth: DRPC_API_KEY.
  * ===================================================================== */
 app.get('/embed/config.js', (req, res) => {
   const cfg = {
@@ -1759,7 +1390,6 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('  env: ' + NODE_ENV);
   console.log('  Jupiter Swap V2: ' + JUPITER_SWAP_V2_BASE + (JUPITER_API_KEY ? ' (main key set)' : ' (no main key)') + (JUPITER_API_KEY_SEO ? ' (SEO key set)' : ' (no SEO key)'));
   console.log('  Jupiter Price:   ' + JUPITER_PRICE_BASE);
-  console.log('  LI.FI:           ' + LIFI_API + (LIFI_API_KEY ? ' (key set)' : ' (no key)'));
   console.log('  Chainflip:       mainnet (SOL → BTC, broker commission disabled)');
   console.log('  Solana RPC:      drpc' + (DRPC_API_KEY ? ' (key set)' : ' (NO KEY — set DRPC_API_KEY)') + ' (no fallback)');
   console.log('  Allowed origins: ' + allowedOrigins.join(', '));
