@@ -1,5 +1,5 @@
 // pumpfun-trade.js — Pump.fun bonding-curve trade builder for Launch Radar.
-// 
+//
 // SCOPE
 //   Pump.fun BONDING CURVE only. Pre-graduation buys/sells via the pump SDK.
 //   Graduated tokens (curve.complete) and non-pump mints are NOT traded here —
@@ -16,6 +16,11 @@
 //       feeLamports + tradeLamports * 1.10 ≤ totalLamports
 //   Changing this number requires updating the matching divisor (110n) in
 //   LaunchRadar.jsx's swapParams BUY branch.
+//
+// RPC
+//   Single endpoint: dRPC. Reads the FULL URL from process.env.DRPC_RPC_URL
+//   (api key already embedded in the URL). No fallbacks — if it's missing,
+//   the route fails with a clear 500.
 //
 // DEPENDENCIES
 //     npm install @pump-fun/pump-sdk @coral-xyz/anchor bn.js @solana/web3.js
@@ -50,16 +55,14 @@ function callMath(fn, { global, feeConfig, mintSupply, bondingCurve, amount }) {
   return fn(global, bondingCurve, amount);
 }
 
-// ONE RPC for everything here: Alchemy only — the same var the rest of the app
-// uses (REACT_APP_ALCHEMY_RPC). Set it in the SERVER env:
-//   REACT_APP_ALCHEMY_RPC = https://solana-mainnet.g.alchemy.com/v2/<KEY>
-// (ALCHEMY_RPC_URL / ALCHEMY_API_KEY accepted too.) No Helius, no other nodes.
+// ONE RPC for everything here: dRPC only. Reads the FULL URL (api key already
+// embedded) from DRPC_RPC_URL. No other env vars, no provider fallback.
 function getRpcUrl() {
-  const e = process.env;
-  return e.REACT_APP_ALCHEMY_RPC
-      || e.ALCHEMY_RPC_URL
-      || (e.ALCHEMY_API_KEY ? 'https://solana-mainnet.g.alchemy.com/v2/' + e.ALCHEMY_API_KEY : '')
-      || 'https://api.mainnet-beta.solana.com';   // last-ditch only; logged loudly in getOnline
+  const url = (process.env.DRPC_RPC_URL || '').trim();
+  if (!url) {
+    throw new Error('pumpfun-trade: DRPC_RPC_URL is not set. Set it in the server env to the full dRPC URL (api key embedded).');
+  }
+  return url;
 }
 
 // Cached instances for the process.
@@ -71,11 +74,6 @@ function getOnline() {
     let host = 'invalid-url';
     try { host = new URL(url).host; } catch {}
     console.log('[pumpfun-trade] RPC host:', host);
-    if (/api\.mainnet-beta\.solana\.com/.test(url)) {
-      console.warn('[pumpfun-trade] *** USING PUBLIC mainnet-beta RPC (rate-limited). '
-        + 'Set ALCHEMY_RPC_URL in the SERVER env. Degraded global/feeConfig fetches make the '
-        + 'SDK emit legacy fee/token-program accounts → IncorrectProgramId on fresh create_v2/mayhem tokens. ***');
-    }
     const conn = new Connection(url, 'confirmed');
     _online = new OnlineClass(conn);
   }
