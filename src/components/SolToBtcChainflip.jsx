@@ -9,9 +9,6 @@
  *   - channel → /api/chainflip/channel  (POST quote+addrs)
  *   - status  → /api/chainflip/status?id=<depositChannelId>
  * 
- * RPC: single dRPC endpoint, no fallbacks. Reads REACT_APP_DRPC_RPC_URL
- * as a full URL with the api key embedded.
- */
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
