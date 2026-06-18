@@ -1,5 +1,5 @@
 // src/components/Holdings.jsx — wallet holdings page with per-token drawer.
-//
+// 
 // THREE INDEPENDENT DRAWERS, one per route, each a verbatim port of its
 // working reference file:
 //
