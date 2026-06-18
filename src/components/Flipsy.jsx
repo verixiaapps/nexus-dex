@@ -1302,7 +1302,7 @@ export default function Flipsy({ onConnectWallet }) {
     return (
       <div
         className={'fp-bal' + (isFail ? ' fp-bal-warn' : '')}
-        title={isFail ? 'All public devnet RPCs declined the balance lookup' : undefined}
+        title={isFail ? 'Solana devnet RPC declined the balance lookup' : undefined}
       >
         <span className="fp-bal-l">BAL</span>
         <span className={'fp-bal-v' + (isLoading ? ' fp-bal-loading' : '') + (isFail ? ' fp-bal-fail' : '')}>
@@ -1429,4 +1429,3 @@ export default function Flipsy({ onConnectWallet }) {
     </div>
   );
 }
- 
