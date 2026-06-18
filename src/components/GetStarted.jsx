@@ -14,8 +14,9 @@
 //
 // DATA
 //   • Portfolio: one batched JSON-RPC via /api/solana-rpc (server routes to
-//     ALCHEMY_SOLANA_RPC) + parallel Jupiter meta (/api/jupiter/tokens/search)
-//     + Jupiter prices (direct lite-api.jup.ag, CSP-permitted).
+//     dRPC; DRPC_API_KEY env var — no fallbacks) + parallel Jupiter meta
+//     (/api/jupiter/tokens/search) + Jupiter prices (direct lite-api.jup.ag,
+//     CSP-permitted).
 //   • xStock prices: one direct call to lite-api.jup.ag/price/v3 on mount.
 //   • Manual refresh only. No polling.
 //   • SOL always shows. Other tokens need ≥ MIN_TOKEN_VALUE_USD ($1).
@@ -1194,4 +1195,3 @@ export default function GetStarted({ onConnectWallet, onSwitchTab }) {
     </div>
   );
 }
- 
