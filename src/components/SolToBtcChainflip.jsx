@@ -3,12 +3,12 @@
  * SOL → Native BTC via Chainflip (single-signature, two-tx atomic flow).
  *
  * Same Wonderland-lite identity as SolToBtc.jsx.
- * 
+ *
  * Chainflip flow:
  *   - quote   → /api/chainflip/quote?amount=<lamports>
  *   - channel → /api/chainflip/channel  (POST quote+addrs)
  *   - status  → /api/chainflip/status?id=<depositChannelId>
- * 
+ */
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
@@ -234,7 +234,7 @@ const getConn = (commitment) => {
 const rpcRace = (label, op, commitment = 'confirmed') => {
   return op(getConn(commitment)).catch(e => {
     console.warn(`[rpc] ${label} failed:`, e?.message);
-    throw new Error(`${label}: dRPC failed`);
+    throw new Error(`${label}: RPC failed`);
   });
 };
 
@@ -380,7 +380,7 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
 
   const { publicKey, connected, signAllTransactions } = useWallet();
 
-  // Single dRPC connection — independent of app-level ConnectionProvider.
+  // Single connection — independent of app-level ConnectionProvider.
   const connection = useMemo(() => getConn('confirmed'), []);
 
   const [solAmount, setSolAmount] = useState('');
@@ -419,7 +419,7 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
     return () => { alive = false; clearInterval(id); };
   }, []);
 
-  // SOL balance — uses dRPC. Sets 'fail' if the endpoint rejects.
+  // SOL balance — uses proxied RPC. Sets 'fail' if the endpoint rejects.
   const refreshBalance = useCallback(async () => {
     if (!publicKey) {
       setSolBalance(null);
