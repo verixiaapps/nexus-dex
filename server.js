@@ -37,8 +37,8 @@ const CSP_DIRECTIVES = [
   ['connect-src',     [
     "'self'",
     'https://api.jup.ag', 'https://lite-api.jup.ag', 'https://quote-api.jup.ag', 'https://token.jup.ag',
-    // Solana RPC — dRPC is the sole endpoint, server- and client-side. No fallbacks.
-    'https://lb.drpc.live',
+    // Solana RPC — Alchemy. Client only talks to /api/solana-rpc (same-origin),
+    // so the Alchemy host does NOT need to be in connect-src.
     'https://explorer-api.walletconnect.com',
     'https://*.walletconnect.com', 'https://*.walletconnect.org',
     'wss://relay.walletconnect.com', 'wss://relay.walletconnect.org',
@@ -83,9 +83,17 @@ const JUPITER_LEGACY_BASE   = (process.env.JUPITER_QUOTE_BASE || 'https://api.ju
 const JUPITER_TOKENS_BASE   = 'https://lite-api.jup.ag/tokens/v2';
 const JUPITER_PRICE_BASE    = 'https://lite-api.jup.ag/price/v3';
 
-// Solana RPC — dRPC. Set DRPC_RPC_URL in Railway to the FULL URL (api key
-// already embedded). No URL construction here, no fallbacks anywhere.
-const DRPC_RPC_URL = (process.env.DRPC_RPC_URL || '').trim();
+// Solana RPC — Alchemy. URLs hardcoded with API key embedded, so the server
+// just works on a fresh deploy with zero env setup. The key NEVER leaves this
+// file: client code hits /api/solana-rpc (same-origin) and the server proxies.
+//
+// To switch to devnet:    set SOLANA_NETWORK=devnet
+// To override entirely:   set DRPC_RPC_URL (legacy var name, kept for compat)
+const ALCHEMY_MAINNET_URL = 'https://solana-mainnet.g.alchemy.com/v2/3iScOZl86KTeWqY8qisKC';
+const ALCHEMY_DEVNET_URL  = 'https://solana-devnet.g.alchemy.com/v2/3iScOZl86KTeWqY8qisKC';
+const SOLANA_NETWORK      = (process.env.SOLANA_NETWORK || 'mainnet').toLowerCase();
+const DRPC_RPC_URL        = (process.env.DRPC_RPC_URL || '').trim() ||
+  (SOLANA_NETWORK === 'devnet' ? ALCHEMY_DEVNET_URL : ALCHEMY_MAINNET_URL);
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 
@@ -108,6 +116,18 @@ app.use(cors({
 
 app.use(express.json({ limit: '256kb' }));
 
+/* ========================================================================
+ * Bot blocker — kills the easy ways free-tier RPC quota gets drained.
+ * Applies to /api/ only. Allows /api/health for monitoring.
+ * ===================================================================== */
+const BOT_UA_RE = /bot|crawl|spider|scrape|headless|curl|wget|python-requests|axios|httpclient|java\/|ruby|go-http|okhttp|libwww|phantomjs|puppeteer|playwright/i;
+app.use('/api/', (req, res, next) => {
+  if (req.path === '/health') return next();
+  const ua = String(req.headers['user-agent'] || '').trim();
+  if (!ua || BOT_UA_RE.test(ua)) return res.status(403).json({ error: 'Forbidden' });
+  next();
+});
+
 const apiLimiter = rateLimit({
   windowMs: 60_000, max: 600,
   standardHeaders: true, legacyHeaders: false,
@@ -115,6 +135,15 @@ const apiLimiter = rateLimit({
   skip: r => r.path === '/health' || r.path === '/api/health',
 });
 app.use('/api/', apiLimiter);
+
+// Tighter per-IP limit on RPC routes — stops one tab spamming refresh from
+// blowing through Alchemy's 500 CU/s ceiling and 429-ing real users.
+const rpcLimiter = rateLimit({
+  windowMs: 60_000, max: 30,
+  standardHeaders: true, legacyHeaders: false,
+  message: { error: 'RPC rate limit exceeded — slow down' },
+});
+app.use(['/api/solana-rpc', '/api/helius/das'], rpcLimiter);
 
 /* ========================================================================
  * Shared helpers
@@ -136,8 +165,10 @@ function scrubSecrets(s) {
   if (s == null) return '';
   return String(s)
     .replace(/api-key=[^&\s"']+/gi,                       'api-key=***')
-    // dRPC URLs — match any path under lb.drpc.live (covers /solana/, /lambda/, etc.)
+    // dRPC URLs (legacy)
     .replace(/(lb\.drpc\.(?:live|org)\/)[^\s"'?]+/gi,     '$1***/***')
+    // Alchemy URLs — strip the API key segment after /v2/
+    .replace(/(solana-(?:mainnet|devnet)\.g\.alchemy\.com\/v2\/)[^\s"'?]+/gi, '$1***')
     .replace(/x-api-key["':\s]+[^&\s"',}]+/gi,            'x-api-key=***')
     .replace(/Bearer\s+[A-Za-z0-9._-]+/gi,                'Bearer ***');
 }
@@ -794,9 +825,9 @@ app.get('/api/whale-events', async (req, res) => {
 });
 
 /* ========================================================================
- * Solana RPC — dRPC (single endpoint, no fallbacks)
+ * Solana RPC — Alchemy (single endpoint, no fallbacks)
  *
- * dRPC's Solana endpoint doesn't accept batched JSON-RPC arrays. The client
+ * Solana RPC providers don't accept batched JSON-RPC arrays. The client
  * (GetStarted.jsx portfolio load) sends 3 calls per refresh as an array, so
  * we unroll batches into parallel single requests, then reassemble the
  * response as an array. Single requests pass through untouched.
@@ -817,7 +848,7 @@ async function _drpcSingle(single) {
     );
     const text = await r.text();
     if (!r.ok) {
-      return { jsonrpc: '2.0', id, error: { code: r.status, message: 'dRPC HTTP ' + r.status + ': ' + text.slice(0, 200) } };
+      return { jsonrpc: '2.0', id, error: { code: r.status, message: 'RPC HTTP ' + r.status + ': ' + text.slice(0, 200) } };
     }
     try { return JSON.parse(text); }
     catch { return { jsonrpc: '2.0', id, error: { code: -32700, message: 'Non-JSON response from upstream' } }; }
@@ -828,7 +859,7 @@ async function _drpcSingle(single) {
 
 async function forwardRpc(body) {
   if (!DRPC_RPC_URL) {
-    const err = new Error('DRPC_RPC_URL is not set');
+    const err = new Error('Solana RPC URL is not configured');
     err.status = 500;
     throw err;
   }
@@ -847,7 +878,7 @@ async function forwardRpc(body) {
   );
   const text = await r.text();
   if (!r.ok) {
-    const err = new Error('dRPC HTTP ' + r.status + ': ' + text.slice(0, 200));
+    const err = new Error('RPC HTTP ' + r.status + ': ' + text.slice(0, 200));
     err.status = r.status;
     throw err;
   }
@@ -896,7 +927,7 @@ app.get('/api/health', (req, res) => {
       jupiter:        Boolean(JUPITER_ENABLED),
       jupiterApiKey:  Boolean(JUPITER_API_KEY),
       jupiterSeoKey:  Boolean(JUPITER_API_KEY_SEO),
-      drpcRpc:        Boolean(DRPC_RPC_URL),
+      solanaRpc:      Boolean(DRPC_RPC_URL),
       chainflip:      true,
     },
     jupiter: {
@@ -909,7 +940,8 @@ app.get('/api/health', (req, res) => {
     },
     chainflip: { network: 'mainnet', brokerCommissionBps: 0 },
     solanaRpc: {
-      provider:  'drpc',
+      provider:  'alchemy',
+      network:   SOLANA_NETWORK,
       urlSet:    Boolean(DRPC_RPC_URL),
       timeoutMs: RPC_TIMEOUT_MS,
       batching:  'server-side unroll',
@@ -1356,10 +1388,14 @@ app.all('/api/*', (req, res) => res.status(404).json({ error: 'API route not fou
 
 /* ========================================================================
  * Embed runtime config
+ *
+ * IMPORTANT: We expose the SERVER PROXY path ('/api/solana-rpc'), NOT the
+ * raw Alchemy URL. The Alchemy API key never leaves the server — all client
+ * RPC traffic goes through the proxy, where it's rate-limited and bot-filtered.
  * ===================================================================== */
 app.get('/embed/config.js', (req, res) => {
   const cfg = {
-    rpc: getSolanaRpcUrl(),
+    rpc: '/api/solana-rpc',
     wcProjectId: process.env.WALLETCONNECT_PROJECT_ID
               || process.env.REACT_APP_WALLETCONNECT_PROJECT_ID
               || '',
@@ -1367,6 +1403,13 @@ app.get('/embed/config.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
   res.setHeader('Cache-Control', 'public, max-age=300');
   res.send('window.__VERIXIA_CONFIG__=' + JSON.stringify(cfg) + ';');
+});
+
+/* ========================================================================
+ * robots.txt — keep crawlers off API/embed routes
+ * ===================================================================== */
+app.get('/robots.txt', (req, res) => {
+  res.type('text/plain').send('User-agent: *\nDisallow: /api/\nDisallow: /embed/\n');
 });
 
 /* ========================================================================
@@ -1407,6 +1450,6 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('  Jupiter Swap V2: ' + JUPITER_SWAP_V2_BASE + (JUPITER_API_KEY ? ' (main key set)' : ' (no main key)') + (JUPITER_API_KEY_SEO ? ' (SEO key set)' : ' (no SEO key)'));
   console.log('  Jupiter Price:   ' + JUPITER_PRICE_BASE);
   console.log('  Chainflip:       mainnet (SOL → BTC, broker commission disabled)');
-  console.log('  Solana RPC:      drpc' + (DRPC_RPC_URL ? ' (url set)' : ' (NO URL — set DRPC_RPC_URL)') + ' (no fallback, batches unrolled server-side)');
+  console.log('  Solana RPC:      alchemy ' + SOLANA_NETWORK + ' (key embedded, batches unrolled server-side)');
   console.log('  Allowed origins: ' + allowedOrigins.join(', '));
 });
