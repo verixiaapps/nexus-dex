@@ -2,7 +2,7 @@
 // Isolated one-tap memecoin gallery on Solana. Self-generated local burner
 // wallet (no Phantom, no connect) signs instantly in-browser. pump.fun
 // bonding curve only. Atomic 3% SOL fee (unchanged).
-// 
+//
 //   WALLET : Keypair.generate() on first visit, secret key stored plain in
 //            localStorage (true burner — zero friction). Signs with
 //            tx.sign([keypair]) — no popup, no prompt. Deposit by address/QR,
@@ -1145,18 +1145,25 @@ export default function Ape() {
   const activeList = lane === 'fresh' ? freshTokens : recentTokens;
   const filtered = useMemo(() => {
     let l = activeList.slice();
-    // Dedup by mint AND by sym|name|liquidity — the feed sometimes returns the
-    // same token twice, and copycat scams use identical symbols/names. The
-    // composite key catches both cases.
-    const seen = new Set();
-    const seenAlt = new Set();
+    // ===== AGGRESSIVE DEDUP =====
+    // The feed can return the same token twice (different snapshots) and
+    // copycat scams reuse the same name/symbol on a fresh mint. We drop
+    // ANY repeat by mint, by normalized name, OR by normalized symbol —
+    // first one through the door wins. Liquidity is NOT in the key (it
+    // drifts between snapshots, which was letting dupes slip past).
+    const seenMint = new Set();
+    const seenName = new Set();
+    const seenSym  = new Set();
     l = l.filter(t => {
       if (!t || !t.mint) return false;
-      if (seen.has(t.mint)) return false;
-      const altKey = (t.sym || '') + '|' + (t.name || '') + '|' + (t.liquidity || 0);
-      if (seenAlt.has(altKey)) return false;
-      seen.add(t.mint);
-      seenAlt.add(altKey);
+      if (seenMint.has(t.mint)) return false;
+      const nm = String(t.name || '').trim().toLowerCase();
+      const sm = String(t.sym  || '').trim().toLowerCase();
+      if (nm && seenName.has(nm)) return false;
+      if (sm && sm !== '???' && seenSym.has(sm)) return false;
+      seenMint.add(t.mint);
+      if (nm) seenName.add(nm);
+      if (sm && sm !== '???') seenSym.add(sm);
       return true;
     });
     if (sortBy === 'newest') l = l.sort((a,b)=>(a.ageMs||0)-(b.ageMs||0));
