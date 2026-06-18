@@ -1,5 +1,5 @@
 require('dotenv').config();
- 
+
 const express   = require('express');
 const cors      = require('cors');
 const path      = require('path');
@@ -174,24 +174,6 @@ function setCachedJson(url, status, payload, ttlMs) {
 
 /* ========================================================================
  * Launch Radar — LIVE feed via PumpPortal WebSocket
- * ─────────────────────────────────────────────────────────────────────────
- * Self-contained. Registered BEFORE the older /api/dex/launches route
- * below, so Express first-match-wins: this handler serves the request and
- * the legacy DexScreener-profiles route is dormant.
- *
- * DATA FLOW
- *   1. PumpPortal WS (wss://pumpportal.fun/api/data, subscribeNewToken)
- *      streams every new pump.fun mint at curve creation.
- *   2. We keep a rolling buffer of the most-recent _LR_BUFFER_MAX mints
- *      (newest first).
- *   3. GET /api/dex/launches reads the newest 30, batches them into
- *      DexScreener's /latest/dex/tokens/<mints> for price/liquidity
- *      enrichment, and returns the result.
- *
- * CONTRACT-ADDRESS INVARIANT
- *   The mint string from the WS is the canonical ID. It is NEVER
- *   transformed, substituted, or matched fuzzily. It flows verbatim:
- *       WS  →  DexScreener enrichment  →  card  →  /api/pumpfun/trade
  * ===================================================================== */
 const _LR_DEX_BASE     = 'https://api.dexscreener.com';
 const _LR_PUMP_WS_URL  = 'wss://pumpportal.fun/api/data';
