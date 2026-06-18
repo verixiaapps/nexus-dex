@@ -1,5 +1,5 @@
 // src/components/GetStarted.jsx — combined Wallet + Get Started page.
-//
+// 
 // Wonderland palette (pink/mint/lavender/peach pastel on cream gradient).
 // Renders inside the dark Nexus app shell; brings its own background.
 //
