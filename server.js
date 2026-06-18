@@ -1,5 +1,5 @@
 require('dotenv').config();
-  
+ 
 const express   = require('express');
 const cors      = require('cors');
 const path      = require('path');
@@ -1377,6 +1377,72 @@ app.get('/api/cf/status', async (req, res) => {
     logError('cf-status', e);
     return res.status(500).json({ error: _cfMultiErr(e) });
   }
+});
+
+/* ========================================================================
+ * Debug — phone-friendly. Visit in Safari, read the JSON.
+ * Remove before going to real users.
+ *
+ *   GET /api/debug/wallet/<base58_wallet>
+ *
+ * Returns:
+ *   - solBalance         (native SOL via getBalance)
+ *   - tokenCount         (SPL Token program accounts)
+ *   - firstThreeTokens   (mint + uiAmountString, for sanity check)
+ *   - token2022Count     (Token-2022 accounts — xStocks live here)
+ *   - any error returned by Alchemy at any step
+ * ===================================================================== */
+app.get('/api/debug/wallet/:wallet', async (req, res) => {
+  const wallet = req.params.wallet;
+  const out = {
+    wallet,
+    network:    SOLANA_NETWORK,
+    alchemyUrl: DRPC_RPC_URL.replace(/v2\/.+/, 'v2/***'),
+    checks:     {},
+  };
+
+  // 1) Native SOL balance
+  try {
+    const r = await forwardRpc({
+      jsonrpc: '2.0', id: 1, method: 'getBalance', params: [wallet],
+    });
+    out.checks.solBalance = r.parsed;
+  } catch (e) { out.checks.solBalance = { error: e.message }; }
+
+  // 2) SPL token accounts (classic Token program)
+  try {
+    const r = await forwardRpc({
+      jsonrpc: '2.0', id: 2, method: 'getTokenAccountsByOwner',
+      params: [
+        wallet,
+        { programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' },
+        { encoding: 'jsonParsed', commitment: 'confirmed' },
+      ],
+    });
+    const accs = r.parsed?.result?.value || [];
+    out.checks.tokenCount = accs.length;
+    out.checks.firstThreeTokens = accs.slice(0, 3).map(a => ({
+      mint:   a?.account?.data?.parsed?.info?.mint,
+      amount: a?.account?.data?.parsed?.info?.tokenAmount?.uiAmountString,
+    }));
+    if (r.parsed?.error) out.checks.tokenError = r.parsed.error;
+  } catch (e) { out.checks.tokenError = e.message; }
+
+  // 3) Token-2022 accounts (xStocks live here)
+  try {
+    const r = await forwardRpc({
+      jsonrpc: '2.0', id: 3, method: 'getTokenAccountsByOwner',
+      params: [
+        wallet,
+        { programId: 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb' },
+        { encoding: 'jsonParsed', commitment: 'confirmed' },
+      ],
+    });
+    out.checks.token2022Count = (r.parsed?.result?.value || []).length;
+    if (r.parsed?.error) out.checks.token2022Error = r.parsed.error;
+  } catch (e) { out.checks.token2022Error = e.message; }
+
+  res.json(out);
 });
 
 app.all('/api/*', (req, res) => res.status(404).json({ error: 'API route not found: ' + req.path }));
