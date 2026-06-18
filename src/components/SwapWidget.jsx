@@ -1,10 +1,8 @@
 // SwapWidget.jsx — atomic single-transaction Jupiter swap.
 //
 // VISUAL REDESIGN — Wonderland-light, sky+pink accents to match the
-// new conversion-first homepage. All trading/Jupiter logic preserved
+// new conversion-first homepage. All trading/RPC/Jupiter logic preserved
 // verbatim. Class prefix stays sw-.
-//
-// RPC: single drpc endpoint, no fallback pool. API key from DRPC_API_KEY env.
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Buffer } from 'buffer';
@@ -306,9 +304,16 @@ const USDC_MINT  = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const PRIORITY_FEE_MICROLAMPORTS = 50_000;
 const SLIPPAGE_BPS = 500;
 
-// SINGLE RPC — drpc only, no fallback.
-const DRPC_API_KEY = process.env.REACT_APP_DRPC_API_KEY;
-const RPC_URL = `https://lb.drpc.live/solana/${DRPC_API_KEY}`;
+// Single dRPC connection. No fallbacks. REACT_APP_DRPC_API_KEY env var required.
+// Client-side: CRA only bundles env vars with the REACT_APP_ prefix. If it's
+// missing, every RPC call will fail (401/404). The console error below fires
+// on load to make that obvious.
+const DRPC_API_KEY =
+  (typeof process !== 'undefined' && process.env && process.env.REACT_APP_DRPC_API_KEY) || '';
+if (!DRPC_API_KEY && typeof console !== 'undefined') {
+  console.error('[swap] REACT_APP_DRPC_API_KEY is not set — all RPC calls will fail.');
+}
+const RPC_URL = 'https://lb.drpc.live/solana/' + DRPC_API_KEY;
 
 const BAL_COMMITMENT = 'processed';
 
@@ -318,6 +323,12 @@ const getConn = (commitment) => {
   if (!c) { c = new Connection(RPC_URL, commitment); _connCache.set(commitment, c); }
   return c;
 };
+
+// Single RPC, no fallback. Kept the name + signature so call sites don't need
+// to change — the `label` arg is now unused (we used to log which pool URL
+// failed; with one URL there's nothing to disambiguate).
+const rpcRace = (label, op, commitment = BAL_COMMITMENT) =>
+  op(getConn(commitment));
 
 /* ─── HELPERS — UNCHANGED ─────────────────────────────────────────── */
 const fmtAmount = (n, decimals = 6) => {
@@ -415,13 +426,12 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
     return () => { cancelled = true; };
   }, []);
 
-  /* balances — drpc only, no fallback */
+  /* balances — UNCHANGED */
   const refreshBalances = useCallback(async () => {
     if (!wallet.publicKey) { setBalances({}); setBalError(null); return; }
     setBalLoading(true);
     setBalError(null);
     const owner = wallet.publicKey;
-    const conn = getConn(BAL_COMMITMENT);
 
     const mergeAccs = (into, accs) => {
       if (!accs || !accs.value) return;
@@ -437,7 +447,7 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
       }
     };
 
-    const solP = conn.getBalance(owner, BAL_COMMITMENT)
+    const solP = rpcRace('getBalance', c => c.getBalance(owner, BAL_COMMITMENT))
       .then(lamports => {
         setBalances(prev => {
           const next = { ...prev };
@@ -448,8 +458,8 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
       })
       .catch(e => console.warn('[swap] SOL balance failed', e?.message));
 
-    const tokP = conn.getParsedTokenAccountsByOwner(
-      owner, { programId: TOKEN_PROGRAM_ID }, BAL_COMMITMENT
+    const tokP = rpcRace('tokenAccs', c =>
+      c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, BAL_COMMITMENT)
     ).then(accs => {
       setBalances(prev => {
         const next = { ...prev };
@@ -459,8 +469,8 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
       });
     }).catch(e => console.warn('[swap] SPL accounts failed', e?.message));
 
-    const tok22P = conn.getParsedTokenAccountsByOwner(
-      owner, { programId: TOKEN_2022_PROGRAM_ID }, BAL_COMMITMENT
+    const tok22P = rpcRace('tokenAccs2022', c =>
+      c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, BAL_COMMITMENT)
     ).then(accs => {
       setBalances(prev => {
         const next = { ...prev };
