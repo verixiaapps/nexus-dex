@@ -13,9 +13,11 @@ const PROGRAM_ID = new PublicKey(
   process.env.REACT_APP_FLIPSY_PROGRAM_ID || '11111111111111111111111111111111',
 );
 
-// Switch when going to mainnet:
-const FLIPSY_RPC = 'https://api.devnet.solana.com';
-// const FLIPSY_RPC = 'https://api.mainnet-beta.solana.com';
+// RPC — dRPC devnet (Flipsy is deployed on devnet). Reads the FULL URL
+// (api key embedded) from REACT_APP_DRPC_RPC_URL_DEVNET. CRA bakes
+// REACT_APP_* vars at build time, so it must be present when `npm run build`
+// runs. If missing, the IDL fetch will surface a clear chainError.
+const FLIPSY_RPC = (process.env.REACT_APP_DRPC_RPC_URL_DEVNET || '').trim();
 
 const PRICE_URL = 'https://api.coinbase.com/v2/prices/SOL-USD/spot';
 const POLL_PRICE_MS = 2_500;
@@ -105,7 +107,13 @@ function stubRound(epoch, expectedStartTime, bettingDuration, gapDuration) {
 }
 
 export function useFlipsy(wallet) {
-  const connection = useMemo(() => new Connection(FLIPSY_RPC, 'confirmed'), []);
+  // Don't construct a Connection without a URL — web3.js will throw on the
+  // first network call with a confusing error. Surface our own clear error
+  // through chainError instead.
+  const connection = useMemo(
+    () => (FLIPSY_RPC ? new Connection(FLIPSY_RPC, 'confirmed') : null),
+    [],
+  );
   const [idl, setIdl] = useState(null);
 
   const [livePrice, setLivePrice] = useState(0);
@@ -117,11 +125,14 @@ export function useFlipsy(wallet) {
   const [balanceStatus, setBalanceStatus] = useState('idle');
   const [loading, setLoading] = useState(true);
   const [programConfig, setProgramConfig] = useState(null);
-  const [chainError, setChainError] = useState(null);
+  const [chainError, setChainError] = useState(
+    FLIPSY_RPC ? null : 'REACT_APP_DRPC_RPC_URL_DEVNET is not set (rebuild required after setting).',
+  );
   const livePriceRef = useRef(0);
 
   // Fetch IDL once from chain — works on any program/cluster
   useEffect(() => {
+    if (!connection) { setLoading(false); return; }
     let cancelled = false;
     (async () => {
       try {
@@ -153,7 +164,7 @@ export function useFlipsy(wallet) {
   }, [wallet?.publicKey]);
 
   const readProgram = useMemo(() => {
-    if (!idl) return null;
+    if (!idl || !connection) return null;
     try {
       const dummyWallet = {
         publicKey: PROGRAM_ID,
@@ -173,7 +184,7 @@ export function useFlipsy(wallet) {
   }, [connection, idl]);
 
   const writeProgram = useMemo(() => {
-    if (!idl) return null;
+    if (!idl || !connection) return null;
     if (!walletPkStr) return null;
     if (typeof wallet?.signTransaction !== 'function') return null;
     try {
@@ -218,7 +229,7 @@ export function useFlipsy(wallet) {
   }, []);
 
   useEffect(() => {
-    if (!readProgram) { setLoading(false); return; }
+    if (!readProgram || !connection) { setLoading(false); return; }
     let cancelled = false;
 
     async function fetchState() {
