@@ -288,10 +288,15 @@ const SOL_RESERVE = 0.01;
 const DEFAULT_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
 const DEFAULT_SELL_PRESETS = [25, 50, 100];
 
-// Solana RPC — dRPC only, no fallbacks. Reads the FULL URL (api key embedded)
-// from REACT_APP_DRPC_RPC_URL. CRA bakes REACT_APP_* vars at build time, so
-// this must be present in env when `npm run build` runs.
-const RPC_URL = (process.env.REACT_APP_DRPC_RPC_URL || '').trim();
+// Solana RPC — same-origin server proxy. ALL client RPC traffic goes through
+// /api/solana-rpc, which forwards to Alchemy. The Alchemy API key NEVER reaches
+// the browser bundle, so view-source / scraping can't extract it. The proxy
+// supports every JSON-RPC method this file uses (getBalance,
+// getTokenAccountsByOwner, getLatestBlockhash, simulate/sendTransaction,
+// getSignatureStatus, getBlockHeight, getMultipleAccountsInfo).
+const RPC_URL = (typeof window !== 'undefined' && window.location)
+  ? window.location.origin + '/api/solana-rpc'
+  : 'http://localhost:3001/api/solana-rpc';
 const BAL_COMMITMENT = 'processed';
 const _connCache = new Map();
 const getConn = (commitment) => {
