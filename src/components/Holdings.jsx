@@ -1,5 +1,6 @@
+```jsx
 // src/components/Holdings.jsx — wallet holdings page with per-token drawer.
-// 
+//
 // THREE INDEPENDENT DRAWERS, one per route, each a verbatim port of its
 // working reference file:
 //
@@ -263,16 +264,15 @@ const MIN_TOKEN_VALUE_USD = 1;
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
 
 // =====================================================================
-// RPC — dRPC single endpoint, no fallbacks.
-// Reads REACT_APP_DRPC_RPC_URL (CRA env, baked at build time) as the
-// FULL URL with key embedded — same var the rest of the app uses.
-// Falls back to window.__VERIXIA_CONFIG__.rpc if injected at runtime
-// (embed mode). Both Connection-based drawers (Jupiter, Pumpfun) and
-// /api/solana-rpc proxy calls (xstock, fetchPortfolio) all route to
-// the same dRPC endpoint as a result.
+// RPC — same-origin server proxy → Alchemy mainnet. The server (server.js)
+// holds the Alchemy API key and forwards requests via /api/solana-rpc.
+// Both Connection-based drawers (Jupiter, Pumpfun) and the raw
+// /api/solana-rpc fetches (xstock, fetchPortfolio) route to the same proxy,
+// so view-source / scraping can't extract the key.
 // =====================================================================
-const RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
-const RPC_URL = process.env.REACT_APP_DRPC_RPC_URL || RUNTIME_CFG.rpc || '';
+const RPC_URL = (typeof window !== 'undefined' && window.location)
+  ? window.location.origin + '/api/solana-rpc'
+  : 'http://localhost:3001/api/solana-rpc';
 
 // =====================================================================
 // BRAND TOKENS (xStock route)
