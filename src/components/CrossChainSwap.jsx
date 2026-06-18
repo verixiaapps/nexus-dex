@@ -2,15 +2,14 @@
  * NEXUS DEX — CrossChainSwap.jsx
  * Chainflip native, two-tx atomic, fee in SOL.
  *
- * SOLANA-SIDE = pure public + free.
- *   • RPC: race of publicnode / drpc / ankr / mainnet-beta (Promise.any)
- *   • SOL price: lite-api.jup.ag/price/v3 (no key, no backend)
+ * SOLANA-SIDE
+ *   • RPC: dRPC only (REACT_APP_DRPC_RPC_URL) — no fallback pool.
+ *   • SOL price: lite-api.jup.ag/price/v3 (no key).
  *   • Honest balance state: per-source 'idle'|'loading'|'ok'|'fail'.
  *     UI shows '…' or 'RPC down' — never silent zero.
- *   • Sends broadcast to ALL public RPCs in parallel (more inclusion paths).
  *
- * CHAINFLIP-SIDE: still backed by /api/cf/* because the broker channel-open
- * step requires a registered on-chain broker (1000 FLIP bond + tx signing).
+ * CHAINFLIP-SIDE: backed by /api/cf/* because the broker channel-open step
+ * requires a registered on-chain broker (1000 FLIP bond + tx signing).
  * That cannot be done purely client-side without leaking broker keys.
  *
  * Flow (unchanged):
@@ -40,36 +39,29 @@ import {
 } from '@solana/spl-token';
 
 // =====================================================================
-// PUBLIC RPC POOL — no env vars, no proxy
+// Solana RPC — dRPC only, no fallbacks. Reads the FULL URL (api key
+// embedded) from REACT_APP_DRPC_RPC_URL. CRA bakes REACT_APP_* vars at
+// build time, so this must be present when `npm run build` runs.
 // =====================================================================
-const RPC_POOL = [
-  'https://solana-rpc.publicnode.com',
-  'https://solana.drpc.org',
-  'https://rpc.ankr.com/solana',
-  'https://api.mainnet-beta.solana.com',
-];
-const CONNECTIONS = RPC_POOL.map(url => new Connection(url, { commitment: 'confirmed' }));
+const RPC_URL = (process.env.REACT_APP_DRPC_RPC_URL || '').trim();
+const connection = new Connection(RPC_URL, { commitment: 'confirmed' });
 
-// Race a Connection-level call across the pool. `fn(conn)` is invoked once
-// per pool entry; whichever resolves first wins. Rejects only if ALL fail.
-async function raceConn(label, fn) {
-  return Promise.any(CONNECTIONS.map(c => fn(c))).catch((agg) => {
-    console.warn('[cc-rpc] ' + label + ' all RPCs failed', agg?.errors?.[0]?.message);
-    const e = new Error(label + ': all public RPCs failed');
-    e.aggregateErrors = agg?.errors;
+async function rpcCall(label, fn) {
+  try {
+    return await fn(connection);
+  } catch (e) {
+    console.warn('[cc-rpc] ' + label + ' failed:', e?.message);
     throw e;
-  });
+  }
 }
 
-// Broadcast a signed raw tx to every RPC in parallel; resolve with the
-// first accepted signature. More inclusion paths = better confirm odds on
-// public infra. Rejects only if every RPC rejects.
-async function raceSend(rawTx, sendOpts) {
-  return Promise.any(CONNECTIONS.map(c => c.sendRawTransaction(rawTx, sendOpts)))
-    .catch((agg) => {
-      console.warn('[cc-rpc] send all RPCs rejected', agg?.errors?.[0]?.message);
-      throw new Error(agg?.errors?.[0]?.message || 'All public RPCs rejected the transaction');
-    });
+async function sendRawTx(rawTx, sendOpts) {
+  try {
+    return await connection.sendRawTransaction(rawTx, sendOpts);
+  } catch (e) {
+    console.warn('[cc-rpc] sendRawTransaction failed:', e?.message);
+    throw e;
+  }
 }
 
 // =====================================================================
@@ -477,7 +469,7 @@ const deriveStatusLabel = (status) => {
 
 const friendlyError = err => {
   const m = String(err?.message || err || '').toLowerCase();
-  if (m.includes('all public rpcs failed'))             return 'All public Solana RPCs are unreachable. Try again in a moment.';
+  if (m.includes('rpc') && (m.includes('failed') || m.includes('unreachable'))) return 'Solana RPC unreachable. Try again in a moment.';
   if (m.includes('below') && m.includes('minimum'))     return 'Amount below Chainflip minimum for this asset.';
   if (m.includes('above') && m.includes('maximum'))     return 'Amount above Chainflip maximum for this asset.';
   if (m.includes('insufficient sol') || m.includes('not enough sol')) return 'Not enough SOL in your wallet (need SOL for fees + reserve).';
@@ -767,7 +759,7 @@ const ToTokenModal = ({ open, onClose, onSelect }) => {
 export default function CrossChainSwap({ onConnectWallet }) {
   useCcCSS();
 
-  // useConnection() removed — we own a public RPC pool above (CONNECTIONS).
+  // useConnection() removed — we own a single dRPC connection above.
   const { publicKey, signAllTransactions, connected } = useWallet();
   const pubkey = publicKey || null;
   const wcon   = !!connected && !!pubkey;
@@ -817,7 +809,7 @@ export default function CrossChainSwap({ onConnectWallet }) {
     return () => { alive = false; clearInterval(id); };
   }, []);
 
-  // Wallet balances — raced across the public RPC pool, honest per-call status.
+  // Wallet balances — single dRPC call, honest per-call status.
   useEffect(() => {
     if (!pubkey) {
       setSolBalance(null); setTokenBalance(null);
@@ -827,14 +819,14 @@ export default function CrossChainSwap({ onConnectWallet }) {
     let cancelled = false;
 
     setSolBalStatus('loading');
-    raceConn('getBalance', c => c.getBalance(pubkey, 'confirmed'))
+    rpcCall('getBalance', c => c.getBalance(pubkey, 'confirmed'))
       .then(b => { if (!cancelled) { setSolBalance(b); setSolBalStatus('ok'); } })
       .catch(() => { if (!cancelled) { setSolBalance(null); setSolBalStatus('fail'); } });
 
     if (fromToken?.mint && !fromToken.isNative) {
       setTokenBalStatus('loading');
       const mintPk = new PublicKey(fromToken.mint);
-      raceConn('tokenAccs', c => c.getParsedTokenAccountsByOwner(pubkey, { mint: mintPk }, 'confirmed'))
+      rpcCall('tokenAccs', c => c.getParsedTokenAccountsByOwner(pubkey, { mint: mintPk }, 'confirmed'))
         .then(a => {
           if (cancelled) return;
           const ui = a.value.length ? Number(a.value[0].account.data.parsed.info.tokenAmount.uiAmount || 0) : 0;
@@ -1019,7 +1011,7 @@ export default function CrossChainSwap({ onConnectWallet }) {
       const depositAddress = new PublicKey(channel.depositAddress);
 
       setStatusMsg('Building transactions…');
-      const { blockhash, lastValidBlockHeight } = await raceConn(
+      const { blockhash, lastValidBlockHeight } = await rpcCall(
         'getLatestBlockhash',
         c => c.getLatestBlockhash('confirmed'),
       );
@@ -1060,7 +1052,7 @@ export default function CrossChainSwap({ onConnectWallet }) {
         setStatusMsg('Resolving Chainflip deposit account…');
         let destTokenAccount = depositAddress;
         try {
-          const info = await raceConn(
+          const info = await rpcCall(
             'getAccountInfo(deposit)',
             c => c.getAccountInfo(depositAddress, 'confirmed'),
           );
@@ -1072,8 +1064,8 @@ export default function CrossChainSwap({ onConnectWallet }) {
             destTokenAccount = getAssociatedTokenAddressSync(mint, depositAddress, true);
           }
         } catch {
-          // If all RPCs fail to return account info, fall back to deriving
-          // the ATA — safe assumption matching wallet UX.
+          // If RPC fails to return account info, fall back to deriving the
+          // ATA — safe assumption matching wallet UX.
           destTokenAccount = getAssociatedTokenAddressSync(mint, depositAddress, true);
         }
 
@@ -1101,20 +1093,19 @@ export default function CrossChainSwap({ onConnectWallet }) {
 
       setStep(3);
       setStatusMsg('Sending fee transaction…');
-      // Race-send: broadcast to all RPCs in parallel, first accepted wins.
-      const feeSig = await raceSend(signedFee.serialize(), {
+      const feeSig = await sendRawTx(signedFee.serialize(), {
         skipPreflight: false, maxRetries: 3,
       });
 
       setStatusMsg('Confirming fee…');
-      const feeConfirm = await raceConn(
+      const feeConfirm = await rpcCall(
         'confirmTransaction(fee)',
         c => c.confirmTransaction({ signature: feeSig, blockhash, lastValidBlockHeight }, 'confirmed'),
       );
       if (feeConfirm?.value?.err) throw new Error('Fee transaction failed — bridge not sent.');
 
       setStatusMsg('Sending bridge transaction…');
-      const bridgeSig = await raceSend(signedBridge.serialize(), {
+      const bridgeSig = await sendRawTx(signedBridge.serialize(), {
         skipPreflight: false, maxRetries: 3,
       });
       setTxSig(bridgeSig);
@@ -1210,7 +1201,7 @@ export default function CrossChainSwap({ onConnectWallet }) {
       return <span className="cc-io-bal">Bal: <span className="cc-io-bal-val cc-bal-loading">…</span></span>;
     }
     if (fbdStatus === 'fail') {
-      return <span className="cc-io-bal" title="All public Solana RPCs declined the balance lookup">Bal: <span className="cc-io-bal-val cc-bal-fail">RPC down</span></span>;
+      return <span className="cc-io-bal" title="Solana RPC declined the balance lookup">Bal: <span className="cc-io-bal-val cc-bal-fail">RPC down</span></span>;
     }
     if (fbd != null) {
       return <span className="cc-io-bal">Bal: <span className="cc-io-bal-val">{fmtTok(fbd)}</span></span>;
@@ -1343,7 +1334,7 @@ export default function CrossChainSwap({ onConnectWallet }) {
           {/* Surface RPC-down for source balance — important before signing. */}
           {wcon && fbdStatus === 'fail' && (
             <div className="cc-warn">
-              Couldn't fetch your {fromToken.symbol} balance — all public Solana RPCs declined the lookup. You can still try the swap; the chain will reject if balance is insufficient.
+              Couldn't fetch your {fromToken.symbol} balance — Solana RPC declined the lookup. You can still try the swap; the chain will reject if balance is insufficient.
             </div>
           )}
 
