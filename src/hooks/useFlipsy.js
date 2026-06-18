@@ -4,7 +4,10 @@ import { Connection, PublicKey, SystemProgram } from '@solana/web3.js';
 
 // CHANGE THIS LINE after mainnet deploy:
 const PROGRAM_ID = new PublicKey('REPLACE_AFTER_DEPLOY');
-const FLIPSY_RPC = `https://lb.drpc.live/solana/?dkey=${process.env.DRPC_API_KEY}`;
+// dRPC devnet, path-based with API key. No fallback.
+// Format per https://drpc.org/docs/gettingstarted/firstrequest — confirm the exact
+// URL on your dRPC dashboard's "Solana Devnet" endpoint page.
+const FLIPSY_RPC = `https://lb.drpc.live/solana-devnet/${process.env.DRPC_API_KEY}`;
 
 const PRICE_URL = 'https://api.coinbase.com/v2/prices/SOL-USD/spot';
 const POLL_PRICE_MS = 2_500;
