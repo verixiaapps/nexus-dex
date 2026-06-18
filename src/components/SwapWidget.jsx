@@ -309,10 +309,15 @@ const SLIPPAGE_BPS = 500;
 // CRA only bundles env vars with the REACT_APP_ prefix. If missing, every
 // RPC call will fail (401/404). The console error below fires on load to
 // make that obvious.
-const RPC_URL = process.env.REACT_APP_DRPC_RPC_URL || '';
-if (!RPC_URL && typeof console !== 'undefined') {
-  console.error('[swap] REACT_APP_DRPC_RPC_URL is not set — all RPC calls will fail.');
-}
+// ── RPC ──────────────────────────────────────────────────────────────
+// Same-origin server proxy → Alchemy mainnet. The server (server.js)
+// holds the Alchemy API key and forwards via /api/solana-rpc. All
+// Connection instances in this file route through the proxy.
+const RPC_URL = (typeof window !== 'undefined' && window.location)
+  ? window.location.origin + '/api/solana-rpc'
+  : 'http://localhost:3001/api/solana-rpc';
+const BAL_COMMITMENT = 'processed';
+
 
 const BAL_COMMITMENT = 'processed';
 
