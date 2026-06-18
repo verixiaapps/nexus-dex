@@ -1,6 +1,6 @@
 // pumpfun-trade.js — Pump.fun bonding-curve trade builder for Launch Radar.
 //
-// SCOPE
+// SCOPE 
 //   Pump.fun BONDING CURVE only. Pre-graduation buys/sells via the pump SDK.
 //   Graduated tokens (curve.complete) and non-pump mints are NOT traded here —
 //   they return a clean, explicit rejection (no AMM/Jupiter routing).
