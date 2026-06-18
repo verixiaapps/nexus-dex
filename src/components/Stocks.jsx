@@ -463,6 +463,12 @@ const TOKEN_PROGRAM_ID      = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss
 const TOKEN_2022_PROGRAM_ID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
 const ATA_PROGRAM_ID        = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
 
+// ── RPC ──────────────────────────────────────────────────────────────
+// Single dRPC endpoint. No fallbacks.
+const DRPC_API_KEY =
+  (typeof process !== 'undefined' && process.env && process.env.DRPC_API_KEY) || '';
+const RPC_URL = 'https://lb.drpc.live/solana/' + DRPC_API_KEY;
+
 // =====================================================================
 // US GEO BLOCK — ADMIN_WALLETS bypass everywhere
 // =====================================================================
@@ -710,7 +716,7 @@ function deserializeJupInstruction(ix) {
 
 async function fetchLookupTableAccounts(altAddresses) {
   if (!altAddresses?.length) return [];
-  const res = await fetchWithTimeout('/api/solana-rpc', {
+  const res = await fetchWithTimeout(RPC_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -734,7 +740,7 @@ async function fetchLookupTableAccounts(altAddresses) {
 }
 
 async function fetchTokenBalance({ ownerPubkey, mint, decimals }) {
-  const res = await fetchWithTimeout('/api/solana-rpc', {
+  const res = await fetchWithTimeout(RPC_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -770,7 +776,7 @@ async function assembleSwapTx({ swapInstructions, feeIxs, userPublicKey, prepend
   if (cleanupIx) allIxs.push(cleanupIx);
   if (!prependFee) for (const ix of feeIxs) allIxs.push(ix);
 
-  const bhRes = await fetchWithTimeout('/api/solana-rpc', {
+  const bhRes = await fetchWithTimeout(RPC_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -830,7 +836,7 @@ function parseSimError(err, logs) {
 
 async function simulateBeforeSign(serializedTxBase64) {
   try {
-    const res = await fetchWithTimeout('/api/solana-rpc', {
+    const res = await fetchWithTimeout(RPC_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1113,7 +1119,7 @@ function TradeModal({ open, brand, icon, price, onClose, walletPubkey, onConnect
 
       setSubmitState({ kind: 'loading', message: 'Submitting on Solana...' });
       const serialized = btoa(String.fromCharCode(...signed.serialize()));
-      const submitRes = await fetchWithTimeout('/api/solana-rpc', {
+      const submitRes = await fetchWithTimeout(RPC_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
