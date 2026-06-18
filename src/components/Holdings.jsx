@@ -1,3 +1,4 @@
+```jsx
 // src/components/Holdings.jsx — wallet holdings page with per-token drawer.
 //
 // THREE INDEPENDENT DRAWERS, one per route, each a verbatim port of its
@@ -264,13 +265,15 @@ const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV')
 
 // =====================================================================
 // RPC — dRPC single endpoint, no fallbacks.
-// Server-side /embed/config.js builds `https://lb.drpc.live/solana/${DRPC_API_KEY}`
-// and injects it as window.__VERIXIA_CONFIG__.rpc. Both Connection-based
-// drawers (Jupiter, Pumpfun) and /api/solana-rpc proxy calls (xstock,
-// fetchPortfolio) all route to the same dRPC endpoint as a result.
+// Reads REACT_APP_DRPC_RPC_URL (CRA env, baked at build time) as the
+// FULL URL with key embedded — same var the rest of the app uses.
+// Falls back to window.__VERIXIA_CONFIG__.rpc if injected at runtime
+// (embed mode). Both Connection-based drawers (Jupiter, Pumpfun) and
+// /api/solana-rpc proxy calls (xstock, fetchPortfolio) all route to
+// the same dRPC endpoint as a result.
 // =====================================================================
 const RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
-const RPC_URL = RUNTIME_CFG.rpc || '';
+const RPC_URL = process.env.REACT_APP_DRPC_RPC_URL || RUNTIME_CFG.rpc || '';
 
 // =====================================================================
 // BRAND TOKENS (xStock route)
