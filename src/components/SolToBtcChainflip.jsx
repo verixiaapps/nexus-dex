@@ -3,12 +3,12 @@
  * SOL → Native BTC via Chainflip (single-signature, two-tx atomic flow).
  *
  * Same Wonderland-lite identity as SolToBtc.jsx.
- *
+ * 
  * Chainflip flow:
  *   - quote   → /api/chainflip/quote?amount=<lamports>
  *   - channel → /api/chainflip/channel  (POST quote+addrs)
  *   - status  → /api/chainflip/status?id=<depositChannelId>
- *
+ * 
  * RPC: single dRPC endpoint, no fallbacks. Reads REACT_APP_DRPC_RPC_URL
  * as a full URL with the api key embedded.
  */
