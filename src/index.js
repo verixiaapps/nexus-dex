@@ -68,18 +68,11 @@ class ErrorBoundary extends React.Component {
 
 if (typeof window !== 'undefined' && !window.Buffer) { window.Buffer = Buffer; }
 
-// Solana RPC — dRPC only, no fallback. Set REACT_APP_DRPC_RPC_URL to the FULL
-// dRPC URL (api key embedded). CRA inlines REACT_APP_* vars at build time, so
-// this MUST be present in the env when `npm run build` runs.
+// Solana RPC — same-origin proxy to Alchemy mainnet. The server (server.js)
+// holds the Alchemy key and forwards requests via /api/solana-rpc. No env var,
+// no build-time inlining required.
 function bootstrap() {
-  const SOLANA_RPC = (process.env.REACT_APP_DRPC_RPC_URL || '').trim();
-  if (!SOLANA_RPC) {
-    showFatal('Configuration error',
-      'REACT_APP_DRPC_RPC_URL is not set.\n\n' +
-      'Set it to the full dRPC URL (api key embedded) in your build environment, then rebuild.\n' +
-      'CRA only inlines REACT_APP_* vars during `npm run build` — setting it after deploy will not help.');
-    return;
-  }
+  const SOLANA_RPC = '/api/solana-rpc';
 
   const WC_PROJECT_ID = process.env.REACT_APP_WALLETCONNECT_PROJECT_ID;
 
