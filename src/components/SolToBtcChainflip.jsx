@@ -215,9 +215,15 @@ const LAMPORTS_PER_SOL = 1_000_000_000;
 const SATS_PER_BTC     = 1e8;
 const MAX_RESERVE_LAMPORTS = 10_000_000;
 
-// dRPC single endpoint — no fallbacks.
-// REACT_APP_DRPC_RPC_URL holds the FULL URL with key embedded.
-const RPC_URL = process.env.REACT_APP_DRPC_RPC_URL || '';
+// ── RPC ──────────────────────────────────────────────────────────────
+// Same-origin server proxy → Alchemy mainnet. The server (server.js)
+// holds the Alchemy API key and forwards via /api/solana-rpc. All
+// Connection instances in this file route through the proxy.
+const RPC_URL = (typeof window !== 'undefined' && window.location)
+  ? window.location.origin + '/api/solana-rpc'
+  : 'http://localhost:3001/api/solana-rpc';
+const BAL_COMMITMENT = 'processed';
+
 
 const _connCache = new Map();
 const getConn = (commitment) => {
