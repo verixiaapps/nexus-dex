@@ -13,11 +13,9 @@ const PROGRAM_ID = new PublicKey(
   process.env.REACT_APP_FLIPSY_PROGRAM_ID || '11111111111111111111111111111111',
 );
 
-// RPC — dRPC devnet (Flipsy is deployed on devnet). Reads the FULL URL
-// (api key embedded) from REACT_APP_DRPC_RPC_URL_DEVNET. CRA bakes
-// REACT_APP_* vars at build time, so it must be present when `npm run build`
-// runs. If missing, the IDL fetch will surface a clear chainError.
-const FLIPSY_RPC = (process.env.REACT_APP_DRPC_RPC_URL_DEVNET || '').trim();
+// RPC — public Solana devnet endpoint (Flipsy is deployed on devnet).
+// Hardcoded, no env var, no build-time inlining required.
+const FLIPSY_RPC = 'https://api.devnet.solana.com';
 
 const PRICE_URL = 'https://api.coinbase.com/v2/prices/SOL-USD/spot';
 const POLL_PRICE_MS = 2_500;
@@ -107,11 +105,8 @@ function stubRound(epoch, expectedStartTime, bettingDuration, gapDuration) {
 }
 
 export function useFlipsy(wallet) {
-  // Don't construct a Connection without a URL — web3.js will throw on the
-  // first network call with a confusing error. Surface our own clear error
-  // through chainError instead.
   const connection = useMemo(
-    () => (FLIPSY_RPC ? new Connection(FLIPSY_RPC, 'confirmed') : null),
+    () => new Connection(FLIPSY_RPC, 'confirmed'),
     [],
   );
   const [idl, setIdl] = useState(null);
@@ -125,9 +120,7 @@ export function useFlipsy(wallet) {
   const [balanceStatus, setBalanceStatus] = useState('idle');
   const [loading, setLoading] = useState(true);
   const [programConfig, setProgramConfig] = useState(null);
-  const [chainError, setChainError] = useState(
-    FLIPSY_RPC ? null : 'REACT_APP_DRPC_RPC_URL_DEVNET is not set (rebuild required after setting).',
-  );
+  const [chainError, setChainError] = useState(null);
   const livePriceRef = useRef(0);
 
   // Fetch IDL once from chain — works on any program/cluster
