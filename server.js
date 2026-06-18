@@ -1376,3 +1376,4 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('  Solana RPC:      drpc' + (DRPC_API_KEY ? ' (key set)' : ' (NO KEY — set DRPC_API_KEY)') + ' (no fallback)');
   console.log('  Allowed origins: ' + allowedOrigins.join(', '));
 });
+ 
