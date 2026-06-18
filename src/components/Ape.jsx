@@ -2,7 +2,7 @@
 // Isolated one-tap memecoin gallery on Solana. Self-generated local burner
 // wallet (no Phantom, no connect) signs instantly in-browser. pump.fun
 // bonding curve only. Atomic 3% SOL fee (unchanged).
-//
+// 
 //   WALLET : Keypair.generate() on first visit, secret key stored plain in
 //            localStorage (true burner — zero friction). Signs with
 //            tx.sign([keypair]) — no popup, no prompt. Deposit by address/QR,
