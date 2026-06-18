@@ -1,30 +1,20 @@
-name: Diagnose Site
+name: Find Bad PublicKey
 
-# Run from Actions tab → "Diagnose Site" → "Run workflow".
-# Two jobs run in parallel:
-#   1. build-check   → tries `npm install && npm run build`. If the build
-#                      itself is broken, this fails and shows you why.
-#   2. browser-check → opens the LIVE deployed site in a headless
-#                      Chromium and captures every JS error, console msg,
-#                      failed network request, and the rendered HTML.
+# Scans src/ for every `new PublicKey(...)` call.
+#  - For literal strings, actually tries to construct a PublicKey and reports
+#    which ones throw.
+#  - For variable inputs, lists the location so you can verify what value
+#    feeds in at build time.
+# Outputs the answer in plain English under VERDICT at the bottom.
 
 on:
   workflow_dispatch:
-    inputs:
-      url:
-        description: 'URL to diagnose'
-        required: false
-        default: 'https://swap.verixiaapps.com'
   push:
     branches: [main]
 
 jobs:
-
-  # ─────────────────────────────────────────────────────────────────────
-  # 1.  Can the code even build?
-  # ─────────────────────────────────────────────────────────────────────
-  build-check:
-    name: Build check
+  scan-publickey:
+    name: Scan PublicKey calls
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,212 +23,159 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Show key versions
+      - name: Install @solana/web3.js
         run: |
-          node --version
-          npm --version
-
-      - name: npm install
-        run: npm install --no-audit --no-fund
-        env:
-          CI: 'true'
-
-      - name: npm run build
-        run: npm run build
-        env:
-          # CRA treats warnings as errors when CI=true. We just want the
-          # build to succeed, not be pristine — set CI=false here.
-          CI: 'false'
-          # Frontend env stubs so the build doesn't fail looking for them.
-          # Replace these with real values via Actions Secrets if you want
-          # a fully production-equivalent build.
-          REACT_APP_WALLETCONNECT_PROJECT_ID: 'placeholder'
-          REACT_APP_SOLANA_RPC: 'https://api.mainnet-beta.solana.com'
-
-      - name: Show build artifacts
-        run: |
-          echo "::group::build/ contents"
-          ls -la build/ || echo "no build/ directory was produced"
-          echo "::endgroup::"
-          echo "::group::index.html (first 60 lines)"
-          head -60 build/index.html 2>/dev/null || true
-          echo "::endgroup::"
-
-  # ─────────────────────────────────────────────────────────────────────
-  # 2.  What does the live site actually do in a browser?
-  # ─────────────────────────────────────────────────────────────────────
-  browser-check:
-    name: Browser load
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Install Playwright + Chromium
-        run: |
-          mkdir diag && cd diag
+          mkdir -p scan
+          cd scan
           npm init -y > /dev/null
-          npm install playwright --no-audit --no-fund
-          npx playwright install chromium --with-deps
+          npm install @solana/web3.js --no-audit --no-fund
 
-      - name: Write diagnostic script
+      - name: Write scanner script
         run: |
-          cat > diag/run.js << 'SCRIPT'
-          const { chromium } = require('playwright');
+          cat > scan/find.js << 'SCRIPT'
+          const fs   = require('fs');
+          const path = require('path');
+          const { PublicKey } = require('@solana/web3.js');
 
-          const URL = process.env.TARGET_URL || 'https://swap.verixiaapps.com';
+          const SRC_DIR = path.join(process.cwd(), 'src');
+          const EXTS    = new Set(['.js', '.jsx', '.ts', '.tsx']);
 
-          (async () => {
-            console.log('Loading', URL);
+          function walk(dir, out = []) {
+            if (!fs.existsSync(dir)) return out;
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+              if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
+              const full = path.join(dir, entry.name);
+              if (entry.isDirectory()) walk(full, out);
+              else if (EXTS.has(path.extname(entry.name))) out.push(full);
+            }
+            return out;
+          }
 
-            const browser = await chromium.launch();
-            const ctx     = await browser.newContext({
-              viewport:  { width: 1280, height: 800 },
-              userAgent: 'Mozilla/5.0 (Diagnostic Bot) Chrome/120',
-            });
-            const page = await ctx.newPage();
+          // new PublicKey('...')  or  new PublicKey("...")  or  new PublicKey(`...`)
+          const LITERAL_RE  = /new\s+PublicKey\s*\(\s*['"`]([^'"`]*)['"`]\s*\)/g;
+          // new PublicKey(<anything-not-quoted>) — variable/expression
+          const VARIABLE_RE = /new\s+PublicKey\s*\(\s*([^'"`)][^)]*?)\s*\)/g;
 
-            const pageErrors      = [];
-            const consoleErrors   = [];
-            const consoleWarnings = [];
-            const consoleLogs     = [];
-            const networkFails    = [];
-            const responses       = [];
+          function lineOf(content, index) {
+            return content.slice(0, index).split('\n').length;
+          }
 
-            page.on('pageerror', err => {
-              pageErrors.push({ message: err.message, stack: err.stack || '' });
-            });
-            page.on('console', msg => {
-              const item = { type: msg.type(), text: msg.text() };
-              if (msg.type() === 'error')        consoleErrors.push(item);
-              else if (msg.type() === 'warning') consoleWarnings.push(item);
-              else                               consoleLogs.push(item);
-            });
-            page.on('requestfailed', req => {
-              networkFails.push({
-                url:    req.url(),
-                method: req.method(),
-                error:  req.failure()?.errorText || 'unknown',
-              });
-            });
-            page.on('response', res => {
-              const status = res.status();
-              if (status >= 400) {
-                responses.push({ status, url: res.url() });
+          // Crude module-level heuristic: walk back through braces. If we end
+          // up still inside an unclosed brace, we're inside a function/block.
+          function atModuleLevel(content, index) {
+            let depth = 0;
+            for (let i = index - 1; i >= 0; i--) {
+              const c = content[i];
+              if (c === '}') depth++;
+              else if (c === '{') {
+                if (depth === 0) return false;
+                depth--;
               }
-            });
+            }
+            return true;
+          }
 
-            let navError = null;
-            try {
-              await page.goto(URL, { waitUntil: 'load', timeout: 30000 });
-              await page.waitForTimeout(3000); // let React try to mount
-            } catch (e) {
-              navError = e.message;
+          const literals  = [];
+          const variables = [];
+
+          for (const file of walk(SRC_DIR)) {
+            const rel = path.relative(process.cwd(), file);
+            const src = fs.readFileSync(file, 'utf8');
+
+            LITERAL_RE.lastIndex = 0;
+            for (let m; (m = LITERAL_RE.exec(src)); ) {
+              const literal = m[1];
+              let valid = false, err = null;
+              try { new PublicKey(literal); valid = true; }
+              catch (e) { err = e.message; }
+              literals.push({
+                file: rel,
+                line: lineOf(src, m.index),
+                literal,
+                valid,
+                err,
+                moduleLevel: atModuleLevel(src, m.index),
+              });
             }
 
-            await page.screenshot({ path: 'diag/site.png', fullPage: true });
-            await page.screenshot({ path: 'diag/site-above-fold.png', fullPage: false });
-
-            const dom = await page.evaluate(() => {
-              const root = document.getElementById('root');
-              const scripts = [...document.querySelectorAll('script[src]')].map(s => s.src);
-              return {
-                title:           document.title,
-                bodyBg:          getComputedStyle(document.body).backgroundColor,
-                bodyText:        document.body.innerText.slice(0, 300),
-                hasRoot:         !!root,
-                rootHasChildren: !!(root && root.children.length),
-                rootInnerHTML:   root ? root.innerHTML.slice(0, 800) : null,
-                scripts,
-                bs58Bad:         (window.__BS58_BAD__ || []).slice(0, 5),
-              };
-            }).catch(() => null);
-
-            await browser.close();
-
-            // ── Render result ────────────────────────────────────────
-            const line = (s = '') => console.log(s);
-            const hdr  = (s)      => { line(); line('═══ ' + s + ' ═══'); };
-
-            hdr('Navigation');
-            line('URL:        ' + URL);
-            line('Nav error:  ' + (navError || 'none'));
-            line('Title:      ' + (dom?.title || '(unknown)'));
-            line('Body bg:    ' + (dom?.bodyBg || '(unknown)'));
-            line('Has #root:  ' + (dom?.hasRoot ? 'yes' : 'NO'));
-            line('React mounted: ' + (dom?.rootHasChildren ? 'yes' : 'NO  ← if NO, app crashed on import'));
-
-            hdr('Scripts in HTML');
-            for (const s of (dom?.scripts || [])) line('  ' + s);
-            if (!(dom?.scripts || []).length) line('  (none — index.html is broken)');
-
-            hdr('JavaScript errors (page-level)');
-            if (pageErrors.length === 0) line('  (none — but absence may mean a static import threw before handlers attached)');
-            for (const e of pageErrors) {
-              line('  ✗ ' + e.message);
-              if (e.stack) line(e.stack.split('\n').slice(0, 6).map(l => '    ' + l).join('\n'));
+            VARIABLE_RE.lastIndex = 0;
+            for (let m; (m = VARIABLE_RE.exec(src)); ) {
+              const expr = m[1].trim();
+              // Skip if it actually started with a quote (covered by LITERAL_RE)
+              if (/^['"`]/.test(expr)) continue;
+              variables.push({
+                file: rel,
+                line: lineOf(src, m.index),
+                expr,
+                moduleLevel: atModuleLevel(src, m.index),
+              });
             }
+          }
 
-            hdr('Console errors');
-            if (consoleErrors.length === 0) line('  (none)');
-            for (const c of consoleErrors) line('  ✗ ' + c.text.slice(0, 600));
+          const line = (s = '') => console.log(s);
+          const hdr  = (s)      => { line(); line('═══ ' + s + ' ═══'); line(); };
 
-            hdr('Console warnings');
-            for (const c of consoleWarnings.slice(0, 10)) line('  ⚠ ' + c.text.slice(0, 400));
-
-            hdr('Failed network requests');
-            if (networkFails.length === 0) line('  (none)');
-            for (const n of networkFails) line('  ✗ ' + n.method + ' ' + n.url + ' → ' + n.error);
-
-            hdr('HTTP 4xx/5xx responses');
-            if (responses.length === 0) line('  (none)');
-            for (const r of responses) line('  ' + r.status + '  ' + r.url);
-
-            hdr('bs58-patch interceptions');
-            if (!dom?.bs58Bad?.length) line('  (none — the bs58 patch never had to catch a bad input)');
-            for (const b of (dom?.bs58Bad || [])) line('  bad input: "' + (b.input || '').slice(0, 80) + '"');
-
-            hdr('Root element preview');
-            line(dom?.rootInnerHTML ? dom.rootInnerHTML.slice(0, 600) : '(empty)');
-
-            // ── Verdict ──────────────────────────────────────────────
-            hdr('VERDICT');
-            const issues = [];
-            if (navError)                      issues.push('Navigation failed: ' + navError);
-            if (!dom?.hasRoot)                 issues.push('#root element is missing from index.html');
-            if (dom?.hasRoot && !dom?.rootHasChildren) {
-              issues.push('React never mounted — a static import in src/index.js or one of its imports threw before the error handlers could attach. See JS errors / console errors above for the actual cause.');
+          hdr('Hardcoded literals: new PublicKey("...")');
+          if (literals.length === 0) {
+            line('  (none found)');
+          } else {
+            for (const f of literals) {
+              const flag = f.valid ? '✓        ' : '✗ INVALID';
+              const where = f.moduleLevel ? '[MODULE]' : '[scoped]';
+              line('  ' + flag + ' ' + where + ' ' + f.file + ':' + f.line);
+              line('              "' + f.literal + '"  (' + f.literal.length + ' chars)');
+              if (!f.valid) line('              ERROR: ' + f.err);
             }
-            if (responses.find(r => /\.(js|css)$/.test(r.url))) {
-              issues.push('A JS/CSS bundle returned non-200 — page cannot run.');
+          }
+
+          hdr('Variable / expression inputs: new PublicKey(expr)');
+          if (variables.length === 0) {
+            line('  (none found)');
+          } else {
+            line('  Cannot validate these without running the code. Module-level ones');
+            line('  marked ⚠ are the prime suspects for boot-time crashes.');
+            line('');
+            for (const f of variables) {
+              const where = f.moduleLevel ? '⚠ [MODULE]' : '  [scoped]';
+              line('  ' + where + ' ' + f.file + ':' + f.line);
+              line('              new PublicKey(' + f.expr.slice(0, 100) + ')');
             }
-            if (pageErrors.length || consoleErrors.length) {
-              issues.push((pageErrors.length + consoleErrors.length) + ' JS error(s) detected (see above).');
+          }
+
+          hdr('VERDICT');
+          const badLiterals = literals.filter(f => !f.valid);
+          if (badLiterals.length > 0) {
+            line('  ✗ ' + badLiterals.length + ' INVALID hardcoded PublicKey literal(s) found:');
+            for (const f of badLiterals) {
+              line('     ' + f.file + ':' + f.line + '  "' + f.literal + '"');
             }
-            if (issues.length === 0) {
-              line('No obvious problem detected. If you still see a blank page in a real browser, hard-refresh / try incognito (CDN cache).');
-            } else {
-              for (const i of issues) line('  → ' + i);
-              process.exitCode = 1;
+            line('');
+            line('  → Fix the address(es) above. This is your blank-page crash.');
+            process.exit(1);
+          }
+
+          const moduleVars = variables.filter(f => f.moduleLevel);
+          if (moduleVars.length > 0) {
+            line('  All hardcoded literals are valid base58 addresses.');
+            line('');
+            line('  But ' + moduleVars.length + ' module-level construction(s) take a variable input that');
+            line('  could be invalid at runtime (env var unset, wrong format, etc.):');
+            for (const f of moduleVars) {
+              line('     ' + f.file + ':' + f.line + '  new PublicKey(' + f.expr.slice(0, 80) + ')');
             }
-          })().catch(err => {
-            console.error('Diagnostic script crashed:', err);
-            process.exit(2);
-          });
+            line('');
+            line('  Check each: confirm the variable resolves to a 32-44 char base58 address');
+            line('  at build time. If any depends on process.env.REACT_APP_*, that var must');
+            line('  be set in your Railway BUILD environment, not just runtime.');
+            process.exit(1);
+          }
+
+          line('  No invalid PublicKey literals found and no module-level variable');
+          line('  constructions detected. The crash may be coming from:');
+          line('    - A dependency that internally constructs a PublicKey with bad data');
+          line('    - A function that runs during render (e.g. a component default prop)');
+          line('    - A different code path; share the SwapWidget.jsx / Stocks.jsx etc.');
           SCRIPT
 
-      - name: Run browser diagnostic
-        run: node diag/run.js
-        env:
-          TARGET_URL: ${{ github.event.inputs.url || 'https://swap.verixiaapps.com' }}
-
-      - name: Upload screenshots
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: site-screenshots
-          path: |
-            diag/site.png
-            diag/site-above-fold.png
-          if-no-files-found: warn
+      - name: Run scanner
+        run: node scan/find.js
