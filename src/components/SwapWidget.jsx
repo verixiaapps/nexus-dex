@@ -295,14 +295,7 @@ function useSwCSS() {
   }, []);
 }
 
-/* ─── CONFIG ──────────────────────────────────────────── */
-const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
-const FEE_BPS    = 300;
-const SOL_MINT   = 'So11111111111111111111111111111111111111112';
-const USDC_MINT  = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
-const PRIORITY_FEE_MICROLAMPORTS = 50_000;
-const SLIPPAGE_BPS = 500;
 
 /* ─── CONFIG ──────────────────────────────────────────── */
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
