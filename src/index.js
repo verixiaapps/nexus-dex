@@ -68,12 +68,18 @@ class ErrorBoundary extends React.Component {
 
 if (typeof window !== 'undefined' && !window.Buffer) { window.Buffer = Buffer; }
 
-try {
-  const SOLANA_RPC =
-    process.env.REACT_APP_SOLANA_RPC ||
-    (process.env.REACT_APP_HELIUS_API_KEY
-      ? 'https://mainnet.helius-rpc.com/?api-key=' + encodeURIComponent(process.env.REACT_APP_HELIUS_API_KEY)
-      : 'https://api.mainnet-beta.solana.com');
+// Solana RPC — dRPC only, no fallback. Set REACT_APP_DRPC_RPC_URL to the FULL
+// dRPC URL (api key embedded). CRA inlines REACT_APP_* vars at build time, so
+// this MUST be present in the env when `npm run build` runs.
+function bootstrap() {
+  const SOLANA_RPC = (process.env.REACT_APP_DRPC_RPC_URL || '').trim();
+  if (!SOLANA_RPC) {
+    showFatal('Configuration error',
+      'REACT_APP_DRPC_RPC_URL is not set.\n\n' +
+      'Set it to the full dRPC URL (api key embedded) in your build environment, then rebuild.\n' +
+      'CRA only inlines REACT_APP_* vars during `npm run build` — setting it after deploy will not help.');
+    return;
+  }
 
   const WC_PROJECT_ID = process.env.REACT_APP_WALLETCONNECT_PROJECT_ID;
 
@@ -111,22 +117,27 @@ try {
   const rootEl = document.getElementById('root');
   if (!rootEl) {
     showFatal('Bootstrap error', '#root element not found in index.html');
-  } else {
-    const root = ReactDOM.createRoot(rootEl);
-    root.render(
-      <ErrorBoundary>
-        <QueryClientProvider client={queryClient}>
-          <ConnectionProvider endpoint={SOLANA_RPC} config={{ commitment: 'confirmed' }}>
-            <WalletProvider wallets={solanaWallets} autoConnect={false} onError={onWalletError}>
-              <WalletContextProvider>
-                <App />
-              </WalletContextProvider>
-            </WalletProvider>
-          </ConnectionProvider>
-        </QueryClientProvider>
-      </ErrorBoundary>
-    );
+    return;
   }
+
+  const root = ReactDOM.createRoot(rootEl);
+  root.render(
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <ConnectionProvider endpoint={SOLANA_RPC} config={{ commitment: 'confirmed' }}>
+          <WalletProvider wallets={solanaWallets} autoConnect={false} onError={onWalletError}>
+            <WalletContextProvider>
+              <App />
+            </WalletContextProvider>
+          </WalletProvider>
+        </ConnectionProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
+  );
+}
+
+try {
+  bootstrap();
 } catch (err) {
   showFatal('Startup error', 'Message: ' + (err && err.message) + '\n\nStack:\n' + (err && err.stack));
   throw err;
