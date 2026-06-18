@@ -10,15 +10,8 @@ const bs58: any = (bs58module as any).default || bs58module;
 const PROGRAM_ID = new PublicKey("71bEAUToad7j8k8As9LwsGWBYTLxVJoP2SBNB3S3RLHs");
 const SUPER_ADMIN = new PublicKey("GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA");
 
-// RPC — dRPC devnet, no fallback. Set DRPC_RPC_URL_DEVNET in Railway to the
-// FULL dRPC URL (api key embedded), e.g. https://lb.drpc.live/solana-devnet/<key>
-// Separate var from DRPC_RPC_URL (mainnet) used by the DEX server so the two
-// services share the Railway env without colliding.
-const RPC_URL = (process.env.DRPC_RPC_URL_DEVNET || "").trim();
-if (!RPC_URL) {
-  console.error("DRPC_RPC_URL_DEVNET env var required (no fallback configured)");
-  process.exit(1);
-}
+// RPC — public Solana devnet endpoint. Hardcoded, no env var, no fallback.
+const RPC_URL = "https://api.devnet.solana.com";
 
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || "10000");
 const GAP_SECONDS = 30;
@@ -96,7 +89,7 @@ async function main() {
  console.log("[crank] Cranker:", cranker.publicKey.toBase58());
  let rpcHost = "(invalid url)";
  try { rpcHost = new URL(RPC_URL).host; } catch {}
- console.log("[crank] RPC: dRPC (" + rpcHost + ") — url set");
+ console.log("[crank] RPC: solana devnet (" + rpcHost + ")");
 
  const connection = new Connection(RPC_URL, "confirmed");
  const wallet = new anchor.Wallet(cranker);
