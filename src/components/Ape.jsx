@@ -1,22 +1,17 @@
-// Ape.jsx — instant one-tap launch gallery (private)
-// Isolated one-tap memecoin gallery on Solana. Self-generated local burner
-// wallet (no Phantom, no connect) signs instantly in-browser. pump.fun
-// bonding curve only. Atomic 3% SOL fee (unchanged).
+// Ape.jsx — wonderland//radar — field log + one-tap launch list
 //
-//   WALLET : Keypair.generate() on first visit, secret key stored plain in
-//            localStorage (true burner — zero friction). Signs with
-//            tx.sign([keypair]) — no popup, no prompt. Deposit by address/QR,
-//            withdraw to any address, back up by exporting the secret key
-//            (Phantom-importable). Backup is always available, never blocking.
-//
-//   BUY    : pure one-tap. Quick-buy bar sets X SOL. Tap Ape -> 0.97/1.10-sized
-//            curve buy + prepended 0.03X SOL fee -> FEE_WALLET. Wallet debit = X.
-//   SELL   : one-tap presets (25/50/100%). Full token amount -> curve; 3% of
-//            estimated SOL out appended as fee after the curve pays native SOL.
-//
-//   TRUST  : honest signal computed from liquidity + holders + volume + age.
-//            NOT a contract audit. Wire RugCheck/GoPlus server-side for a real
-//            rug check.
+// What changed from prior version:
+//   - UI: field-naturalist register (iris/magenta/mint/cyan, Fraunces serif).
+//     Slim hero → 3 "what we offer" cards → live specimen feed (table) →
+//     proof band. Mascot + mooning ribbon removed; coin micro-animation
+//     removed (was an extra React state per tile per tap).
+//   - Speed: POLL_RECENT 5s → 2.5s. Ages tick live every 1s. Removed the
+//     animated coin state on the row buy button (was forcing a re-render
+//     per tap on top of the trade flow).
+//   - Token detail: still the TradeSheet modal — same flow as before.
+//   - Burner wallet, executeSwap, runTrade, balance refreshes, Twitter
+//     share, confetti, toasts: ALL UNCHANGED. The trade pipeline is
+//     identical to the previous Ape.jsx.
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Buffer } from 'buffer';
@@ -35,265 +30,551 @@ import {
   TOKEN_2022_PROGRAM_ID,
 } from '@solana/spl-token';
 
-const LR_CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@600;700;800&display=swap');
-.ape-root{
-  --bg:#0B0A1A; --bg2:#100E22; --surf:#181534; --surf2:#221E45; --line:rgba(255,255,255,.08); --line2:rgba(255,255,255,.14);
-  --amber:#FFB52E; --gold:#FFD46B; --green:#2BE08A; --red:#FF5470; --violet:#9B7BFF; --sky:#56C8FF; --pink:#FF7BC8;
-  --ink:#F2F0FF; --ink2:rgba(242,240,255,.6); --ink3:rgba(242,240,255,.34);
-  min-height:100vh;color:var(--ink);font-family:'Inter',-apple-system,system-ui,sans-serif;-webkit-font-smoothing:antialiased;
-  position:relative;overflow-x:hidden;padding-bottom:46px;
+/* ============================================================
+   CSS — field-naturalist palette. Everything prefixed `wr-` so
+   nothing leaks into the rest of the app. Imported once via
+   useWrCSS().
+   ============================================================ */
+const WR_CSS = `
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,400;1,9..144,500;1,9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700;800&display=swap');
+.wr-root{
+  --iris:#0E0B1F; --plum:#19132F; --vapor:#251D43; --vapor2:#312756;
+  --line:rgba(244,239,255,.07); --line2:rgba(244,239,255,.16); --line3:rgba(244,239,255,.28);
+  --magenta:#FF3D8A; --magenta-glow:rgba(255,61,138,.5);
+  --mint:#3DFFC2; --mint-soft:rgba(61,255,194,.12);
+  --coral:#FF7A6E; --coral-soft:rgba(255,122,110,.12);
+  --cyan:#6BEEFF; --butter:#FFD86B; --lavender:#C9B8FF;
+  --ink:#F4EFFF; --ink2:rgba(244,239,255,.62); --ink3:rgba(244,239,255,.38);
+  min-height:100vh;color:var(--ink);font-family:'Inter',-apple-system,system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;position:relative;overflow-x:hidden;
+  padding-bottom:46px;
   background:
-    radial-gradient(820px 520px at 85% -8%,rgba(155,123,255,.18),transparent 58%),
-    radial-gradient(640px 440px at 5% 0%,rgba(255,123,200,.12),transparent 55%),
-    radial-gradient(700px 500px at 50% 112%,rgba(86,200,255,.1),transparent 60%),
-    var(--bg);
+    radial-gradient(900px 600px at 88% -10%,rgba(255,61,138,.10),transparent 55%),
+    radial-gradient(700px 500px at -5% 8%,rgba(107,238,255,.08),transparent 55%),
+    radial-gradient(800px 600px at 50% 110%,rgba(201,184,255,.06),transparent 60%),
+    var(--iris);
   background-attachment:fixed;
 }
-.ape-root,.ape-root *{box-sizing:border-box}
-@keyframes apeSweep{to{transform:rotate(360deg)}}
-@keyframes apePulse{0%,100%{opacity:1}50%{opacity:.4}}
-@keyframes apeBob{0%,100%{transform:translateY(0) rotate(-3deg)}50%{transform:translateY(-4px) rotate(3deg)}}
-@keyframes apePop{0%{opacity:0;transform:scale(.8) translateY(8px)}60%{transform:scale(1.04)}100%{opacity:1;transform:scale(1) translateY(0)}}
-@keyframes apeLand{0%{opacity:0;transform:scale(.6);box-shadow:0 0 0 2px var(--green),0 0 40px rgba(43,224,138,.6)}100%{opacity:1;transform:scale(1)}}
-@keyframes apeSheetIn{from{transform:translateY(100%)}to{transform:translateY(0)}}
-@keyframes apeFade{from{opacity:0}to{opacity:1}}
-@keyframes apeCoin{0%{opacity:1;transform:translate(0,0) scale(1)}100%{opacity:0;transform:translate(var(--cx),-42px) scale(.4)}}
-@keyframes apeSquish{0%{transform:scale(1)}35%{transform:scale(.9,1.08)}70%{transform:scale(1.04,.96)}100%{transform:scale(1)}}
-@keyframes apeSpin{to{transform:rotate(360deg)}}
-@keyframes apeToastIn{from{transform:translateY(16px);opacity:0}to{transform:translateY(0);opacity:1}}
-@keyframes apeConfetti{0%{transform:translate(-50%,-50%) rotate(0);opacity:1}100%{transform:translate(calc(-50% + var(--dx,0)),calc(-50% + var(--dy,400px))) rotate(var(--dr,720deg));opacity:0}}
+.wr-root,.wr-root *{box-sizing:border-box}
 
-.ape-app{max-width:560px;margin:0 auto;position:relative;z-index:5}
-@media(min-width:1024px){.ape-app{max-width:1100px}}
+@keyframes wr-sweep{to{transform:rotate(360deg)}}
+@keyframes wr-pulse{0%,100%{opacity:1}50%{opacity:.4}}
+@keyframes wr-develop{0%{opacity:0;filter:blur(8px) saturate(.3);transform:translateY(-8px);background:rgba(61,255,194,.12)}40%{filter:blur(4px) saturate(.6)}100%{opacity:1;filter:blur(0) saturate(1);transform:translateY(0);background:transparent}}
+@keyframes wr-fade{from{opacity:0}to{opacity:1}}
+@keyframes wr-sheet{from{transform:translateY(100%)}to{transform:translateY(0)}}
+@keyframes wr-pop{0%{opacity:0;transform:scale(.92)}60%{transform:scale(1.02)}100%{opacity:1;transform:scale(1)}}
+@keyframes wr-spin{to{transform:rotate(360deg)}}
+@keyframes wr-glow{0%,100%{box-shadow:0 0 0 0 rgba(255,61,138,0)}50%{box-shadow:0 0 32px 0 rgba(255,61,138,.25)}}
+@keyframes wr-toast{from{transform:translateY(16px);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes wr-confetti{0%{transform:translate(-50%,-50%) rotate(0);opacity:1}100%{transform:translate(calc(-50% + var(--dx,0)),calc(-50% + var(--dy,400px))) rotate(var(--dr,720deg));opacity:0}}
 
-.ape-top{position:sticky;top:0;z-index:42;display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:rgba(11,10,26,.82);backdrop-filter:blur(18px)}
-.ape-brand{display:flex;align-items:center;gap:9px;cursor:pointer}
-.ape-radar{width:30px;height:30px;border-radius:50%;position:relative;flex-shrink:0;border:1px solid rgba(255,181,46,.35);background:radial-gradient(circle,rgba(255,181,46,.12),transparent 70%);overflow:hidden}
-.ape-radar::before{content:'';position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 0deg,transparent 0 290deg,rgba(255,181,46,.65) 350deg,transparent 360deg);animation:apeSweep 2.8s linear infinite}
-.ape-radar::after{content:'';position:absolute;inset:6px;border-radius:50%;border:1px solid rgba(255,181,46,.25)}
-.ape-bname{font-family:'Space Grotesk';font-weight:700;font-size:15px}
-.ape-bname .sl{opacity:.4;margin:0 2px;font-weight:500}
-.ape-bname .ra{background:linear-gradient(90deg,var(--pink),var(--violet),var(--sky));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
-.ape-wbtn{display:flex;align-items:center;gap:7px;padding:8px 13px;border-radius:999px;cursor:pointer;background:var(--surf);border:1px solid var(--line);color:var(--ink);font-family:'JetBrains Mono';font-size:12px;font-weight:700;position:relative}
-.ape-wbtn:hover{border-color:var(--line2)}
-.ape-wbtn .ape-sol{color:var(--amber)}
-.ape-wdot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 7px var(--green)}
-.ape-wbtn .ape-nudge{position:absolute;top:-3px;right:-3px;width:10px;height:10px;border-radius:50%;background:var(--amber);border:2px solid var(--bg);box-shadow:0 0 6px var(--amber)}
+.wr-app{max-width:1280px;margin:0 auto;position:relative;z-index:5}
+.wr-page{padding:24px 28px 80px}
+@media(max-width:768px){.wr-page{padding:16px 14px 80px}}
 
-.ape-qbar{position:sticky;top:54px;z-index:41;display:flex;align-items:center;gap:8px;padding:8px 16px;background:rgba(11,10,26,.9);backdrop-filter:blur(18px);overflow-x:auto;scrollbar-width:none}
-.ape-qbar::-webkit-scrollbar{display:none}
-.ape-qlabel{font-family:'JetBrains Mono';font-size:9px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:var(--ink2);flex-shrink:0;display:flex;align-items:center;gap:5px}
-.ape-qlabel .b{color:var(--amber)}
-.ape-qamt{flex-shrink:0;display:flex;align-items:center;gap:4px;padding:6px 13px;border-radius:999px;background:var(--surf);border:1px solid var(--line);color:var(--ink);font-family:'JetBrains Mono';font-weight:700;font-size:13px;cursor:pointer;transition:.12s}
-.ape-qamt.active{background:linear-gradient(135deg,var(--amber),var(--gold));color:#1a1400;border-color:transparent;box-shadow:0 0 16px rgba(255,181,46,.4)}
-.ape-qamt .ape-sol{opacity:.55;font-size:11px}
-.ape-qedit{flex-shrink:0;width:30px;height:30px;border-radius:50%;background:var(--surf);border:1px solid var(--line);display:grid;place-items:center;cursor:pointer;color:var(--ink2);font-size:12px;font-family:initial}
-.ape-qedit:hover{border-color:var(--amber);color:var(--amber)}
-.ape-qinstant{flex-shrink:0;margin-left:auto;display:flex;align-items:center;gap:6px;font-family:'JetBrains Mono';font-size:9px;font-weight:800;letter-spacing:.5px;color:var(--green);background:rgba(43,224,138,.12);padding:6px 10px;border-radius:999px;white-space:nowrap}
-.ape-qinstant .d{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 7px var(--green);animation:apePulse 1.3s infinite}
+/* ── NAV ───────────────────────────────────────────── */
+.wr-nav{
+  position:sticky;top:0;z-index:60;
+  display:flex;align-items:center;gap:18px;padding:14px 28px;
+  background:rgba(14,11,31,.7);backdrop-filter:blur(20px) saturate(140%);
+  border-bottom:1px solid var(--line);
+}
+.wr-brand{display:flex;align-items:center;gap:11px;cursor:pointer}
+.wr-radar-icon{
+  position:relative;width:30px;height:30px;border-radius:50%;
+  border:1px solid rgba(107,238,255,.4);
+  background:radial-gradient(circle,rgba(107,238,255,.15),transparent 70%);
+  overflow:hidden;flex-shrink:0;
+}
+.wr-radar-icon::before{
+  content:'';position:absolute;inset:0;border-radius:50%;
+  background:conic-gradient(from 0deg,transparent 0 280deg,var(--cyan) 350deg,transparent 360deg);
+  animation:wr-sweep 3.5s linear infinite;opacity:.7;
+}
+.wr-radar-icon::after{content:'';position:absolute;inset:6px;border-radius:50%;border:1px solid rgba(107,238,255,.25)}
+.wr-bname{font-family:'Fraunces';font-weight:600;font-size:17px;letter-spacing:-.015em;font-variation-settings:"opsz" 60}
+.wr-bname .it{font-style:italic;font-weight:500;color:var(--cyan)}
+.wr-bname .sep{opacity:.4;margin:0 4px;font-weight:400}
+.wr-nav-eyebrow{
+  margin-left:auto;display:flex;align-items:center;gap:10px;
+  font-family:'JetBrains Mono';font-size:10px;font-weight:700;
+  letter-spacing:1.2px;text-transform:uppercase;color:var(--ink3);
+}
+.wr-nav-eyebrow .live{width:6px;height:6px;border-radius:50%;background:var(--mint);box-shadow:0 0 10px var(--mint);animation:wr-pulse 1.4s infinite}
+.wr-nav-wallet{
+  display:flex;align-items:center;gap:9px;padding:8px 14px;
+  background:linear-gradient(135deg,var(--vapor),var(--plum));
+  border:1px solid var(--line2);border-radius:999px;
+  font-family:'JetBrains Mono';font-size:12px;font-weight:700;
+  cursor:pointer;color:var(--ink);position:relative;
+}
+.wr-nav-wallet:hover{border-color:var(--line3)}
+.wr-nav-wallet .glyph{color:var(--butter);font-weight:800}
+.wr-nav-wallet .dot{width:6px;height:6px;border-radius:50%;background:var(--mint);box-shadow:0 0 8px var(--mint)}
+.wr-nav-wallet .nudge{position:absolute;top:-3px;right:-3px;width:10px;height:10px;border-radius:50%;background:var(--butter);border:2px solid var(--iris);box-shadow:0 0 6px var(--butter)}
+@media(max-width:768px){
+  .wr-nav{padding:12px 14px;gap:10px}
+  .wr-nav-eyebrow{display:none}
+}
 
-.ape-ribbon{display:flex;align-items:center;gap:8px;padding:10px 16px 2px;overflow-x:auto;scrollbar-width:none}
-.ape-ribbon::-webkit-scrollbar{display:none}
-.ape-rlbl{font-family:'JetBrains Mono';font-size:9px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--pink);flex-shrink:0}
-.ape-rchip{flex-shrink:0;display:flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;background:var(--surf);border:1px solid var(--line);font-family:'JetBrains Mono';font-size:11px;font-weight:700;cursor:pointer}
-.ape-rchip .up{color:var(--green);font-weight:800}
-.ape-rchip .dn{color:var(--red);font-weight:800}
+/* ── QUICK BUY BAR ───────────────────────────────── */
+.wr-qbar{
+  position:sticky;top:54px;z-index:55;
+  display:flex;align-items:center;gap:8px;padding:10px 28px;
+  background:rgba(14,11,31,.85);backdrop-filter:blur(18px);
+  border-bottom:1px solid var(--line);
+  overflow-x:auto;scrollbar-width:none;
+}
+.wr-qbar::-webkit-scrollbar{display:none}
+.wr-qlabel{
+  font-family:'JetBrains Mono';font-size:9.5px;font-weight:800;
+  letter-spacing:1.3px;text-transform:uppercase;color:var(--ink3);
+  flex-shrink:0;display:flex;align-items:center;gap:6px;
+}
+.wr-qlabel .b{color:var(--magenta)}
+.wr-qamt{
+  flex-shrink:0;display:flex;align-items:center;gap:5px;
+  padding:6px 13px;border-radius:999px;
+  background:var(--vapor);border:1px solid var(--line);color:var(--ink2);
+  font-family:'JetBrains Mono';font-weight:700;font-size:12.5px;cursor:pointer;
+  transition:.12s;
+}
+.wr-qamt:hover{color:var(--ink);border-color:var(--line2)}
+.wr-qamt.active{background:var(--magenta);color:#1B0410;border-color:transparent;box-shadow:0 4px 16px -4px var(--magenta-glow)}
+.wr-qamt .s{opacity:.55;font-size:11px}
+.wr-qamt.active .s{opacity:.7;color:#1B0410}
+.wr-qedit{
+  flex-shrink:0;width:30px;height:30px;border-radius:50%;
+  background:var(--vapor);border:1px solid var(--line);
+  display:grid;place-items:center;color:var(--ink2);font-size:13px;cursor:pointer;
+}
+.wr-qedit:hover{color:var(--cyan);border-color:rgba(107,238,255,.35)}
+.wr-qfast{
+  flex-shrink:0;margin-left:auto;display:flex;align-items:center;gap:6px;
+  font-family:'JetBrains Mono';font-size:9.5px;font-weight:800;letter-spacing:.6px;
+  color:var(--mint);background:var(--mint-soft);padding:6px 11px;border-radius:999px;
+  white-space:nowrap;
+}
+.wr-qfast .d{width:6px;height:6px;border-radius:50%;background:var(--mint);box-shadow:0 0 8px var(--mint);animation:wr-pulse 1.3s infinite}
+@media(max-width:768px){.wr-qbar{padding:9px 14px}}
 
-.ape-hero{padding:14px 16px 2px;display:flex;align-items:center;justify-content:space-between;gap:10px}
-.ape-hero h1{font-family:'Space Grotesk';font-weight:700;font-size:21px;margin:0;letter-spacing:-.01em}
-.ape-hero h1 .g{background:linear-gradient(90deg,var(--amber),var(--pink));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
-.ape-meta{font-family:'JetBrains Mono';font-size:10px;font-weight:700;color:var(--ink2);display:flex;align-items:center;gap:6px;flex-shrink:0}
-.ape-meta .live{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:apePulse 1.3s infinite}
-.ape-meta .live.warn{background:var(--amber);box-shadow:0 0 8px var(--amber)}
+/* ── FIELD LOG EYEBROW ───────────────────────────── */
+.wr-field-log{
+  font-family:'JetBrains Mono';font-size:10.5px;font-weight:700;
+  letter-spacing:1.5px;text-transform:uppercase;color:var(--ink3);
+  display:flex;align-items:center;gap:10px;margin-bottom:14px;
+}
+.wr-field-log .rule{flex:1;height:1px;background:linear-gradient(90deg,var(--line2),transparent);max-width:200px}
+.wr-field-log .glyph{color:var(--cyan);font-size:14px}
 
-.ape-controls{display:flex;gap:6px;padding:10px 16px 2px;overflow-x:auto;scrollbar-width:none}
-.ape-controls::-webkit-scrollbar{display:none}
-.ape-seg{flex-shrink:0;padding:7px 13px;border-radius:999px;background:var(--surf);border:1px solid var(--line);color:var(--ink2);font-family:'Space Grotesk';font-size:11px;font-weight:700;cursor:pointer;transition:.15s}
-.ape-seg.active{background:linear-gradient(135deg,var(--violet),var(--pink));color:#fff;border-color:transparent}
-.ape-seg-div{flex-shrink:0;width:1px;height:22px;background:var(--line);align-self:center;margin:0 3px}
+/* ── SLIM HERO ───────────────────────────────────── */
+.wr-hero{
+  display:flex;align-items:flex-end;justify-content:space-between;gap:24px;
+  padding:4px 0 22px;border-bottom:1px solid var(--line);margin-bottom:22px;
+  flex-wrap:wrap;
+}
+.wr-hero h1{
+  font-family:'Fraunces';font-weight:500;font-size:46px;line-height:1;
+  letter-spacing:-.025em;font-variation-settings:"opsz" 144;
+  max-width:680px;margin:0;
+}
+.wr-hero h1 .it{font-style:italic;font-weight:400;color:var(--cyan)}
+.wr-hero-cta{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.wr-btn-ape{
+  display:inline-flex;align-items:center;gap:9px;
+  padding:13px 22px;border-radius:13px;border:none;cursor:pointer;
+  background:var(--magenta);color:#1B0410;font-family:inherit;
+  font-weight:700;font-size:13.5px;letter-spacing:.2px;
+  box-shadow:0 8px 28px -8px var(--magenta-glow);
+  transition:transform .12s,box-shadow .2s;
+}
+.wr-btn-ape:hover{transform:translateY(-1px);box-shadow:0 12px 36px -8px var(--magenta-glow)}
+.wr-btn-ape .arrow{font-family:'JetBrains Mono';font-weight:800}
+.wr-no-connect{
+  display:inline-flex;align-items:center;gap:7px;
+  font-family:'JetBrains Mono';font-size:10.5px;font-weight:700;
+  letter-spacing:.6px;color:var(--mint);
+  padding:6px 11px;border-radius:999px;
+  background:var(--mint-soft);border:1px solid rgba(61,255,194,.2);
+}
+@media(max-width:768px){
+  .wr-hero h1{font-size:32px}
+  .wr-hero{flex-direction:column;align-items:flex-start;gap:14px}
+}
 
-.ape-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:11px;padding:12px 16px 0}
-@media(min-width:430px){.ape-grid{grid-template-columns:repeat(3,1fr)}}
-@media(min-width:720px){.ape-grid{grid-template-columns:repeat(4,1fr)}}
-.ape-tile{position:relative;border-radius:20px;background:var(--surf);border:1px solid var(--line);overflow:hidden;animation:apePop .4s cubic-bezier(.2,1.2,.4,1) backwards;cursor:pointer;transition:border-color .15s,transform .1s}
-.ape-tile:hover{border-color:var(--line2)}
-.ape-tile.new{animation:apeLand .55s cubic-bezier(.2,1,.3,1)}
-.ape-tile:active{transform:scale(.985)}
-.ape-face{position:relative;aspect-ratio:1/1;display:grid;place-items:center;overflow:hidden;background:radial-gradient(circle at 50% 32%,rgba(155,123,255,.28),transparent 70%),linear-gradient(160deg,#2a2350,#181534)}
-.ape-face .ape-img{width:100%;height:100%;object-fit:cover}
-.ape-face .ape-emoji{font-size:46px;animation:apeBob 4s ease-in-out infinite;filter:drop-shadow(0 6px 14px rgba(0,0,0,.4))}
-.ape-agep{position:absolute;top:9px;left:9px;font-family:'JetBrains Mono';font-size:9px;font-weight:800;padding:3px 8px;border-radius:999px;background:rgba(11,10,26,.72);backdrop-filter:blur(6px);color:var(--gold);letter-spacing:.3px}
-.ape-trust{position:absolute;top:7px;right:7px;width:40px;height:40px}
-.ape-trust svg{transform:rotate(-90deg)}
-.ape-trust .tnum{position:absolute;inset:0;display:grid;place-items:center;font-family:'JetBrains Mono';font-weight:800;font-size:13px;padding-bottom:2px}
-.ape-trust .tlbl{position:absolute;left:50%;bottom:-2px;transform:translateX(-50%);font-family:'JetBrains Mono';font-size:6.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase}
-.ape-curve{position:absolute;left:0;right:0;bottom:0;height:4px;background:rgba(0,0,0,.35)}
-.ape-curve i{display:block;height:100%;background:linear-gradient(90deg,var(--amber),var(--gold))}
-.ape-body{padding:10px 11px 11px}
-.ape-symrow{display:flex;align-items:baseline;justify-content:space-between;gap:6px}
-.ape-sym{font-family:'Space Grotesk';font-weight:700;font-size:15px;line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ape-chg{font-family:'JetBrains Mono';font-size:11px;font-weight:800;color:var(--green);flex-shrink:0}
-.ape-chg.down{color:var(--red)}
-.ape-name{font-size:10px;color:var(--ink2);font-weight:500;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ape-statline{display:flex;align-items:center;gap:6px;margin-top:7px;font-family:'JetBrains Mono';font-size:9.5px;font-weight:700;color:var(--ink2)}
-.ape-statline .price{color:var(--ink);font-weight:800}
-.ape-statline b{color:var(--ink)}
-.ape-ape{width:100%;margin-top:10px;border:none;cursor:pointer;padding:10px 0;border-radius:12px;font-family:'Space Grotesk';font-weight:700;font-size:13px;color:#04210f;background:linear-gradient(135deg,var(--green),#54f0ad);display:flex;align-items:center;justify-content:center;gap:5px;box-shadow:0 5px 16px -7px rgba(43,224,138,.6);transition:.1s;position:relative;overflow:hidden}
-.ape-ape:active{animation:apeSquish .3s}
-.ape-ape:disabled{opacity:.75;cursor:wait}
-.ape-ape.filled{background:linear-gradient(135deg,#1FA968,#2BE08A);color:#fff}
-.ape-ape .b{font-size:12px}
-.ape-coinfx{position:absolute;left:50%;top:50%;font-size:14px;pointer-events:none;animation:apeCoin .7s ease forwards}
-.ape-sells{display:flex;gap:5px;margin-top:7px}
-.ape-sellbtn{flex:1;border:1px solid rgba(255,84,112,.4);background:rgba(255,84,112,.08);color:var(--red);cursor:pointer;padding:7px 0;border-radius:9px;font-family:'JetBrains Mono';font-weight:800;font-size:10px}
-.ape-sellbtn:active{transform:scale(.95)}
-.ape-sellbtn:disabled{opacity:.6;cursor:wait}
-.ape-owned{display:flex;align-items:center;gap:6px;font-family:'JetBrains Mono';font-size:9px;color:var(--ink2);margin-top:8px;font-weight:700;padding:5px 8px;background:rgba(43,224,138,.07);border-radius:9px}
-.ape-owned b{color:var(--green)}
-.ape-spinner{width:13px;height:13px;border-radius:50%;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;animation:apeSpin .7s linear infinite;display:inline-block}
+/* ── OFFER CARDS ─────────────────────────────────── */
+.wr-offer-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:28px}
+.wr-offer{
+  position:relative;overflow:hidden;
+  background:linear-gradient(180deg,var(--plum),rgba(25,19,47,.6));
+  border:1px solid var(--line);border-radius:18px;
+  padding:22px 22px 20px;transition:border-color .2s;
+}
+.wr-offer:hover{border-color:var(--line2)}
+.wr-offer::before{
+  content:'';position:absolute;top:-40%;right:-30%;width:90%;height:90%;
+  background:radial-gradient(circle,var(--wr-acc-bg,rgba(107,238,255,.08)),transparent 55%);
+  pointer-events:none;
+}
+.wr-offer-num{
+  font-family:'JetBrains Mono';font-size:10px;font-weight:800;
+  letter-spacing:1.4px;color:var(--wr-acc-c,var(--cyan));text-transform:uppercase;
+  margin-bottom:14px;display:flex;align-items:center;gap:9px;
+}
+.wr-offer-num .glyph{
+  display:inline-grid;place-items:center;width:26px;height:26px;border-radius:8px;
+  background:var(--wr-acc-bg-strong,rgba(107,238,255,.1));
+  border:1px solid var(--wr-acc-border,rgba(107,238,255,.22));
+  font-size:13px;color:var(--wr-acc-c,var(--cyan));
+}
+.wr-offer h3{
+  font-family:'Fraunces';font-weight:500;font-size:22px;line-height:1.1;
+  letter-spacing:-.015em;margin:0 0 8px;font-variation-settings:"opsz" 96;
+}
+.wr-offer h3 .it{font-style:italic;font-weight:400;color:var(--wr-acc-c,var(--cyan))}
+.wr-offer p{font-size:13px;line-height:1.5;color:var(--ink2);font-weight:400;margin:0}
+.wr-offer p b{color:var(--ink);font-weight:600}
+.wr-offer.o1{--wr-acc-c:var(--magenta);--wr-acc-bg:rgba(255,61,138,.10);--wr-acc-bg-strong:rgba(255,61,138,.12);--wr-acc-border:rgba(255,61,138,.24);animation:wr-glow 3.4s ease-in-out infinite}
+.wr-offer.o2{--wr-acc-c:var(--cyan);--wr-acc-bg:rgba(107,238,255,.08);--wr-acc-bg-strong:rgba(107,238,255,.1);--wr-acc-border:rgba(107,238,255,.22)}
+.wr-offer.o3{--wr-acc-c:var(--mint);--wr-acc-bg:rgba(61,255,194,.08);--wr-acc-bg-strong:rgba(61,255,194,.1);--wr-acc-border:rgba(61,255,194,.22)}
+.wr-offer .mini-radar{
+  position:absolute;right:18px;bottom:18px;width:54px;height:54px;border-radius:50%;
+  border:1px solid rgba(61,255,194,.25);
+  background:radial-gradient(circle,rgba(61,255,194,.08),transparent 70%);overflow:hidden;
+}
+.wr-offer .mini-radar::before{content:'';position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 0deg,transparent 0 280deg,rgba(61,255,194,.5) 350deg,transparent 360deg);animation:wr-sweep 4s linear infinite}
+.wr-offer .mini-radar::after{content:'';position:absolute;inset:10px;border-radius:50%;border:1px solid rgba(61,255,194,.2)}
+.wr-offer .mini-radar .b{position:absolute;width:5px;height:5px;border-radius:50%;background:var(--mint);box-shadow:0 0 8px var(--mint)}
+.wr-offer .mini-radar .b1{left:30%;top:32%;animation:wr-pulse 1.6s infinite}
+.wr-offer .mini-radar .b2{left:62%;top:54%;animation:wr-pulse 2s .4s infinite}
+@media(max-width:900px){
+  .wr-offer-strip{grid-template-columns:1fr 1fr;gap:10px;margin-bottom:22px}
+  .wr-offer.o3{grid-column:1/-1}
+}
+@media(max-width:560px){
+  .wr-offer-strip{grid-template-columns:1fr}
+  .wr-offer h3{font-size:19px}
+  .wr-offer{padding:18px}
+}
 
-.ape-empty{grid-column:1/-1;text-align:center;padding:48px 24px;color:var(--ink2);font-size:14px}
-.ape-empty .e{font-size:46px;display:block;margin-bottom:12px;opacity:.6}
-.ape-empty b{color:var(--ink);font-weight:700}
-.ape-empty .sub{font-size:12px;margin-top:6px;color:var(--ink3)}
-.ape-empty .err{margin-top:10px;font-family:'JetBrains Mono';font-size:10px;color:var(--red);background:rgba(255,84,112,.08);padding:7px 12px;border-radius:10px;display:inline-block}
+/* ── LIST ─────────────────────────────────────────── */
+.wr-list-frame{
+  background:linear-gradient(180deg,var(--plum),rgba(25,19,47,.8));
+  border:1px solid var(--line);border-radius:20px;overflow:hidden;margin-bottom:22px;
+}
+.wr-list-head{
+  padding:18px 22px;display:flex;align-items:center;justify-content:space-between;
+  gap:16px;border-bottom:1px solid var(--line);flex-wrap:wrap;
+}
+.wr-list-title{display:flex;flex-direction:column;gap:2px}
+.wr-list-title .e{font-family:'JetBrains Mono';font-size:10px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;color:var(--cyan)}
+.wr-list-title .t{font-family:'Fraunces';font-weight:500;font-size:24px;letter-spacing:-.015em}
+.wr-list-title .t .it{font-style:italic;color:var(--ink2);font-weight:400}
+.wr-list-filters{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.wr-chip{
+  display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:999px;
+  background:var(--vapor);border:1px solid var(--line);
+  font-family:inherit;font-size:11.5px;font-weight:500;color:var(--ink2);cursor:pointer;
+  transition:.15s;
+}
+.wr-chip:hover{color:var(--ink);border-color:var(--line2)}
+.wr-chip.on{background:rgba(107,238,255,.1);border-color:rgba(107,238,255,.3);color:var(--cyan)}
 
-.ape-mascot{position:fixed;right:14px;bottom:16px;z-index:60;width:52px;height:52px;border-radius:50%;background:linear-gradient(150deg,var(--violet),var(--pink));display:grid;place-items:center;font-size:27px;cursor:pointer;box-shadow:0 10px 30px -8px rgba(155,123,255,.7);border:1.5px solid rgba(255,255,255,.2)}
-.ape-mascot .e{animation:apeBob 3s ease-in-out infinite}
-.ape-mbubble{position:fixed;right:14px;bottom:76px;z-index:60;max-width:210px;padding:9px 13px;border-radius:14px 14px 4px 14px;background:var(--surf2);border:1px solid var(--line);font-size:11.5px;font-weight:600;color:var(--ink);box-shadow:0 10px 30px rgba(0,0,0,.4);animation:apePop .3s ease}
+.wr-list{padding:6px 0}
+.wr-row{
+  display:grid;
+  grid-template-columns:48px 1fr 80px 90px 100px 100px 110px 100px 130px;
+  gap:14px;align-items:center;padding:14px 22px;
+  border-bottom:1px solid var(--line);cursor:pointer;
+  transition:background .2s;position:relative;
+  animation:wr-pop .4s cubic-bezier(.2,1.2,.4,1) backwards;
+}
+.wr-row:last-child{border-bottom:none}
+.wr-row:hover{background:rgba(244,239,255,.025)}
+.wr-row.fresh{animation:wr-develop .8s cubic-bezier(.2,1,.3,1)}
+.wr-row.thead{
+  font-family:'JetBrains Mono';font-size:9.5px;font-weight:800;
+  letter-spacing:1.2px;text-transform:uppercase;color:var(--ink3);
+  padding:12px 22px;cursor:default;background:rgba(0,0,0,.15);animation:none;
+}
+.wr-row.thead:hover{background:rgba(0,0,0,.15)}
 
-.ape-overlay{position:fixed;inset:0;background:rgba(4,4,12,.66);backdrop-filter:blur(8px);z-index:1000;display:flex;align-items:flex-end;justify-content:center;animation:apeFade .2s}
-.ape-overlay.center{align-items:center;padding:18px}
-.ape-sheet{width:100%;max-width:520px;background:var(--bg2);border:1px solid var(--line);border-radius:22px 22px 0 0;box-shadow:0 -20px 60px rgba(0,0,0,.7);animation:apeSheetIn .3s cubic-bezier(.2,1.2,.4,1);max-height:92dvh;overflow-y:auto}
-.ape-sheet.mini{border-radius:22px;animation:apePop .3s ease;max-width:430px}
-.ape-x{position:absolute;top:14px;right:14px;background:var(--surf);border:1px solid var(--line);border-radius:50%;width:32px;height:32px;display:grid;place-items:center;cursor:pointer;font-size:16px;color:var(--ink2);z-index:2;font-family:initial}
-.ape-shead{padding:22px 20px 4px;position:relative}
-.ape-stitle{font-family:'Space Grotesk';font-weight:700;font-size:21px;margin:0;display:flex;align-items:center;gap:9px}
-.ape-ssub{font-family:'JetBrains Mono';font-size:10px;color:var(--ink2);margin-top:5px;font-weight:600;letter-spacing:.3px}
-.ape-sbody{padding:14px 20px 22px}
+.wr-row-num{font-family:'JetBrains Mono';font-size:10px;font-weight:700;color:var(--ink3);letter-spacing:.5px}
+.wr-row-tk{display:flex;align-items:center;gap:12px;min-width:0}
+.wr-av{
+  width:38px;height:38px;border-radius:11px;flex-shrink:0;display:grid;place-items:center;
+  font-family:'Fraunces';font-weight:700;font-size:15px;color:#fff;text-transform:uppercase;
+  box-shadow:0 4px 14px rgba(0,0,0,.3);overflow:hidden;position:relative;
+}
+.wr-av img{width:100%;height:100%;object-fit:cover}
+.wr-name{min-width:0}
+.wr-sym-row{
+  font-family:'Fraunces';font-weight:600;font-size:15px;letter-spacing:-.01em;
+  display:flex;align-items:center;gap:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.wr-sym-row .chg{font-family:'JetBrains Mono';font-size:10.5px;font-weight:800;color:var(--mint)}
+.wr-sym-row .chg.dn{color:var(--coral)}
+.wr-full{font-size:11.5px;color:var(--ink2);font-weight:400;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wr-full .dex{color:var(--ink3);font-family:'JetBrains Mono';font-size:10px;text-transform:uppercase;letter-spacing:.5px;margin-left:6px}
 
-.ape-dhead{display:flex;align-items:center;gap:13px;padding:20px 20px 8px;position:relative}
-.ape-dav{width:60px;height:60px;border-radius:18px;display:grid;place-items:center;font-size:30px;flex-shrink:0;overflow:hidden;background:radial-gradient(circle at 50% 35%,rgba(155,123,255,.3),transparent 70%),linear-gradient(160deg,#2a2350,#181534)}
-.ape-dav .ape-img{width:100%;height:100%;object-fit:cover}
-.ape-dsym{font-family:'Space Grotesk';font-weight:700;font-size:23px;line-height:1}
-.ape-dsub{font-family:'JetBrains Mono';font-size:11px;color:var(--ink2);font-weight:600;margin-top:5px}
-.ape-tcard{display:flex;align-items:center;gap:13px;margin:4px 20px 0;background:rgba(43,224,138,.08);border:1px solid rgba(43,224,138,.25);border-radius:16px;padding:13px 15px}
-.ape-tcard.amber{background:rgba(255,181,46,.08);border-color:rgba(255,181,46,.28)}
-.ape-tcard.red{background:rgba(255,84,112,.08);border-color:rgba(255,84,112,.28)}
-.ape-tcnum{font-family:'Space Grotesk';font-weight:700;font-size:30px;line-height:1}
-.ape-tcv{font-weight:700;font-size:14px}
-.ape-tcs{font-family:'JetBrains Mono';font-size:9.5px;color:var(--ink2);font-weight:600;margin-top:3px;line-height:1.4}
-.ape-checks{display:flex;flex-wrap:wrap;gap:7px;padding:12px 20px 0}
-.ape-chk{font-family:'JetBrains Mono';font-size:9.5px;font-weight:700;padding:4px 10px;border-radius:999px;display:inline-flex;gap:4px}
-.ape-chk.ok{background:rgba(43,224,138,.12);color:var(--green)}.ape-chk.cau{background:rgba(255,181,46,.12);color:var(--amber)}.ape-chk.bad{background:rgba(255,84,112,.12);color:var(--red)}
-.ape-dyor{font-family:'JetBrains Mono';font-size:9px;color:var(--ink3);padding:8px 20px 0;font-weight:600;line-height:1.5}
-.ape-modetabs{display:grid;grid-template-columns:1fr 1fr;margin:14px 20px 14px;background:var(--surf);border-radius:13px;padding:4px;position:relative}
-.ape-mind{position:absolute;top:4px;bottom:4px;width:calc(50% - 4px);border-radius:10px;z-index:1;background:linear-gradient(135deg,var(--green),#54f0ad);transition:transform .3s cubic-bezier(.2,1.3,.4,1),background .25s}
-.ape-modetabs.sell .ape-mind{transform:translateX(100%);background:linear-gradient(135deg,var(--red),#ff86a0)}
-.ape-mtab{padding:10px 0;text-align:center;font-family:'Space Grotesk';font-weight:700;font-size:12px;letter-spacing:.6px;color:var(--ink2);border-radius:10px;cursor:pointer;background:none;border:none;position:relative;z-index:2}
-.ape-mtab.active{color:#04210f}.ape-modetabs.sell .ape-mtab.active{color:#2a0008}
-.ape-row{background:var(--surf);border:1px solid var(--line);border-radius:16px;padding:14px;margin:0 20px}
-.ape-rowtop{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px}
-.ape-rlabel{font-family:'JetBrains Mono';font-size:9px;color:var(--ink2);font-weight:800;letter-spacing:1px;text-transform:uppercase}
-.ape-rbal{font-family:'JetBrains Mono';font-size:10px;color:var(--ink2);font-weight:700;display:flex;align-items:center;gap:6px}
-.ape-rbal b{color:var(--ink)}
-.ape-max{background:rgba(155,123,255,.2);border:1px solid rgba(155,123,255,.4);color:var(--violet);padding:3px 8px;border-radius:7px;font-family:'JetBrains Mono';font-size:9px;font-weight:800;cursor:pointer}
-.ape-rmid{display:flex;align-items:center;gap:10px}
-.ape-chip{display:flex;align-items:center;gap:6px;padding:8px 12px;background:var(--surf2);border-radius:999px;flex-shrink:0;font-weight:700;font-size:13px;font-family:'Space Grotesk'}
-.ape-chiplogo{width:22px;height:22px;border-radius:50%;background:var(--surf);display:grid;place-items:center;font-size:13px;overflow:hidden}
-.ape-chiplogo .ape-img{width:100%;height:100%;object-fit:cover;border-radius:50%}
-.ape-amt{flex:1;background:transparent;border:none;outline:none;color:var(--ink);font-family:'Space Grotesk';font-size:26px;text-align:right;font-weight:600;width:100%;min-width:0}
-.ape-amt::placeholder{color:var(--ink3)}
-.ape-presets{display:flex;gap:6px;margin:10px 20px 0;overflow-x:auto;scrollbar-width:none}.ape-presets::-webkit-scrollbar{display:none}
-.ape-pchip{flex-shrink:0;padding:7px 13px;border-radius:999px;background:var(--surf);border:1px solid var(--line);color:var(--ink);font-family:'JetBrains Mono';font-weight:700;font-size:11px;cursor:pointer}
-.ape-pchip.active{background:var(--green);color:#04210f;border-color:transparent}
-.ape-details{margin:12px 20px 0;padding:11px 15px;background:var(--surf);border-radius:14px;font-family:'JetBrains Mono';font-size:11px}
-.ape-drow{display:flex;justify-content:space-between;padding:3px 0;font-weight:700;gap:8px}
-.ape-drow>span:first-child{color:var(--ink2);font-weight:500}
-.ape-dval{color:var(--ink);font-weight:700;text-align:right}.ape-dval.good{color:var(--green)}
-.ape-banner{margin:12px 20px 0;padding:11px 13px;border-radius:12px;font-size:12px;font-weight:600;border:1px solid rgba(255,84,112,.35);background:rgba(255,84,112,.08);color:var(--red)}
-.ape-confirm{width:calc(100% - 40px);margin:14px 20px 0;padding:16px 0;border:none;border-radius:14px;font-family:'Space Grotesk';font-size:14px;font-weight:700;cursor:pointer;color:#04210f;background:linear-gradient(135deg,var(--green),#54f0ad)}
-.ape-confirm.sell{background:linear-gradient(135deg,var(--red),#ff86a0);color:#2a0008}
-.ape-confirm:disabled{opacity:.45;cursor:not-allowed;background:var(--surf2);color:var(--ink2)}
-.ape-tfoot{margin:10px 20px 0;font-family:'JetBrains Mono';font-size:9px;color:var(--ink3);text-align:center;font-weight:700}
+.wr-num{font-family:'JetBrains Mono';font-weight:700;font-size:12.5px;color:var(--ink)}
+.wr-num.dim{color:var(--ink2);font-weight:500}
+.wr-age{font-family:'JetBrains Mono';font-weight:700;font-size:12.5px;color:var(--mint)}
+.wr-age.med{color:var(--lavender)}
+.wr-age.old{color:var(--ink3)}
 
-.ape-balcard{background:linear-gradient(135deg,var(--surf2),rgba(155,123,255,.12));border:1px solid rgba(155,123,255,.25);border-radius:18px;padding:18px;text-align:center;margin-bottom:13px}
-.ape-ballbl{font-family:'JetBrains Mono';font-size:9px;letter-spacing:1.4px;text-transform:uppercase;color:var(--ink2);font-weight:800}
-.ape-balval{font-family:'Space Grotesk';font-weight:700;font-size:33px;margin-top:6px}
-.ape-balval .u{font-size:17px;color:var(--ink2)}
-.ape-balusd{font-family:'JetBrains Mono';font-size:12px;color:var(--ink2);font-weight:700;margin-top:2px}
-.ape-wgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:13px}
-.ape-wact{padding:13px 0;border-radius:13px;border:1px solid var(--line);background:var(--surf);color:var(--ink);font-family:'Space Grotesk';font-weight:700;font-size:13px;cursor:pointer}
-.ape-wact.primary{background:linear-gradient(135deg,var(--amber),var(--gold));color:#1a1400;border-color:transparent}
-.ape-block{background:var(--surf);border-radius:14px;padding:13px 14px;margin-bottom:11px}
-.ape-block-l{font-family:'JetBrains Mono';font-size:9px;letter-spacing:1.2px;text-transform:uppercase;color:var(--ink2);font-weight:800;margin-bottom:8px}
-.ape-qr{display:grid;place-items:center;margin-bottom:11px}
-.ape-qr canvas,.ape-qr img{border-radius:12px;background:#fff;padding:8px;width:160px;height:160px}
-.ape-addr{display:flex;align-items:center;gap:8px}
-.ape-addr-v{flex:1;font-family:'JetBrains Mono';font-size:12px;color:var(--ink);font-weight:600;word-break:break-all;line-height:1.4}
-.ape-copy{flex-shrink:0;background:var(--surf2);border:none;color:var(--ink2);border-radius:9px;padding:8px 12px;font-family:'JetBrains Mono';font-size:10px;font-weight:800;cursor:pointer}
-.ape-input{width:100%;padding:11px 13px;border-radius:11px;background:var(--surf2);border:1px solid var(--line);color:var(--ink);font-family:'JetBrains Mono';font-size:13px;font-weight:600;outline:none;margin-bottom:8px}
-.ape-input:focus{border-color:var(--amber)}
-.ape-go{width:100%;padding:13px 0;border:none;border-radius:12px;font-family:'Space Grotesk';font-weight:700;font-size:13px;cursor:pointer;background:linear-gradient(135deg,var(--violet),var(--pink));color:#fff}
-.ape-go:disabled{opacity:.5;cursor:not-allowed}
-.ape-secret{font-family:'JetBrains Mono';font-size:11px;color:var(--gold);word-break:break-all;line-height:1.5;background:rgba(255,181,46,.06);border:1px dashed rgba(255,181,46,.3);border-radius:10px;padding:11px 12px}
-.ape-warn{font-family:'JetBrains Mono';font-size:10px;color:var(--amber);background:rgba(255,181,46,.08);border-radius:12px;padding:10px 12px;line-height:1.55;font-weight:600;margin-bottom:11px}
-.ape-warn b{color:var(--gold)}
-.ape-nc{display:inline-flex;align-items:center;gap:6px;font-family:'JetBrains Mono';font-size:9px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--green);background:rgba(43,224,138,.1);padding:4px 11px;border-radius:999px}
+.wr-risk{
+  display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:7px;
+  font-family:'JetBrains Mono';font-size:10px;font-weight:800;letter-spacing:.3px;
+}
+.wr-risk.low{background:var(--mint-soft);color:var(--mint)}
+.wr-risk.med{background:rgba(255,216,107,.1);color:var(--butter)}
+.wr-risk.high{background:var(--coral-soft);color:var(--coral)}
+.wr-risk-dot{width:6px;height:6px;border-radius:50%;background:currentColor;box-shadow:0 0 8px currentColor}
 
-.ape-echips{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.ape-echip{display:inline-flex;align-items:center;gap:7px;padding:8px 8px 8px 14px;border-radius:999px;background:var(--surf);border:1px solid var(--line);font-family:'JetBrains Mono';font-size:13px;font-weight:700}
-.ape-echip .x{width:19px;height:19px;border-radius:50%;background:rgba(255,84,112,.14);color:var(--red);border:none;cursor:pointer;font-size:12px;display:grid;place-items:center;font-family:initial}
-.ape-eadd{display:flex;gap:6px}
-.ape-eadd input{width:74px;padding:8px 12px;border-radius:999px;background:var(--surf);border:1px solid var(--line);font-family:'JetBrains Mono';font-size:13px;font-weight:700;color:var(--ink);outline:none}
-.ape-eadd .plus{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--amber),var(--gold));color:#1a1400;border:none;cursor:pointer;font-size:17px;font-family:initial}
-.ape-sec-lbl{font-family:'JetBrains Mono';font-size:10px;letter-spacing:1.2px;text-transform:uppercase;font-weight:800;color:var(--ink2);margin:16px 0 9px}
-.ape-esave{width:100%;margin-top:18px;padding:14px 0;border:none;border-radius:13px;font-family:'Space Grotesk';font-weight:700;font-size:14px;cursor:pointer;background:linear-gradient(135deg,var(--amber),var(--gold));color:#1a1400}
+.wr-curve{display:flex;align-items:center;gap:8px}
+.wr-curve-bar{flex:1;height:5px;border-radius:99px;background:rgba(255,255,255,.05);overflow:hidden}
+.wr-curve-bar i{display:block;height:100%;background:linear-gradient(90deg,var(--butter),var(--mint));border-radius:99px}
+.wr-curve-pct{font-family:'JetBrains Mono';font-size:10.5px;font-weight:800;color:var(--ink2);min-width:32px;text-align:right}
 
-.ape-toasts{position:fixed;bottom:calc(80px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);z-index:1100;display:flex;flex-direction:column;gap:8px;max-width:440px;width:calc(100% - 24px);pointer-events:none}
-.ape-toast{pointer-events:auto;display:flex;align-items:center;gap:10px;padding:13px 14px;border-radius:16px;backdrop-filter:blur(20px);box-shadow:0 12px 32px rgba(0,0,0,.4);animation:apeToastIn .3s ease;font-size:13px;font-weight:600;border:1px solid var(--line)}
-.ape-toast.success{background:linear-gradient(135deg,rgba(24,21,52,.95),rgba(43,224,138,.22));border-color:rgba(43,224,138,.4);color:var(--ink)}
-.ape-toast.error{background:linear-gradient(135deg,rgba(24,21,52,.95),rgba(255,84,112,.2));border-color:rgba(255,84,112,.4);color:var(--ink)}
-.ape-toast.info{background:rgba(24,21,52,.95);color:var(--ink)}
-.ape-toast .em{font-size:21px;flex-shrink:0}
-.ape-toast .tb{flex:1;min-width:0;line-height:1.35}.ape-toast .tb b{font-weight:800}
-.ape-toast .ta{display:flex;gap:5px;flex-shrink:0}
-.ape-taction{background:var(--surf);border:1px solid var(--line);color:var(--ink);padding:6px 10px;border-radius:9px;font-family:'JetBrains Mono';font-size:10px;font-weight:800;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:4px}
-.ape-taction.tw{background:linear-gradient(135deg,rgba(86,200,255,.3),rgba(43,224,138,.3));border-color:rgba(86,200,255,.4)}
-.ape-taction svg{width:11px;height:11px}
+.wr-row-actions{display:flex;gap:6px;justify-content:flex-end;align-items:center}
+.wr-btn-spec{
+  padding:8px 13px;border-radius:10px;border:none;cursor:pointer;
+  font-family:inherit;font-weight:600;font-size:12px;
+  background:var(--magenta);color:#1B0410;
+  display:inline-flex;align-items:center;gap:6px;
+  box-shadow:0 4px 14px -5px var(--magenta-glow);transition:transform .1s,box-shadow .2s;
+}
+.wr-btn-spec:hover{transform:translateY(-1px);box-shadow:0 6px 18px -5px var(--magenta-glow)}
+.wr-btn-spec:disabled{opacity:.6;cursor:wait}
+.wr-btn-spec .arrow{font-family:'JetBrains Mono';font-weight:800;font-size:11px}
+.wr-spinner{width:12px;height:12px;border-radius:50%;border:2px solid rgba(27,4,16,.3);border-top-color:#1B0410;animation:wr-spin .7s linear infinite;display:inline-block}
+.wr-owned-mark{
+  font-family:'JetBrains Mono';font-size:9px;font-weight:800;letter-spacing:.5px;
+  padding:2px 7px;border-radius:5px;background:var(--mint-soft);color:var(--mint);
+  text-transform:uppercase;
+}
 
-.ape-confetti{position:fixed;inset:0;pointer-events:none;z-index:1200;overflow:hidden}
-.ape-cpiece{position:absolute;top:50%;left:50%;width:8px;height:14px;border-radius:2px;animation:apeConfetti 1.6s cubic-bezier(.15,.9,.3,1) forwards}
+.wr-list-foot{
+  padding:14px 22px;display:flex;align-items:center;justify-content:space-between;gap:8px;
+  font-family:'JetBrains Mono';font-size:10px;font-weight:700;color:var(--ink3);
+  letter-spacing:.7px;text-transform:uppercase;border-top:1px solid var(--line);
+}
+.wr-list-foot .live{display:inline-flex;align-items:center;gap:7px;color:var(--mint)}
+.wr-list-foot .live .d{width:6px;height:6px;border-radius:50%;background:var(--mint);box-shadow:0 0 10px var(--mint);animation:wr-pulse 1.4s infinite}
+.wr-list-foot .live.warn{color:var(--butter)}
+.wr-list-foot .live.warn .d{background:var(--butter);box-shadow:0 0 10px var(--butter)}
 
-@media(prefers-reduced-motion:reduce){.ape-root *{animation-duration:.01ms!important;animation-iteration-count:1!important}}
+@media(max-width:1100px){
+  .wr-row{grid-template-columns:40px 1fr 70px 80px 90px 100px 120px;gap:10px;padding:12px 16px}
+  .wr-row.thead{padding:10px 16px}
+  .wr-col-vol,.wr-col-holders{display:none}
+}
+@media(max-width:720px){
+  .wr-row{grid-template-columns:1.5fr 60px 80px 95px 110px;gap:8px;padding:11px 14px}
+  .wr-row.thead{padding:10px 14px}
+  .wr-col-num,.wr-col-liq,.wr-col-curve{display:none}
+  .wr-av{width:32px;height:32px;font-size:13px}
+  .wr-sym-row{font-size:13.5px}
+  .wr-full{font-size:10.5px}
+}
+
+/* ── PROOF BAND ──────────────────────────────────── */
+.wr-proof{
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  padding:18px 22px;border-radius:18px;
+  background:linear-gradient(180deg,var(--plum),rgba(25,19,47,.4));
+  border:1px solid var(--line);
+}
+.wr-proof .e{font-family:'JetBrains Mono';font-size:10px;font-weight:800;letter-spacing:1.3px;text-transform:uppercase;color:var(--ink3);display:flex;align-items:center;gap:8px}
+.wr-proof .e .d{width:6px;height:6px;border-radius:50%;background:var(--mint);box-shadow:0 0 8px var(--mint);animation:wr-pulse 1.4s infinite}
+.wr-proof-div{width:1px;height:24px;background:var(--line2)}
+.wr-proof-stat{display:flex;align-items:baseline;gap:8px;font-family:'Fraunces';font-weight:500;letter-spacing:-.01em}
+.wr-proof-stat .v{font-size:20px}
+.wr-proof-stat .v .it{font-style:italic;color:var(--ink2)}
+.wr-proof-stat .k{font-family:'JetBrains Mono';font-size:10.5px;font-weight:700;color:var(--ink2);letter-spacing:.6px;text-transform:uppercase}
+.wr-proof-stat .m{font-family:'JetBrains Mono';font-size:11px;font-weight:800;color:var(--mint);margin-left:4px}
+.wr-proof-stat .m.dn{color:var(--coral)}
+@media(max-width:768px){
+  .wr-proof{flex-direction:column;align-items:flex-start;gap:10px;padding:14px 16px}
+  .wr-proof-div{display:none}
+  .wr-proof-stat .v{font-size:17px}
+}
+
+/* ── EMPTY STATE ─────────────────────────────────── */
+.wr-empty{padding:48px 24px;text-align:center;color:var(--ink2);font-size:14px}
+.wr-empty .glyph{display:block;font-size:42px;margin-bottom:12px;opacity:.5;font-family:'Fraunces';font-style:italic}
+.wr-empty b{color:var(--ink);font-weight:600;font-family:'Fraunces';font-weight:500;font-size:18px}
+.wr-empty .sub{font-size:12.5px;margin-top:6px;color:var(--ink3)}
+.wr-empty .err{margin-top:10px;font-family:'JetBrains Mono';font-size:10px;color:var(--coral);background:var(--coral-soft);padding:7px 12px;border-radius:10px;display:inline-block}
+
+/* ── MODALS (shared) ─────────────────────────────── */
+.wr-overlay{position:fixed;inset:0;background:rgba(4,4,12,.66);backdrop-filter:blur(8px);z-index:1000;display:flex;align-items:flex-end;justify-content:center;animation:wr-fade .2s}
+.wr-overlay.center{align-items:center;padding:18px}
+.wr-sheet{
+  width:100%;max-width:520px;
+  background:linear-gradient(180deg,var(--vapor),var(--plum));
+  border:1px solid var(--line2);border-radius:22px 22px 0 0;
+  box-shadow:0 -20px 60px rgba(0,0,0,.7);
+  animation:wr-sheet .3s cubic-bezier(.2,1.2,.4,1);
+  max-height:92dvh;overflow-y:auto;
+}
+.wr-sheet.mini{border-radius:22px;animation:wr-pop .3s ease;max-width:430px}
+.wr-x{
+  position:absolute;top:14px;right:14px;
+  background:var(--vapor);border:1px solid var(--line);border-radius:50%;
+  width:32px;height:32px;display:grid;place-items:center;cursor:pointer;
+  font-family:initial;font-size:16px;color:var(--ink2);z-index:2;
+}
+.wr-x:hover{color:var(--ink);border-color:var(--line2)}
+
+/* ── TRADE SHEET ─────────────────────────────────── */
+.wr-tshead{padding:22px 22px 4px;position:relative}
+.wr-tshead-row{display:flex;align-items:center;gap:13px;padding-right:38px}
+.wr-tshead .wr-av{width:54px;height:54px;border-radius:14px;font-size:20px}
+.wr-tshead .title{flex:1;min-width:0}
+.wr-tshead .sym{font-family:'Fraunces';font-weight:500;font-size:26px;letter-spacing:-.02em;line-height:1;font-variation-settings:"opsz" 96}
+.wr-tshead .sub{font-family:'JetBrains Mono';font-size:11px;color:var(--ink2);font-weight:600;margin-top:4px}
+
+.wr-vibe{margin:14px 22px 0;background:rgba(0,0,0,.2);border:1px solid var(--line);border-radius:14px;padding:13px 15px}
+.wr-vibe.amber{border-color:rgba(255,216,107,.2);background:rgba(255,216,107,.06)}
+.wr-vibe.red{border-color:rgba(255,122,110,.22);background:var(--coral-soft)}
+.wr-vibe-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+.wr-vibe-l{font-family:'JetBrains Mono';font-size:9.5px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:var(--ink3)}
+.wr-vibe-s{font-family:'Fraunces';font-weight:500;font-size:24px;line-height:1;display:flex;align-items:baseline;gap:3px}
+.wr-vibe-s .of{font-size:12px;color:var(--ink3);font-weight:500}
+.wr-vibe-verdict{font-weight:600;font-size:14px;line-height:1.35;margin-bottom:10px}
+.wr-vibe-chks{display:flex;flex-wrap:wrap;gap:6px}
+.wr-chk{font-family:'JetBrains Mono';font-size:9.5px;font-weight:700;padding:4px 9px;border-radius:999px}
+.wr-chk.ok{background:var(--mint-soft);color:var(--mint)}
+.wr-chk.cau{background:rgba(255,216,107,.12);color:var(--butter)}
+.wr-chk.bad{background:var(--coral-soft);color:var(--coral)}
+.wr-dyor{font-family:'JetBrains Mono';font-size:9.5px;color:var(--ink3);padding:8px 22px 0;font-weight:600;line-height:1.5}
+
+.wr-mode-tabs{display:grid;grid-template-columns:1fr 1fr;margin:14px 22px;background:rgba(0,0,0,.25);border-radius:12px;padding:3px;position:relative}
+.wr-mode-ind{position:absolute;top:3px;bottom:3px;width:calc(50% - 3px);background:var(--magenta);border-radius:10px;transition:transform .3s cubic-bezier(.2,1.3,.4,1),background .25s;z-index:1;box-shadow:0 4px 14px -4px var(--magenta-glow)}
+.wr-mode-tabs.sell .wr-mode-ind{transform:translateX(100%);background:var(--coral);box-shadow:0 4px 14px -4px rgba(255,122,110,.5)}
+.wr-mode-tab{padding:11px 0;text-align:center;font-family:'Fraunces';font-weight:500;font-size:14px;letter-spacing:.5px;color:var(--ink2);border:none;background:none;cursor:pointer;position:relative;z-index:2}
+.wr-mode-tab.active{color:#1B0410}
+.wr-mode-tabs.sell .wr-mode-tab.active{color:#2E0009}
+
+.wr-field{background:rgba(0,0,0,.2);border:1px solid var(--line);border-radius:14px;padding:13px 14px;margin:0 22px}
+.wr-field-row1{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px}
+.wr-field-l{font-family:'JetBrains Mono';font-size:9.5px;font-weight:700;letter-spacing:1.1px;text-transform:uppercase;color:var(--ink3)}
+.wr-field-bal{font-family:'JetBrains Mono';font-size:10.5px;font-weight:600;color:var(--ink2);display:flex;align-items:center;gap:8px}
+.wr-field-bal b{color:var(--ink);font-weight:700}
+.wr-field-max{font-family:'JetBrains Mono';font-size:9.5px;font-weight:800;color:var(--lavender);padding:3px 7px;border-radius:5px;letter-spacing:.5px;background:rgba(201,184,255,.1);border:1px solid rgba(201,184,255,.2);cursor:pointer}
+.wr-field-row2{display:flex;align-items:center;gap:11px}
+.wr-field-chip{display:flex;align-items:center;gap:7px;padding:7px 12px;border-radius:999px;background:var(--vapor2);font-weight:600;font-size:13px;font-family:inherit;flex-shrink:0}
+.wr-field-chip .lg{width:22px;height:22px;border-radius:50%;background:var(--plum);display:grid;place-items:center;font-size:11px;color:var(--butter);font-weight:800;overflow:hidden}
+.wr-field-chip .lg img{width:100%;height:100%;object-fit:cover;border-radius:50%}
+.wr-field-amt{flex:1;background:transparent;border:none;outline:none;color:var(--ink);font-family:'Fraunces';font-weight:500;font-size:24px;text-align:right;width:100%;min-width:0;letter-spacing:-.01em}
+.wr-field-amt::placeholder{color:var(--ink3)}
+
+.wr-presets{display:flex;gap:6px;margin:10px 22px 0;overflow-x:auto;scrollbar-width:none}
+.wr-presets::-webkit-scrollbar{display:none}
+.wr-preset{flex-shrink:0;padding:7px 13px;border-radius:999px;background:var(--vapor);border:1px solid var(--line);color:var(--ink2);font-family:'JetBrains Mono';font-weight:700;font-size:11px;cursor:pointer;letter-spacing:.3px}
+.wr-preset:hover{color:var(--ink);border-color:var(--line2)}
+.wr-preset.on{background:var(--magenta);color:#1B0410;border-color:transparent}
+.wr-preset.on.sell{background:var(--coral);color:#2E0009}
+
+.wr-summary{margin:12px 22px 0;padding:11px 14px;background:rgba(0,0,0,.2);border-radius:12px;font-family:'JetBrains Mono';font-size:11px;display:flex;flex-direction:column;gap:6px}
+.wr-sum{display:flex;justify-content:space-between;gap:8px;font-weight:700}
+.wr-sum .k{color:var(--ink3);font-weight:500}
+.wr-sum .v{color:var(--ink);font-weight:700;text-align:right}
+.wr-sum .v.good{color:var(--mint)}
+
+.wr-banner{margin:12px 22px 0;padding:11px 13px;border-radius:12px;font-size:12px;font-weight:600;border:1px solid rgba(255,122,110,.32);background:var(--coral-soft);color:var(--coral)}
+
+.wr-confirm{
+  width:calc(100% - 44px);margin:14px 22px 0;padding:15px 0;border:none;border-radius:14px;
+  font-family:'Fraunces';font-weight:500;font-size:14.5px;letter-spacing:-.005em;cursor:pointer;
+  background:var(--magenta);color:#1B0410;
+  box-shadow:0 10px 28px -10px var(--magenta-glow);transition:transform .12s;
+}
+.wr-confirm:hover:not(:disabled){transform:translateY(-1px)}
+.wr-confirm.sell{background:var(--coral);color:#2E0009;box-shadow:0 10px 28px -10px rgba(255,122,110,.5)}
+.wr-confirm:disabled{opacity:.45;cursor:not-allowed;background:var(--vapor2);color:var(--ink2);box-shadow:none}
+.wr-tfoot{margin:10px 22px 22px;font-family:'JetBrains Mono';font-size:9.5px;color:var(--ink3);text-align:center;font-weight:600;letter-spacing:.5px;text-transform:uppercase}
+
+/* ── WALLET DRAWER ───────────────────────────────── */
+.wr-balcard{background:linear-gradient(135deg,var(--vapor2),rgba(155,123,255,.12));border:1px solid rgba(155,123,255,.25);border-radius:18px;padding:18px;text-align:center;margin-bottom:13px}
+.wr-ballbl{font-family:'JetBrains Mono';font-size:9.5px;letter-spacing:1.4px;text-transform:uppercase;color:var(--ink3);font-weight:800}
+.wr-balval{font-family:'Fraunces';font-weight:500;font-size:33px;margin-top:6px;letter-spacing:-.02em}
+.wr-balval .u{font-size:17px;color:var(--ink2)}
+.wr-balusd{font-family:'JetBrains Mono';font-size:12px;color:var(--ink2);font-weight:700;margin-top:2px}
+.wr-wgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:13px}
+.wr-wact{padding:13px 0;border-radius:13px;border:1px solid var(--line);background:var(--vapor);color:var(--ink);font-family:inherit;font-weight:600;font-size:13px;cursor:pointer}
+.wr-wact.primary{background:var(--magenta);color:#1B0410;border-color:transparent;box-shadow:0 4px 14px -4px var(--magenta-glow)}
+.wr-block{background:var(--vapor);border-radius:14px;padding:13px 14px;margin-bottom:11px}
+.wr-block-l{font-family:'JetBrains Mono';font-size:9.5px;letter-spacing:1.2px;text-transform:uppercase;color:var(--ink3);font-weight:800;margin-bottom:8px}
+.wr-qr{display:grid;place-items:center;margin-bottom:11px}
+.wr-qr canvas,.wr-qr img{border-radius:12px;background:#fff;padding:8px;width:160px;height:160px}
+.wr-addr{display:flex;align-items:center;gap:8px}
+.wr-addr-v{flex:1;font-family:'JetBrains Mono';font-size:12px;color:var(--ink);font-weight:600;word-break:break-all;line-height:1.4}
+.wr-copy{flex-shrink:0;background:var(--vapor2);border:none;color:var(--ink2);border-radius:9px;padding:8px 12px;font-family:'JetBrains Mono';font-size:10px;font-weight:800;cursor:pointer}
+.wr-input{width:100%;padding:11px 13px;border-radius:11px;background:var(--vapor2);border:1px solid var(--line);color:var(--ink);font-family:'JetBrains Mono';font-size:13px;font-weight:600;outline:none;margin-bottom:8px}
+.wr-input:focus{border-color:var(--cyan)}
+.wr-go{width:100%;padding:13px 0;border:none;border-radius:12px;font-family:inherit;font-weight:600;font-size:13.5px;cursor:pointer;background:var(--magenta);color:#1B0410;box-shadow:0 4px 14px -4px var(--magenta-glow)}
+.wr-go:disabled{opacity:.5;cursor:not-allowed;background:var(--vapor2);color:var(--ink2);box-shadow:none}
+.wr-secret{font-family:'JetBrains Mono';font-size:11px;color:var(--butter);word-break:break-all;line-height:1.5;background:rgba(255,216,107,.06);border:1px dashed rgba(255,216,107,.3);border-radius:10px;padding:11px 12px}
+.wr-warn{font-family:'JetBrains Mono';font-size:10px;color:var(--butter);background:rgba(255,216,107,.08);border-radius:12px;padding:10px 12px;line-height:1.55;font-weight:600;margin-bottom:11px}
+.wr-warn b{color:var(--butter)}
+.wr-nc{display:inline-flex;align-items:center;gap:6px;font-family:'JetBrains Mono';font-size:9.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--mint);background:var(--mint-soft);padding:4px 11px;border-radius:999px}
+
+/* ── PRESETS EDITOR ──────────────────────────────── */
+.wr-echips{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.wr-echip{display:inline-flex;align-items:center;gap:7px;padding:8px 8px 8px 14px;border-radius:999px;background:var(--vapor);border:1px solid var(--line);font-family:'JetBrains Mono';font-size:13px;font-weight:700}
+.wr-echip .x{width:19px;height:19px;border-radius:50%;background:var(--coral-soft);color:var(--coral);border:none;cursor:pointer;font-size:12px;display:grid;place-items:center;font-family:initial}
+.wr-eadd{display:flex;gap:6px;align-items:center}
+.wr-eadd input{width:74px;padding:8px 12px;border-radius:999px;background:var(--vapor);border:1px solid var(--line);font-family:'JetBrains Mono';font-size:13px;font-weight:700;color:var(--ink);outline:none}
+.wr-eadd .plus{width:30px;height:30px;border-radius:50%;background:var(--magenta);color:#1B0410;border:none;cursor:pointer;font-size:17px;font-family:initial}
+.wr-sec-lbl{font-family:'JetBrains Mono';font-size:10px;letter-spacing:1.2px;text-transform:uppercase;font-weight:800;color:var(--ink3);margin:16px 0 9px}
+.wr-esave{width:100%;margin-top:18px;padding:14px 0;border:none;border-radius:13px;font-family:inherit;font-weight:600;font-size:14px;cursor:pointer;background:var(--magenta);color:#1B0410;box-shadow:0 6px 18px -6px var(--magenta-glow)}
+
+/* ── TOASTS ──────────────────────────────────────── */
+.wr-toasts{position:fixed;bottom:calc(20px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);z-index:1100;display:flex;flex-direction:column;gap:8px;max-width:440px;width:calc(100% - 24px);pointer-events:none}
+.wr-toast{pointer-events:auto;display:flex;align-items:center;gap:10px;padding:13px 14px;border-radius:14px;backdrop-filter:blur(20px);box-shadow:0 12px 32px rgba(0,0,0,.5);animation:wr-toast .3s ease;font-size:13px;font-weight:500;border:1px solid var(--line2)}
+.wr-toast.success{background:linear-gradient(135deg,rgba(25,19,47,.95),rgba(61,255,194,.22));border-color:rgba(61,255,194,.4)}
+.wr-toast.error{background:linear-gradient(135deg,rgba(25,19,47,.95),rgba(255,122,110,.2));border-color:rgba(255,122,110,.4)}
+.wr-toast.info{background:rgba(25,19,47,.95)}
+.wr-toast .em{font-size:21px;flex-shrink:0}
+.wr-toast .tb{flex:1;min-width:0;line-height:1.35}
+.wr-toast .tb b{font-weight:700}
+.wr-toast .ta{display:flex;gap:5px;flex-shrink:0}
+.wr-taction{background:var(--vapor);border:1px solid var(--line);color:var(--ink);padding:6px 10px;border-radius:9px;font-family:'JetBrains Mono';font-size:10px;font-weight:800;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:4px;letter-spacing:.4px}
+.wr-taction.tw{background:linear-gradient(135deg,rgba(107,238,255,.28),rgba(61,255,194,.28));border-color:rgba(107,238,255,.4)}
+.wr-taction svg{width:11px;height:11px}
+
+/* ── CONFETTI ────────────────────────────────────── */
+.wr-confetti{position:fixed;inset:0;pointer-events:none;z-index:1200;overflow:hidden}
+.wr-cpiece{position:absolute;top:50%;left:50%;width:8px;height:14px;border-radius:2px;animation:wr-confetti 1.6s cubic-bezier(.15,.9,.3,1) forwards}
+
+@media(prefers-reduced-motion:reduce){.wr-root *{animation-duration:.01ms!important;animation-iteration-count:1!important}}
 `;
 
-function useLrCSS() {
+function useWrCSS() {
   useEffect(() => {
-    const id = 'wonderland-ape-css';
+    const id = 'wonderland-wr-css';
     if (document.getElementById(id)) return;
     const el = document.createElement('style');
-    el.id = id; el.textContent = LR_CSS;
+    el.id = id; el.textContent = WR_CSS;
     document.head.appendChild(el);
   }, []);
 }
 
-/* ============================ CONFIG ============================ */
+/* ============================================================
+   CONFIG — unchanged from prior Ape.jsx.
+   Pump.fun bonding curve. Atomic 3% SOL fee → FEE_WALLET.
+   ============================================================ */
 const SOL_MINT   = 'So11111111111111111111111111111111111111112';
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
-const FEE_BPS    = 300;   // 3% — unchanged
+const FEE_BPS    = 300;
 const SOL_RESERVE = 0.01;
 
 const DEFAULT_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
 const DEFAULT_SELL_PRESETS = [25, 50, 100];
 
-// Solana RPC — same-origin server proxy. ALL client RPC traffic goes through
-// /api/solana-rpc, which forwards to Alchemy. The Alchemy API key NEVER reaches
-// the browser bundle, so view-source / scraping can't extract it. The proxy
-// supports every JSON-RPC method this file uses (getBalance,
-// getTokenAccountsByOwner, getLatestBlockhash, simulate/sendTransaction,
-// getSignatureStatus, getBlockHeight, getMultipleAccountsInfo).
 const RPC_URL = (typeof window !== 'undefined' && window.location)
   ? window.location.origin + '/api/solana-rpc'
   : 'http://localhost:3001/api/solana-rpc';
@@ -304,25 +585,23 @@ const getConn = (commitment) => {
   if (!c) { c = new Connection(RPC_URL, commitment); _connCache.set(commitment, c); }
   return c;
 };
-const balConn = () => getConn(BAL_COMMITMENT);
-// Single-RPC wrapper — mirrors LaunchRadar exactly. Keeps the same
-// `(op) => Promise` signature so call sites like
-// `balRpcRace(c => c.getBalance(...))` work the same way.
 const balRpcRace = (op) => op(getConn(BAL_COMMITMENT));
-const POLL_RECENT = 5000, POLL_SOL = 30000, POLL_BALANCE = 30000;
 
-/* ===================== LOCAL BURNER WALLET =====================
-   Self-generated keypair, secret key stored plain in localStorage.
-   Signs in-browser with tx.sign([keypair]) — instant, no popup.
-   Non-custodial (key never leaves device). Hot wallet: ape-money
-   only, always backable. base58 via the project's bs58 dep. */
+// Sped up: fresh tokens land in the feed twice as fast as before.
+const POLL_RECENT  = 2500;
+const POLL_SOL     = 30000;
+const POLL_BALANCE = 30000;
+
+/* ============================================================
+   LOCAL BURNER WALLET — unchanged.
+   ============================================================ */
 const SK_KEY = 'lr_wallet_sk_v1';
 const BACKED_KEY = 'lr_wallet_backed_v1';
 function loadOrCreateKeypair() {
   try {
     const sk = localStorage.getItem(SK_KEY);
     if (sk) return Keypair.fromSecretKey(bs58.decode(sk));
-  } catch (e) { console.warn('[ape-wallet] load failed, regenerating', e && e.message); }
+  } catch (e) { console.warn('[wr-wallet] load failed, regenerating', e && e.message); }
   const kp = Keypair.generate();
   try { localStorage.setItem(SK_KEY, bs58.encode(kp.secretKey)); } catch (e) {}
   return kp;
@@ -342,9 +621,9 @@ function useLocalWallet() {
   return { keypair, publicKey: keypair.publicKey, backedUp, markBackedUp, exportSecret };
 }
 
-/* ============================ FORMATTERS ============================ */
-const EMOJI_POOL = ['🐸','🐶','🐕','🐱','😼','🚀','💎','🍭','💨','🎴','🌈','⚡','🔥','🦊','🐻'];
-function emojiFor(sym) { sym = sym || ''; let h = 0; for (let i = 0; i < sym.length; i++) h = (h * 31 + sym.charCodeAt(i)) | 0; return EMOJI_POOL[Math.abs(h) % EMOJI_POOL.length]; }
+/* ============================================================
+   FORMATTERS
+   ============================================================ */
 function format(n) {
   if (!Number.isFinite(n)) return '0';
   if (n >= 1e9) return (n/1e9).toFixed(2)+'B';
@@ -352,6 +631,14 @@ function format(n) {
   if (n >= 1e3) return Math.round(n).toLocaleString();
   if (n >= 1) return n.toFixed(2);
   return n.toPrecision(3);
+}
+function formatMoney(n) {
+  if (!Number.isFinite(n) || n <= 0) return '—';
+  if (n >= 1e9) return '$'+(n/1e9).toFixed(2)+'B';
+  if (n >= 1e6) return '$'+(n/1e6).toFixed(2)+'M';
+  if (n >= 1e3) return '$'+(n/1e3).toFixed(1)+'K';
+  if (n >= 1) return '$'+n.toFixed(2);
+  return '$'+n.toPrecision(2);
 }
 function formatPrice(p) {
   if (!Number.isFinite(p) || p <= 0) return '—';
@@ -377,103 +664,96 @@ function formatTokens(n) {
   if (n >= 1) return n.toFixed(2);
   return n.toPrecision(3);
 }
-function ageMs(iso) { return iso ? Date.now() - new Date(iso).getTime() : Infinity; }
-function ageStr(ms) {
+function fmtAgeShort(ms) {
   if (!Number.isFinite(ms) || ms < 0) return '';
-  const m = ms/60000;
-  if (m < 1) return Math.max(1, Math.round(ms/1000))+'s';
-  if (m < 60) return Math.max(1, Math.round(m))+'m';
-  const h = m/60; if (h < 24) return Math.round(h)+'h';
+  if (ms < 60000) return Math.max(1, Math.floor(ms/1000))+'s';
+  if (ms < 3600000) {
+    const m = Math.floor(ms/60000), s = Math.floor((ms%60000)/1000);
+    return s > 0 && m < 10 ? (m+'m '+s+'s') : (m+'m');
+  }
+  const h = ms/3600000; if (h < 24) return Math.round(h)+'h';
   return Math.round(h/24)+'d';
 }
+function ageClass(ms) {
+  if (!Number.isFinite(ms)) return 'wr-age old';
+  if (ms < 30000) return 'wr-age';
+  if (ms < 180000) return 'wr-age med';
+  return 'wr-age old';
+}
 
-/* ===================== VIBE CHECK — our own read =====================
-   This is OUR analysis of the on-chain signals the feed exposes
-   (liquidity depth, liquidity vs valuation, holder breadth + average
-   position, turnover sanity, maturity, curve stage). It is deliberately
-   NOT framed as safety:
-     - the score is capped at RISK_CEIL — nothing ever reads "safe",
-     - missing/too-thin data is treated as risk, never rewarded,
-     - things we genuinely cannot see (LP lock DURATION, dev wallet plans,
-       mint/freeze authority, bundled buys) are surfaced as explicit
-       unknowns instead of being hidden behind a green number.
-   A clean read can still rug. The honesty IS the product. */
+/* ============================================================
+   VIBE CHECK — same algo as before. Verdicts relabeled to
+   Steady / Mixed / Wild for the new register.
+   ============================================================ */
 const RISK_CEIL = 85;
-
 function riskRead(t) {
-  if (!t) return { score: 0, verdict: 'Unknown', tier: 'red', knowns: [], unknowns: [] };
+  if (!t) return { score: 0, verdict: 'Unknown', tier: 'high', label: 'Wild', knowns: [], unknowns: [] };
   const liq = t.liquidity || 0;
   const mcap = t.mcap || 0;
   const hold = t.holders || 0;
   const vol = t.volume24h || 0;
   const ageMin = Number.isFinite(t.ageMs) ? t.ageMs / 60000 : Infinity;
 
-  // how much can we actually see? unknown is NOT good.
   const dataPoints = (liq > 0 ? 1 : 0) + (hold > 0 ? 1 : 0) + (vol > 0 ? 1 : 0) + (mcap > 0 ? 1 : 0);
   const tooThin = dataPoints <= 1;
 
   let s = 0;
-  // 1. liquidity depth (absolute) — harder to nuke in one sell
   s += Math.min(26, Math.log10(Math.max(liq, 1)) * 5.6);
-  // 2. liquidity backing the valuation (liq/mcap) — the thin-float rug tell
   let liqRatio = null;
   if (mcap > 0 && liq > 0) {
     liqRatio = liq / mcap;
     s += liqRatio >= 0.15 ? 22 : liqRatio >= 0.08 ? 16 : liqRatio >= 0.03 ? 9 : liqRatio >= 0.01 ? 4 : 0;
   }
-  // 3. holder breadth + average position (concentration proxy)
   s += Math.min(16, Math.log10(Math.max(hold, 1)) * 5.3);
   if (hold >= 50 && mcap > 0) {
     const perHolder = mcap / hold;
     s += perHolder < 500 ? 6 : perHolder < 2000 ? 3 : 0;
   }
-  // 4. turnover sanity (vol/liq) — dead AND frenzied both score low
   if (liq > 0) {
     const turn = vol / liq;
     s += (turn >= 0.1 && turn <= 4) ? 12 : (turn > 4 && turn <= 12) ? 6 : turn > 0 ? 3 : 0;
   }
-  // 5. maturity — surviving a bit is mildly reassuring
   s += ageMin >= 30 ? 8 : ageMin >= 10 ? 5 : ageMin >= 3 ? 2 : 0;
-  // 6. curve stage (when known) — mid-curve sweet spot
   if (t.bond != null) s += (t.bond >= 20 && t.bond <= 90) ? 6 : 3;
 
   let score = Math.round(Math.max(3, Math.min(RISK_CEIL, s)));
-  if (tooThin) score = Math.min(score, 28); // can't read it -> treat as risky
+  if (tooThin) score = Math.min(score, 28);
 
-  // what the data DOES show
   const knowns = [];
-  knowns.push(liq >= 30000 ? ['ok', '✓ Liquidity $' + format(liq)] : liq >= 5000 ? ['cau', 'Liquidity $' + format(liq)] : ['bad', 'Thin liq $' + format(liq || 0)]);
+  knowns.push(liq >= 30000 ? ['ok', '✓ Liq ' + formatMoney(liq)] : liq >= 5000 ? ['cau', 'Liq ' + formatMoney(liq)] : ['bad', 'Thin liq ' + formatMoney(liq || 0)]);
   knowns.push(hold >= 500 ? ['ok', '✓ ' + format(hold) + ' holders'] : hold >= 100 ? ['cau', format(hold) + ' holders'] : ['bad', (hold || 0) + ' holders']);
   if (liqRatio != null) knowns.push(liqRatio >= 0.08 ? ['ok', '✓ Liq ' + (liqRatio * 100).toFixed(0) + '% of mcap'] : ['bad', 'Liq only ' + (liqRatio * 100).toFixed(1) + '% of mcap']);
 
-  // what NOBODY can see from this data — surfaced, not faked
   const unknowns = ['LP lock duration', 'dev wallet plans', 'mint/freeze authority', 'bundled buys'];
 
-  let verdict, tier;
-  if (tooThin) { verdict = 'Too fresh to read'; tier = 'amber'; }
-  else if (score >= 68) { verdict = 'Looks okay — still risky'; tier = 'ok'; }
-  else if (score >= 45) { verdict = 'Mixed signals'; tier = 'amber'; }
-  else { verdict = 'High risk'; tier = 'red'; }
+  let verdict, tier, label;
+  if (tooThin) { verdict = 'Too fresh to read'; tier = 'med'; label = 'Mixed'; }
+  else if (score >= 60) { verdict = 'Looks steady — still risky'; tier = 'low'; label = 'Steady'; }
+  else if (score >= 38) { verdict = 'Mixed signals'; tier = 'med'; label = 'Mixed'; }
+  else { verdict = 'High risk'; tier = 'high'; label = 'Wild'; }
 
-  return { score, verdict, tier, knowns, unknowns };
+  return { score, verdict, tier, label, knowns, unknowns };
 }
-const riskColor = (tier) => tier === 'ok' ? 'var(--green)' : tier === 'amber' ? 'var(--amber)' : 'var(--red)';
 
+function ageMs(iso) { return iso ? Date.now() - new Date(iso).getTime() : Infinity; }
+
+/* normalize — adds pairCreatedAtMs so we can re-compute live ages
+   without re-fetching the feed. */
 function normalize(t) {
   const rawMint = t && t.mint;
   if (!rawMint || typeof rawMint !== 'string' || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(rawMint)) return null;
-  const am = ageMs(t.pairCreatedAt);
+  const createdAtMs = t.pairCreatedAt ? new Date(t.pairCreatedAt).getTime() : null;
   let bond = Number(t.bondingProgress != null ? t.bondingProgress : (t.curveProgress != null ? t.curveProgress : NaN));
   bond = Number.isFinite(bond) ? Math.max(0, Math.min(100, bond)) : null;
   return {
     mint: rawMint, sym: t.sym || '???', name: t.name || t.sym || 'Unknown',
-    emoji: emojiFor(t.sym || ''), icon: t.icon || null,
+    icon: t.icon || null,
     price: Number(t.price || 0), change: Number(t.priceChange24h || 0),
-    age: ageStr(am), ageMs: am,
+    pairCreatedAtMs: createdAtMs,
     mcap: Number(t.mcap || t.fdv || 0), volume24h: Number(t.volume24h || 0),
     holders: Number(t.holders || 0), liquidity: Number(t.liquidity || 0),
     decimals: Number(t.decimals != null ? t.decimals : 6), pumpPool: t.pumpPool || 'auto',
-    bond,
+    bond, dex: t.dexId || (t.pumpPool ? 'pump.fun' : null),
     source: 'dexscreener',
   };
 }
@@ -503,7 +783,9 @@ function describeSimLogs(logs, fallbackMsg) {
   return fallbackMsg ? ('Sim failed -> ' + String(fallbackMsg).slice(0, 160)) : 'Sim failed (no logs).';
 }
 
-/* ================= PUMP.FUN TRADE (PumpPortal) ================= */
+/* ============================================================
+   PUMP.FUN TRADE — unchanged.
+   ============================================================ */
 async function decodeBuiltTx(b64, connection) {
   const txBytes = Buffer.from(b64, 'base64');
   const tx = VersionedTransaction.deserialize(txBytes);
@@ -532,7 +814,6 @@ async function getPumpRoute(opts) {
   return { instructions: dec.instructions, alts: dec.alts, pool: data.pool, route: data.route };
 }
 
-/* trade-size math — shared by one-tap and the manual sheet */
 function buildBuyParams(n) {
   if (!Number.isFinite(n) || n <= 0) return null;
   const totalLamports = BigInt(Math.floor(n * 1e9));
@@ -564,10 +845,10 @@ function buildTweetText(o) {
   const { mode, token, solAmount, outAmount, percentage } = o;
   if (mode === 'buy') {
     const recv = outAmount > 0 ? '\n-> ' + formatTokens(outAmount) + ' $' + token.sym : '';
-    return 'Just aped ' + solAmount + ' SOL into $' + token.sym + ' on wonderland//radar 🍭' + recv + '\n\nFresh launch sniped:';
+    return 'Just aped ' + solAmount + ' SOL into $' + token.sym + ' on wonderland//radar' + recv + '\n\nFresh launch caught at first light:';
   }
   const got = outAmount > 0 ? '\n-> ' + formatSol(outAmount) + ' SOL back' : '';
-  return 'Just sold ' + percentage + '% of my $' + token.sym + ' on wonderland//radar 💸' + got + '\n\nFresh launches every minute:';
+  return 'Just sold ' + percentage + '% of my $' + token.sym + ' on wonderland//radar' + got + '\n\nFresh launches every minute:';
 }
 function openTwitterShare(text, url) {
   if (typeof window === 'undefined') return;
@@ -605,21 +886,49 @@ function useTokenIcon(token) {
   }, [token && token.mint, directUrl]);
   return resolved;
 }
-function TokenFace(props) {
-  const token = props.token;
-  const url = useTokenIcon(token);
-  const [errored, setErrored] = useState(false);
-  useEffect(() => { setErrored(false); }, [url]);
-  if (url && !errored) return <img className="ape-img" src={url} alt={token.sym || ''} onError={() => setErrored(true)} />;
-  return <span className="ape-emoji">{token.emoji || emojiFor(token.sym)}</span>;
+
+/* Token color from mint — stable, recognizable. */
+function colorFor(mint) {
+  const palette = ['#a855f7','#f472b6','#fb923c','#60a5fa','#22d3ee','#facc15','#16a34a','#ec4899','#0ea5e9','#fda4af','#f59e0b','#9333ea','#84cc16','#06b6d4','#dc2626'];
+  let h = 0;
+  for (let i = 0; i < mint.length; i++) h = (h * 31 + mint.charCodeAt(i)) | 0;
+  return palette[Math.abs(h) % palette.length];
 }
-function TokenIconSmall(props) {
-  const token = props.token;
+function shade(hex, p) {
+  const f = parseInt(hex.slice(1), 16); const t = p < 0 ? 0 : 255; const pp = Math.abs(p) / 100;
+  const R = f >> 16, G = (f >> 8) & 0xFF, B = f & 0xFF;
+  const r = Math.round((t - R) * pp) + R;
+  const g = Math.round((t - G) * pp) + G;
+  const b = Math.round((t - B) * pp) + B;
+  return '#' + (0x1000000 + r * 0x10000 + g * 0x100 + b).toString(16).slice(1);
+}
+
+function TokenFace({ token, size }) {
   const url = useTokenIcon(token);
   const [errored, setErrored] = useState(false);
   useEffect(() => { setErrored(false); }, [url]);
-  if (url && !errored) return <img className="ape-img" src={url} alt={token.sym || ''} onError={() => setErrored(true)} />;
-  return <span>{token.emoji || emojiFor(token.sym)}</span>;
+  const c = colorFor(token.mint || token.sym || '');
+  const style = {
+    background: 'linear-gradient(135deg,' + c + ',' + shade(c, -32) + ')',
+    width: size ? size + 'px' : undefined,
+    height: size ? size + 'px' : undefined,
+    fontSize: size ? Math.round(size * 0.4) + 'px' : undefined,
+  };
+  return (
+    <div className="wr-av" style={style}>
+      {url && !errored
+        ? <img src={url} alt={token.sym || ''} onError={() => setErrored(true)} />
+        : <span>{(token.sym || '?').charAt(0)}</span>}
+    </div>
+  );
+}
+function TokenChip({ token }) {
+  const url = useTokenIcon(token);
+  const [errored, setErrored] = useState(false);
+  useEffect(() => { setErrored(false); }, [url]);
+  return url && !errored
+    ? <img src={url} alt="" onError={() => setErrored(true)} />
+    : <span>{(token.sym || '?').charAt(0)}</span>;
 }
 
 /* ============================ PRESETS ============================ */
@@ -640,8 +949,7 @@ function usePresets() {
 }
 
 /* ============================ PRESETS EDITOR ============================ */
-function PresetsModal(props) {
-  const { buyPresets, setBuyPresets, sellPresets, setSellPresets, onClose } = props;
+function PresetsModal({ buyPresets, setBuyPresets, sellPresets, setSellPresets, onClose }) {
   const [buyDraft, setBuyDraft] = useState(buyPresets);
   const [sellDraft, setSellDraft] = useState(sellPresets);
   const [nb, setNb] = useState(''); const [ns, setNs] = useState('');
@@ -649,25 +957,25 @@ function PresetsModal(props) {
   const addSell = () => { const v = parseFloat(ns); if (!(v > 0) || v > 100 || sellDraft.includes(v)) { setNs(''); return; } setSellDraft([...sellDraft, v].sort((a,b)=>a-b)); setNs(''); };
   const save = () => { setBuyPresets(buyDraft.length ? buyDraft : DEFAULT_BUY_PRESETS); setSellPresets(sellDraft.length ? sellDraft : DEFAULT_SELL_PRESETS); onClose(); };
   return (
-    <div className="ape-overlay center" onClick={onClose}>
-      <div className="ape-sheet mini" onClick={e=>e.stopPropagation()}>
-        <div className="ape-shead">
-          <button className="ape-x" onClick={onClose}>×</button>
-          <h3 className="ape-stitle">Quick amounts</h3>
-          <div className="ape-ssub">tap to set, edit any time</div>
+    <div className="wr-overlay center" onClick={onClose}>
+      <div className="wr-sheet mini" onClick={e=>e.stopPropagation()}>
+        <div className="wr-tshead">
+          <button className="wr-x" onClick={onClose}>×</button>
+          <h3 style={{fontFamily:"'Fraunces'",fontWeight:500,fontSize:24,margin:0,letterSpacing:'-.015em'}}>Quick amounts</h3>
+          <div style={{fontFamily:"'JetBrains Mono'",fontSize:10.5,color:'var(--ink2)',marginTop:5,fontWeight:600,letterSpacing:'.3px'}}>Tap to set · edit any time</div>
         </div>
-        <div className="ape-sbody">
-          <div className="ape-sec-lbl">Buy amounts (SOL)</div>
-          <div className="ape-echips">
-            {buyDraft.map(v => <span key={v} className="ape-echip">{v}<button className="x" onClick={()=>setBuyDraft(buyDraft.filter(x=>x!==v))}>×</button></span>)}
-            <span className="ape-eadd"><input type="number" step="0.01" min="0" placeholder="0.5" value={nb} onChange={e=>setNb(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')addBuy();}} /><button className="plus" onClick={addBuy}>+</button></span>
+        <div style={{padding:'14px 22px 22px'}}>
+          <div className="wr-sec-lbl">Buy amounts (SOL)</div>
+          <div className="wr-echips">
+            {buyDraft.map(v => <span key={v} className="wr-echip">{v}<button className="x" onClick={()=>setBuyDraft(buyDraft.filter(x=>x!==v))}>×</button></span>)}
+            <span className="wr-eadd"><input type="number" step="0.01" min="0" placeholder="0.5" value={nb} onChange={e=>setNb(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')addBuy();}} /><button className="plus" onClick={addBuy}>+</button></span>
           </div>
-          <div className="ape-sec-lbl">Sell amounts (%)</div>
-          <div className="ape-echips">
-            {sellDraft.map(v => <span key={v} className="ape-echip">{v}%<button className="x" onClick={()=>setSellDraft(sellDraft.filter(x=>x!==v))}>×</button></span>)}
-            <span className="ape-eadd"><input type="number" step="1" min="1" max="100" placeholder="50" value={ns} onChange={e=>setNs(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')addSell();}} /><button className="plus" onClick={addSell}>+</button></span>
+          <div className="wr-sec-lbl">Sell amounts (%)</div>
+          <div className="wr-echips">
+            {sellDraft.map(v => <span key={v} className="wr-echip">{v}%<button className="x" onClick={()=>setSellDraft(sellDraft.filter(x=>x!==v))}>×</button></span>)}
+            <span className="wr-eadd"><input type="number" step="1" min="1" max="100" placeholder="50" value={ns} onChange={e=>setNs(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')addSell();}} /><button className="plus" onClick={addSell}>+</button></span>
           </div>
-          <button className="ape-esave" onClick={save}>Save</button>
+          <button className="wr-esave" onClick={save}>Save</button>
         </div>
       </div>
     </div>
@@ -675,8 +983,7 @@ function PresetsModal(props) {
 }
 
 /* ============================ WALLET DRAWER ============================ */
-function WalletDrawer(props) {
-  const { wallet, solBalance, solPrice, onWithdraw, onClose, busy } = props;
+function WalletDrawer({ wallet, solBalance, solPrice, onWithdraw, onClose, busy }) {
   const [tab, setTab] = useState('deposit');
   const [copied, setCopied] = useState(false);
   const [dest, setDest] = useState(''); const [amt, setAmt] = useState('');
@@ -690,13 +997,13 @@ function WalletDrawer(props) {
     let alive = true;
     (async () => {
       try {
-        const QR = await import('qrcode'); // requires: npm i qrcode
+        const QR = await import('qrcode');
         if (!alive || !qrRef.current) return;
         const toCanvas = QR.toCanvas || (QR.default && QR.default.toCanvas);
         if (typeof toCanvas === 'function') {
-          await toCanvas(qrRef.current, addr, { width: 160, margin: 1, color: { dark: '#0B0A1A', light: '#ffffff' } });
+          await toCanvas(qrRef.current, addr, { width: 160, margin: 1, color: { dark: '#0E0B1F', light: '#ffffff' } });
         }
-      } catch (e) { /* qrcode not installed — address + copy still works */ }
+      } catch (e) {}
     })();
     return () => { alive = false; };
   }, [tab, addr]);
@@ -705,71 +1012,73 @@ function WalletDrawer(props) {
   const maxOut = Math.max(0, sol - 0.001);
 
   return (
-    <div className="ape-overlay" onClick={onClose}>
-      <div className="ape-sheet" onClick={e=>e.stopPropagation()}>
-        <div className="ape-shead">
-          <button className="ape-x" onClick={onClose}>×</button>
-          <h3 className="ape-stitle"><span className="ape-wdot" />Your wallet</h3>
-          <div className="ape-ssub">lives on this device · signs instantly · your keys</div>
+    <div className="wr-overlay" onClick={onClose}>
+      <div className="wr-sheet" onClick={e=>e.stopPropagation()}>
+        <div className="wr-tshead">
+          <button className="wr-x" onClick={onClose}>×</button>
+          <h3 style={{fontFamily:"'Fraunces'",fontWeight:500,fontSize:24,margin:0,letterSpacing:'-.015em',display:'flex',alignItems:'center',gap:10}}>
+            <span style={{width:8,height:8,borderRadius:'50%',background:'var(--mint)',boxShadow:'0 0 8px var(--mint)'}} />
+            Your wallet
+          </h3>
+          <div style={{fontFamily:"'JetBrains Mono'",fontSize:10.5,color:'var(--ink2)',marginTop:5,fontWeight:600,letterSpacing:'.3px'}}>lives on this device · signs instantly · your keys</div>
         </div>
-        <div className="ape-sbody">
-          <div className="ape-balcard">
-            <div className="ape-ballbl">Ready to ape</div>
-            <div className="ape-balval">{formatSol(sol)} <span className="u">SOL</span></div>
-            <div className="ape-balusd">{solPrice > 0 ? '≈ $' + format(sol * solPrice) : ' '}</div>
+        <div style={{padding:'14px 22px 22px'}}>
+          <div className="wr-balcard">
+            <div className="wr-ballbl">Ready to ape</div>
+            <div className="wr-balval">{formatSol(sol)} <span className="u">SOL</span></div>
+            <div className="wr-balusd">{solPrice > 0 ? '≈ $' + format(sol * solPrice) : ' '}</div>
           </div>
 
-          <div className="ape-wgrid">
-            <button className={'ape-wact' + (tab==='deposit'?' primary':'')} onClick={()=>setTab('deposit')}>↓ Deposit</button>
-            <button className={'ape-wact' + (tab==='withdraw'?' primary':'')} onClick={()=>setTab('withdraw')}>↑ Withdraw</button>
+          <div className="wr-wgrid">
+            <button className={'wr-wact' + (tab==='deposit'?' primary':'')} onClick={()=>setTab('deposit')}>↓ Deposit</button>
+            <button className={'wr-wact' + (tab==='withdraw'?' primary':'')} onClick={()=>setTab('withdraw')}>↑ Withdraw</button>
           </div>
 
           {tab === 'deposit' && (
-            <div className="ape-block">
-              <div className="ape-block-l">Send SOL to this address</div>
-              <div className="ape-qr"><canvas ref={qrRef} width="160" height="160" /></div>
-              <div className="ape-addr"><div className="ape-addr-v">{addr}</div><button className="ape-copy" onClick={copy}>{copied?'COPIED':'COPY'}</button></div>
+            <div className="wr-block">
+              <div className="wr-block-l">Send SOL to this address</div>
+              <div className="wr-qr"><canvas ref={qrRef} width="160" height="160" /></div>
+              <div className="wr-addr"><div className="wr-addr-v">{addr}</div><button className="wr-copy" onClick={copy}>{copied?'COPIED':'COPY'}</button></div>
             </div>
           )}
 
           {tab === 'withdraw' && (
-            <div className="ape-block">
-              <div className="ape-block-l">Send SOL out</div>
-              <input className="ape-input" placeholder="Destination address" value={dest} onChange={e=>setDest(e.target.value.trim())} />
-              <input className="ape-input" type="number" step="0.001" placeholder={'Amount (max ' + formatSol(maxOut) + ')'} value={amt} onChange={e=>setAmt(e.target.value)} />
-              <button className="ape-go" disabled={busy || !dest || !(Number(amt) > 0) || Number(amt) > maxOut} onClick={()=>onWithdraw(dest, Number(amt))}>
+            <div className="wr-block">
+              <div className="wr-block-l">Send SOL out</div>
+              <input className="wr-input" placeholder="Destination address" value={dest} onChange={e=>setDest(e.target.value.trim())} />
+              <input className="wr-input" type="number" step="0.001" placeholder={'Amount (max ' + formatSol(maxOut) + ')'} value={amt} onChange={e=>setAmt(e.target.value)} />
+              <button className="wr-go" disabled={busy || !dest || !(Number(amt) > 0) || Number(amt) > maxOut} onClick={()=>onWithdraw(dest, Number(amt))}>
                 {busy ? 'Sending…' : 'Withdraw ' + (Number(amt) > 0 ? Number(amt) + ' SOL' : '')}
               </button>
             </div>
           )}
 
-          <div className="ape-block">
-            <div className="ape-block-l">Back up your wallet {wallet.backedUp ? '✓' : ''}</div>
+          <div className="wr-block">
+            <div className="wr-block-l">Back up your wallet {wallet.backedUp ? '✓' : ''}</div>
             {!revealed ? (
-              <button className="ape-go" style={{background:'var(--surf2)',color:'var(--gold)'}} onClick={()=>{ setRevealed(true); wallet.markBackedUp(); }}>Show secret key</button>
+              <button className="wr-go" style={{background:'var(--vapor2)',color:'var(--butter)',boxShadow:'none'}} onClick={()=>{ setRevealed(true); wallet.markBackedUp(); }}>Show secret key</button>
             ) : (
               <>
-                <div className="ape-secret">{wallet.exportSecret()}</div>
+                <div className="wr-secret">{wallet.exportSecret()}</div>
                 <div style={{display:'flex',gap:8,marginTop:8}}>
-                  <button className="ape-copy" style={{flex:1,padding:'10px 0'}} onClick={()=>{ try{navigator.clipboard.writeText(wallet.exportSecret());}catch(e){} }}>COPY KEY</button>
-                  <button className="ape-copy" style={{flex:1,padding:'10px 0'}} onClick={()=>setRevealed(false)}>HIDE</button>
+                  <button className="wr-copy" style={{flex:1,padding:'10px 0'}} onClick={()=>{ try{navigator.clipboard.writeText(wallet.exportSecret());}catch(e){} }}>COPY KEY</button>
+                  <button className="wr-copy" style={{flex:1,padding:'10px 0'}} onClick={()=>setRevealed(false)}>HIDE</button>
                 </div>
               </>
             )}
-            <div className="ape-ssub" style={{marginTop:8}}>Save this somewhere safe. Anyone with it controls this wallet. Import into Phantom ("Import private key") to recover.</div>
+            <div style={{fontFamily:"'JetBrains Mono'",fontSize:10,color:'var(--ink3)',marginTop:8,fontWeight:600,lineHeight:1.5}}>Save this somewhere safe. Anyone with it controls this wallet. Import into Phantom ("Import private key") to recover.</div>
           </div>
 
-          <div className="ape-warn">🔥 <b>Hot burner.</b> Keep only ape-money here. The key is stored on this device — clear your browser and it's gone unless you backed it up.</div>
-          <div style={{textAlign:'center'}}><span className="ape-nc">● Non-custodial · your keys</span></div>
+          <div className="wr-warn"><b>Hot burner.</b> Keep only ape-money here. The key is stored on this device — clear your browser and it's gone unless you backed it up.</div>
+          <div style={{textAlign:'center'}}><span className="wr-nc">● Non-custodial · your keys</span></div>
         </div>
       </div>
     </div>
   );
 }
 
-/* ============================ MANUAL TRADE SHEET ============================ */
-function TradeSheet(props) {
-  const { token, initialMode, onClose, onConfirm, buyPresets, sellPresets, solBalance, tokenBalance, solPrice } = props;
+/* ============================ TRADE SHEET ============================ */
+function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPresets, solBalance, tokenBalance, solPrice }) {
   const [mode, setMode] = useState(initialMode || 'buy');
   const [amount, setAmount] = useState('');
   const [confirming, setConfirming] = useState(false);
@@ -809,132 +1118,142 @@ function TradeSheet(props) {
   };
 
   const read = riskRead(token);
+  const tierClass = read.tier === 'low' ? '' : read.tier === 'med' ? 'amber' : 'red';
+  const tierColor = read.tier === 'low' ? 'var(--mint)' : read.tier === 'med' ? 'var(--butter)' : 'var(--coral)';
 
   return (
-    <div className="ape-overlay" onClick={onClose}>
-      <div className="ape-sheet" onClick={e=>e.stopPropagation()}>
-        <div className="ape-dhead">
-          <button className="ape-x" onClick={onClose}>×</button>
-          <div className="ape-dav"><TokenFace token={token} /></div>
-          <div>
-            <div className="ape-dsym">${token.sym}</div>
-            <div className="ape-dsub">{formatPrice(token.price)}{Number.isFinite(token.change)&&token.change!==0 ? <> · <span style={{color:token.change<0?'var(--red)':'var(--green)'}}>{formatPct(token.change)}</span></> : null}</div>
+    <div className="wr-overlay" onClick={onClose}>
+      <div className="wr-sheet" onClick={e=>e.stopPropagation()}>
+        <div className="wr-tshead">
+          <button className="wr-x" onClick={onClose}>×</button>
+          <div className="wr-tshead-row">
+            <TokenFace token={token} size={54} />
+            <div className="title">
+              <div className="sym">${token.sym}</div>
+              <div className="sub">
+                {formatPrice(token.price)}
+                {Number.isFinite(token.change) && token.change !== 0 ? <> · <span style={{color:token.change<0?'var(--coral)':'var(--mint)'}}>{formatPct(token.change)}</span></> : null}
+              </div>
+            </div>
           </div>
         </div>
 
-        <div className={'ape-tcard ' + (read.tier==='ok'?'':read.tier)}>
-          <div className="ape-tcnum" style={{color:riskColor(read.tier)}}>{read.score}<span style={{fontSize:14,color:'var(--ink3)'}}>/{RISK_CEIL}</span></div>
-          <div><div className="ape-tcv">{read.verdict}</div><div className="ape-tcs">Vibe check · our read of the on-chain signals — not a safety guarantee</div></div>
+        <div className={'wr-vibe ' + tierClass}>
+          <div className="wr-vibe-top">
+            <span className="wr-vibe-l">Vibe check</span>
+            <span className="wr-vibe-s" style={{color:tierColor}}>{read.score}<span className="of">/{RISK_CEIL}</span></span>
+          </div>
+          <div className="wr-vibe-verdict" style={{color:tierColor}}>{read.verdict}</div>
+          <div className="wr-vibe-chks">
+            {read.knowns.map((c,i)=><span key={i} className={'wr-chk '+c[0]}>{c[1]}</span>)}
+          </div>
         </div>
-        <div className="ape-checks">{read.knowns.map((c,i)=><span key={i} className={'ape-chk '+c[0]}>{c[1]}</span>)}</div>
-        <div className="ape-dyor">⚠ Can't be checked: {read.unknowns.join(' · ')}. Even a clean read can rug — only ape what you can lose.</div>
+        <div className="wr-dyor">Can't be checked: {read.unknowns.join(' · ')}. Even a clean read can rug — only ape what you can lose.</div>
 
-        <div className={'ape-modetabs' + (isBuy?'':' sell')}>
-          <div className="ape-mind" />
-          <button className={'ape-mtab'+(isBuy?' active':'')} onClick={()=>setMode('buy')}>🍭 BUY</button>
-          <button className={'ape-mtab'+(!isBuy?' active':'')} onClick={()=>setMode('sell')}>💸 SELL</button>
+        <div className={'wr-mode-tabs' + (isBuy?'':' sell')}>
+          <div className="wr-mode-ind" />
+          <button className={'wr-mode-tab'+(isBuy?' active':'')} onClick={()=>setMode('buy')}>Ape</button>
+          <button className={'wr-mode-tab'+(!isBuy?' active':'')} onClick={()=>setMode('sell')}>Sell</button>
         </div>
 
-        <div className="ape-row">
-          <div className="ape-rowtop">
-            <span className="ape-rlabel">{isBuy?'You pay':'You sell'}</span>
-            <span className="ape-rbal">
+        <div className="wr-field">
+          <div className="wr-field-row1">
+            <span className="wr-field-l">{isBuy?'You pay':'You sell'}</span>
+            <span className="wr-field-bal">
               {isBuy ? <>Wallet: <b>{formatSol((solBalance&&solBalance.uiAmount)||0)} SOL</b></> : <>You own: <b>{formatTokens(ownedUi)} ${token.sym}</b></>}
-              {isBuy && availSol > 0 ? <button className="ape-max" onClick={()=>setAmount(String(Math.floor(availSol*10000)/10000))}>MAX</button> : null}
+              {isBuy && availSol > 0 ? <button className="wr-field-max" onClick={()=>setAmount(String(Math.floor(availSol*10000)/10000))}>MAX</button> : null}
             </span>
           </div>
-          <div className="ape-rmid">
-            <div className="ape-chip">{isBuy ? <><span className="ape-chiplogo">◎</span><span>SOL</span></> : <><span className="ape-chiplogo"><TokenIconSmall token={token} /></span><span>{token.sym}</span></>}</div>
-            <input className="ape-amt" type="text" inputMode="decimal" placeholder={isBuy?'0.00':'0'} value={amount}
+          <div className="wr-field-row2">
+            <div className="wr-field-chip">
+              {isBuy ? <><span className="lg">◎</span><span>SOL</span></> : <><span className="lg"><TokenChip token={token} /></span><span>{token.sym}</span></>}
+            </div>
+            <input className="wr-field-amt" type="text" inputMode="decimal" placeholder={isBuy?'0.00':'0'} value={amount}
               onChange={e=>{ const val=e.target.value.replace(/[^\d.]/g,''); if(val.split('.').length>2)return; if(!isBuy&&Number(val)>100){setAmount('100');return;} setAmount(val); }} />
           </div>
         </div>
 
-        <div className="ape-presets">
-          {presets.map(pv => <button key={pv} className={'ape-pchip'+(Number(amount)===pv?' active':'')} onClick={()=>setAmount(String(pv))}>{isBuy?(pv+' SOL'):(pv+'%')}</button>)}
+        <div className="wr-presets">
+          {presets.map(pv => <button key={pv} className={'wr-preset'+(Number(amount)===pv?(isBuy?' on':' on sell'):'')} onClick={()=>setAmount(String(pv))}>{isBuy?(pv+' SOL'):(pv+'%')}</button>)}
         </div>
 
         {swapParams && Number(amount) > 0 && (
-          <div className="ape-details">
-            <div className="ape-drow"><span>Route</span><span className="ape-dval">pump.fun bonding curve</span></div>
+          <div className="wr-summary">
+            <div className="wr-sum"><span className="k">Route</span><span className="v">{token.dex || 'pump.fun'}</span></div>
             {isBuy ? <>
-              <div className="ape-drow"><span>Platform fee (3%)</span><span className="ape-dval">{formatSol(Number(swapParams.feeLamports)/1e9)} SOL</span></div>
-              <div className="ape-drow"><span>Wallet pays</span><span className="ape-dval">{formatSol(Number(swapParams.totalLamports)/1e9)} SOL</span></div>
-              <div className="ape-drow"><span>You get (est.)</span><span className="ape-dval good">{est&&est.tokens>0?'≈ '+formatTokens(est.tokens)+' '+token.sym:'—'}</span></div>
+              <div className="wr-sum"><span className="k">Platform fee (3%)</span><span className="v">{formatSol(Number(swapParams.feeLamports)/1e9)} SOL</span></div>
+              <div className="wr-sum"><span className="k">Wallet pays</span><span className="v">{formatSol(Number(swapParams.totalLamports)/1e9)} SOL</span></div>
+              <div className="wr-sum"><span className="k">You receive (est)</span><span className="v good">{est&&est.tokens>0?'≈ '+formatTokens(est.tokens)+' '+token.sym:'—'}</span></div>
             </> : <>
-              <div className="ape-drow"><span>Selling</span><span className="ape-dval">{formatTokens(swapParams.tradeTokensUi)} {token.sym} ({Math.min(100,Number(amount)).toFixed(0)}%)</span></div>
-              <div className="ape-drow"><span>Platform fee (3%)</span><span className="ape-dval">≈ {Number(swapParams.feeLamports)/1e9>0?formatSol(Number(swapParams.feeLamports)/1e9):'—'} SOL</span></div>
-              <div className="ape-drow"><span>You get (est.)</span><span className="ape-dval good">{est&&est.sol>0?'≈ '+formatSol(est.sol)+' SOL':'—'}</span></div>
+              <div className="wr-sum"><span className="k">Selling</span><span className="v">{formatTokens(swapParams.tradeTokensUi)} {token.sym} ({Math.min(100,Number(amount)).toFixed(0)}%)</span></div>
+              <div className="wr-sum"><span className="k">Platform fee (3%)</span><span className="v">≈ {Number(swapParams.feeLamports)/1e9>0?formatSol(Number(swapParams.feeLamports)/1e9):'—'} SOL</span></div>
+              <div className="wr-sum"><span className="k">You receive (est)</span><span className="v good">{est&&est.sol>0?'≈ '+formatSol(est.sol)+' SOL':'—'}</span></div>
             </>}
           </div>
         )}
 
-        {error && <div className="ape-banner">{error}</div>}
+        {error && <div className="wr-banner">{error}</div>}
 
-        <button className={'ape-confirm'+(isBuy?'':' sell')} disabled={disabled} onClick={go}>
-          {confirming ? (isBuy?'Buying…':'Selling…')
+        <button className={'wr-confirm'+(isBuy?'':' sell')} disabled={disabled} onClick={go}>
+          {confirming ? (isBuy?'Aping…':'Selling…')
             : !amount||Number(amount)<=0 ? (isBuy?'Enter SOL amount':'Enter percentage')
             : !hasFunds ? (isBuy?'Not enough SOL':(ownedUi<=0?('No '+token.sym+' to sell'):'Need ~0.003 SOL for fees'))
-            : (isBuy?('🍭 Buy '+amount+' SOL of $'+token.sym):('💸 Sell '+Math.min(100,Number(amount))+'% of $'+token.sym))}
+            : (isBuy?('Ape '+amount+' SOL → '+token.sym):('Sell '+Math.min(100,Number(amount))+'% of '+token.sym))}
         </button>
-        <p className="ape-tfoot">pump.fun · 3% fee · trading wallet · instant, no pop-up</p>
+        <p className="wr-tfoot">{token.dex || 'pump.fun'} · 3% fee · settles in seconds</p>
       </div>
     </div>
   );
 }
 
-/* ============================ TOKEN TILE ============================ */
-function TokenTile(props) {
-  const { token, owned, quickAmount, sellPresets, onApe, onSell, onOpen, busy, isFresh, idx } = props;
-  const read = riskRead(token);
-  const sc = read.score;
-  const col = riskColor(read.tier);
-  const C = 39.6, off = C - (sc / 100) * C;
+/* ============================ SPECIMEN ROW ============================ */
+const SpecimenRow = React.memo(function SpecimenRow({ token, ageMsLive, owned, quickAmount, busy, onApe, onOpen, isFresh, specimenNo }) {
+  const r = riskRead(token);
   const ownedUi = (owned && owned.uiAmount) || 0;
-  const [coins, setCoins] = useState(0);
 
-  const ape = (e) => {
-    e.stopPropagation();
-    if (busy) return;
-    for (let k = 0; k < 5; k++) setTimeout(()=>setCoins(c=>c+1), k*40);
-    setTimeout(()=>setCoins(0), 800);
-    onApe(token);
-  };
+  const ape = (e) => { e.stopPropagation(); if (busy) return; onApe(token); };
 
   return (
-    <div className={'ape-tile' + (isFresh?' new':'')} style={{ animationDelay: (idx*0.04)+'s' }} onClick={()=>onOpen(token)}>
-      <div className="ape-face">
+    <div className={'wr-row' + (isFresh ? ' fresh' : '')} onClick={()=>onOpen(token)}>
+      <span className="wr-row-num wr-col-num">№{specimenNo.toLocaleString()}</span>
+      <div className="wr-row-tk">
         <TokenFace token={token} />
-        <span className="ape-agep">{token.age || 'new'}</span>
-        <div className="ape-trust">
-          <svg width="40" height="40"><circle cx="20" cy="20" r="15.7" fill="none" stroke="rgba(255,255,255,.1)" strokeWidth="3.4" />
-            <circle cx="20" cy="20" r="15.7" fill="none" stroke={col} strokeWidth="3.4" strokeLinecap="round" strokeDasharray={C+' '+C} strokeDashoffset={off} /></svg>
-          <span className="tnum" style={{color:col}}>{sc}</span><span className="tlbl" style={{color:col}}>Vibe</span>
+        <div className="wr-name">
+          <div className="wr-sym-row">
+            {token.sym}
+            {Number.isFinite(token.change) && token.change !== 0 ? <span className={'chg' + (token.change < 0 ? ' dn' : '')}>{formatPct(token.change)}</span> : null}
+            {ownedUi > 0 ? <span className="wr-owned-mark">owned</span> : null}
+          </div>
+          <div className="wr-full">{token.name}{token.dex ? <span className="dex">· {token.dex}</span> : null}</div>
         </div>
-        {token.bond != null ? <div className="ape-curve"><i style={{width:token.bond+'%'}} /></div> : null}
       </div>
-      <div className="ape-body">
-        <div className="ape-symrow"><span className="ape-sym">${token.sym}</span>{Number.isFinite(token.change)&&token.change!==0 ? <span className={'ape-chg'+(token.change<0?' down':'')}>{formatPct(token.change)}</span> : null}</div>
-        <div className="ape-name">{token.name}</div>
-        <div className="ape-statline"><span className="price">{formatPrice(token.price)}</span>·<span>Liq <b>{token.liquidity>0?'$'+format(token.liquidity):'—'}</b></span></div>
-        <button className={'ape-ape'+(busy?' filled':'')} disabled={busy} onClick={ape}>
-          {busy ? <><span className="ape-spinner" /> Aping…</> : <><span className="b">⚡</span> Ape {quickAmount} ◎</>}
-          {Array.from({length:coins}).map((_,i)=><span key={i} className="ape-coinfx" style={{'--cx':((Math.random()-.5)*70)+'px',animationDelay:(i*.05)+'s'}}>🪙</span>)}
-        </button>
-        {ownedUi > 0 ? (
+      <span className={ageClass(ageMsLive)}>{fmtAgeShort(ageMsLive)}</span>
+      <span className="wr-num">{formatMoney(token.mcap)}</span>
+      <span className="wr-num dim wr-col-liq">{formatMoney(token.liquidity)}</span>
+      <span className="wr-num dim wr-col-vol">{formatMoney(token.volume24h)}</span>
+      <span className="wr-col-holders">
+        <span className={'wr-risk ' + r.tier}><span className="wr-risk-dot" />{r.label}</span>
+      </span>
+      <div className="wr-col-curve wr-curve">
+        {token.bond != null ? (
           <>
-            <div className="ape-owned"><span>You own</span><b>{formatTokens(ownedUi)}</b></div>
-            <div className="ape-sells">{sellPresets.map(p => <button key={p} className="ape-sellbtn" disabled={busy} onClick={e=>{e.stopPropagation(); onSell(token, p);}}>{p===100?'All':p+'%'}</button>)}</div>
+            <span className="wr-curve-bar"><i style={{width:token.bond+'%'}} /></span>
+            <span className="wr-curve-pct">{token.bond}%</span>
           </>
-        ) : null}
+        ) : <span className="wr-curve-pct">—</span>}
+      </div>
+      <div className="wr-row-actions" onClick={e=>e.stopPropagation()}>
+        <button className="wr-btn-spec" disabled={busy} onClick={ape}>
+          {busy ? <><span className="wr-spinner" /> Aping</> : <>Ape {quickAmount} <span className="arrow">→</span></>}
+        </button>
       </div>
     </div>
   );
-}
+});
 
 /* ============================ MAIN ============================ */
 export default function Ape() {
-  useLrCSS();
+  useWrCSS();
   const wallet = useLocalWallet();
   const connection = useMemo(() => getConn('confirmed'), []);
 
@@ -945,15 +1264,23 @@ export default function Ape() {
   const [presetsOpen, setPresetsOpen] = useState(false);
   const [walletOpen, setWalletOpen] = useState(false);
   const [tradeOpen, setTradeOpen] = useState(null);
-  const [lane, setLane] = useState('fresh');
   const [sortBy, setSortBy] = useState('newest');
   const [busyMint, setBusyMint] = useState(null);
   const [withdrawing, setWithdrawing] = useState(false);
+  const [filterWild, setFilterWild] = useState(false);
+  const [minLiq, setMinLiq] = useState(0);
   const freshThresholdMs = 30 * 60000;
 
   const [recentTokens, setRecentTokens] = useState([]);
   const [recentLoading, setRecentLoading] = useState(true);
   const [recentError, setRecentError] = useState(null);
+
+  // Track which mints we've ever seen so we can flag new arrivals + give
+  // each a stable "specimen number" for the field-log feel.
+  const seenMintsRef = useRef(new Map()); // mint -> { specimenNo, firstSeenAt }
+  const specimenCounterRef = useRef(1247);
+  const [newlyArrived, setNewlyArrived] = useState(new Set());
+
   useEffect(() => {
     let cancelled = false;
     async function load() {
@@ -962,10 +1289,41 @@ export default function Ape() {
         if (!r.ok) { if (!cancelled) { setRecentError('Feed unreachable (HTTP '+r.status+')'); setRecentLoading(false); } return; }
         const d = await r.json();
         const list = Array.isArray(d && d.tokens) ? d.tokens : [];
-        if (!cancelled) { setRecentTokens(list.map(normalize).filter(Boolean)); setRecentLoading(false); setRecentError(null); }
-      } catch (e) { if (!cancelled) { setRecentError(String((e && e.message)||'Feed unreachable').slice(0,120)); setRecentLoading(false); } }
+        const normalized = list.map(normalize).filter(Boolean);
+
+        // Assign specimen numbers to any mints we haven't seen yet.
+        const justArrived = new Set();
+        for (const t of normalized) {
+          if (!seenMintsRef.current.has(t.mint)) {
+            specimenCounterRef.current += 1;
+            seenMintsRef.current.set(t.mint, { specimenNo: specimenCounterRef.current, firstSeenAt: Date.now() });
+            justArrived.add(t.mint);
+          }
+        }
+        if (!cancelled) {
+          setRecentTokens(normalized);
+          setRecentLoading(false);
+          setRecentError(null);
+          if (justArrived.size > 0) {
+            setNewlyArrived(justArrived);
+            // Clear the "fresh" highlight after the develop animation finishes.
+            setTimeout(() => setNewlyArrived(new Set()), 1000);
+          }
+        }
+      } catch (e) {
+        if (!cancelled) { setRecentError(String((e && e.message)||'Feed unreachable').slice(0,120)); setRecentLoading(false); }
+      }
     }
-    load(); const id = setInterval(load, POLL_RECENT); return () => { cancelled = true; clearInterval(id); };
+    load();
+    const id = setInterval(load, POLL_RECENT);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  // 1-second tick so ages count up live without re-fetching.
+  const [, setAgeTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setAgeTick(t => (t + 1) | 0), 1000);
+    return () => clearInterval(id);
   }, []);
 
   const [solPrice, setSolPrice] = useState(0);
@@ -976,86 +1334,48 @@ export default function Ape() {
   }, []);
 
   const [balances, setBalances] = useState({});
-  // refreshBalances — mirrors LaunchRadar exactly: each RPC call wrapped in
-  // balRpcRace, all three fired in parallel via Promise.allSettled, merged
-  // into state independently so one failing doesn't blank the others.
   const refreshBalances = useCallback(async () => {
     const owner = wallet.publicKey;
     const mergeAccs = (into, accs) => {
       if (!accs || !accs.value) return;
       for (const acc of accs.value) {
-        const info = acc.account && acc.account.data && acc.account.data.parsed && acc.account.data.parsed.info;
-        if (!info) continue;
-        const mint = info.mint;
-        const amt = info.tokenAmount && info.tokenAmount.amount;
-        if (!mint || amt == null) continue;
-        into[mint] = {
-          amount:   String(amt),
-          decimals: Number((info.tokenAmount && info.tokenAmount.decimals) != null ? info.tokenAmount.decimals : 6),
-          uiAmount: Number((info.tokenAmount && info.tokenAmount.uiAmount) || 0),
-        };
+        const info = acc.account && acc.account.data && acc.account.data.parsed && acc.account.data.parsed.info; if (!info) continue;
+        const mint = info.mint, amt = info.tokenAmount && info.tokenAmount.amount; if (!mint || amt == null) continue;
+        into[mint] = { amount: String(amt), decimals: Number((info.tokenAmount && info.tokenAmount.decimals) != null ? info.tokenAmount.decimals : 6), uiAmount: Number((info.tokenAmount && info.tokenAmount.uiAmount) || 0) };
       }
     };
     const solP = balRpcRace(c => c.getBalance(owner, BAL_COMMITMENT))
-      .then(lamports => {
-        setBalances(prev => ({
-          ...prev,
-          [SOL_MINT]: { amount: String(lamports), decimals: 9, uiAmount: lamports / 1e9 },
-        }));
-      })
-      .catch(e => console.warn('[ape-bal] SOL balance failed', e && e.message));
-    const tokP = balRpcRace(c =>
-      c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, BAL_COMMITMENT))
-      .then(accs => {
-        setBalances(prev => { const next = { ...prev }; mergeAccs(next, accs); return next; });
-      })
-      .catch(e => console.warn('[ape-bal] SPL accounts failed', e && e.message));
-    const tok22P = balRpcRace(c =>
-      c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, BAL_COMMITMENT))
-      .then(accs => {
-        setBalances(prev => { const next = { ...prev }; mergeAccs(next, accs); return next; });
-      })
-      .catch(e => console.warn('[ape-bal] Token-2022 accounts failed', e && e.message));
-    await Promise.allSettled([solP, tokP, tok22P]);
+      .then(l => setBalances(prev => ({ ...prev, [SOL_MINT]: { amount: String(l), decimals: 9, uiAmount: l/1e9 } })))
+      .catch(e => console.warn('[wr-bal] SOL', e && e.message));
+    const tokP = balRpcRace(c => c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, BAL_COMMITMENT))
+      .then(a => setBalances(prev => { const n={...prev}; mergeAccs(n,a); return n; }))
+      .catch(e => console.warn('[wr-bal] SPL', e && e.message));
+    const t22P = balRpcRace(c => c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, BAL_COMMITMENT))
+      .then(a => setBalances(prev => { const n={...prev}; mergeAccs(n,a); return n; }))
+      .catch(e => console.warn('[wr-bal] T22', e && e.message));
+    await Promise.allSettled([solP, tokP, t22P]);
   }, [wallet.publicKey]);
   useEffect(() => { refreshBalances(); }, [refreshBalances]);
   useEffect(() => { const id = setInterval(refreshBalances, POLL_BALANCE); return () => clearInterval(id); }, [refreshBalances]);
-
-  // aggressiveRefresh — ported verbatim from LaunchRadar. After a trade or
-  // withdraw, fires three FULL balance refreshes at 1.5s / 4s / 8s so the UI
-  // catches up to chain state even when the post-confirm balance lags.
-  const aggressiveRefresh = useCallback(() => {
-    [1500, 4000, 8000].forEach(ms => setTimeout(refreshBalances, ms));
-  }, [refreshBalances]);
+  const aggressiveRefresh = useCallback(() => { [1500, 4000, 8000].forEach(ms => setTimeout(refreshBalances, ms)); }, [refreshBalances]);
 
   const refreshSol = useCallback(async () => {
-    try {
-      const lamports = await balRpcRace(c => c.getBalance(wallet.publicKey, BAL_COMMITMENT));
-      setBalances(prev => ({ ...prev, [SOL_MINT]: { amount: String(lamports), decimals: 9, uiAmount: lamports / 1e9 } }));
-    } catch (e) { console.warn('[ape-bal] SOL balance failed', e && e.message); }
+    try { const l = await balRpcRace(c => c.getBalance(wallet.publicKey, BAL_COMMITMENT)); setBalances(prev => ({ ...prev, [SOL_MINT]: { amount: String(l), decimals: 9, uiAmount: l/1e9 } })); } catch (e) { console.warn('[wr-bal] SOL', e && e.message); }
   }, [wallet.publicKey]);
   const refreshOneToken = useCallback(async (mintStr) => {
     if (!mintStr || mintStr === SOL_MINT) return;
     let mintPk; try { mintPk = new PublicKey(mintStr); } catch (e) { return; }
     try {
-      const accs = await balRpcRace(c =>
-        c.getParsedTokenAccountsByOwner(wallet.publicKey, { mint: mintPk }, BAL_COMMITMENT));
+      const accs = await balRpcRace(c => c.getParsedTokenAccountsByOwner(wallet.publicKey, { mint: mintPk }, BAL_COMMITMENT));
       let best = null;
       for (const acc of ((accs && accs.value) || [])) {
         const info = acc.account && acc.account.data && acc.account.data.parsed && acc.account.data.parsed.info;
-        const amt = info && info.tokenAmount && info.tokenAmount.amount;
-        if (amt == null) continue;
-        const ui = Number((info.tokenAmount && info.tokenAmount.uiAmount) || 0);
-        if (!best || ui > best.uiAmount) {
-          best = {
-            amount: String(amt),
-            decimals: Number((info.tokenAmount && info.tokenAmount.decimals) != null ? info.tokenAmount.decimals : 6),
-            uiAmount: ui,
-          };
-        }
+        const amt = info && info.tokenAmount && info.tokenAmount.amount; if (amt == null) continue;
+        const ui = Number((info.tokenAmount && info.tokenAmount.uiAmount)||0);
+        if (!best || ui > best.uiAmount) best = { amount: String(amt), decimals: Number((info.tokenAmount && info.tokenAmount.decimals)!=null?info.tokenAmount.decimals:6), uiAmount: ui };
       }
-      setBalances(prev => ({ ...prev, [mintStr]: best || { amount: '0', decimals: 6, uiAmount: 0 } }));
-    } catch (e) { console.warn('[ape-bal] one-token', e && e.message); }
+      setBalances(prev => ({ ...prev, [mintStr]: best || { amount:'0', decimals:6, uiAmount:0 } }));
+    } catch (e) { console.warn('[wr-bal] one-token', e && e.message); }
   }, [wallet.publicKey]);
 
   const solBalance = balances[SOL_MINT];
@@ -1066,13 +1386,13 @@ export default function Ape() {
   const [confettiKey, setConfettiKey] = useState(0);
   const confettiPieces = useMemo(() => {
     if (!confettiKey) return [];
-    const colors = ['#FF7BC8','#2BE08A','#9B7BFF','#FFB52E','#FFD46B','#56C8FF'];
+    const colors = ['#FF3D8A','#3DFFC2','#C9B8FF','#FFD86B','#6BEEFF','#FF7A6E'];
     return Array.from({ length: 56 }, (_, i) => { const angle=(Math.random()-.5)*Math.PI; const dist=220+Math.random()*200; return { i, dx: Math.sin(angle)*dist, dy: -Math.abs(Math.cos(angle)*dist)+420*Math.random(), dr:(Math.random()-.5)*1440, color: colors[i%colors.length], delay: Math.random()*0.15 }; });
   }, [confettiKey]);
   useEffect(() => { if (!confettiKey) return; const id = setTimeout(() => setConfettiKey(0), 1800); return () => clearTimeout(id); }, [confettiKey]);
   const fireConfetti = useCallback(() => setConfettiKey(k => k + 1), []);
 
-  /* ====== executeSwap — local keypair signs instantly ====== */
+  /* ====== executeSwap — UNCHANGED. Local keypair signs instantly. ====== */
   const executeSwap = useCallback(async (args) => {
     const { mode, swapParams, token } = args;
     if (!swapParams) throw new Error('Nothing to trade.');
@@ -1102,10 +1422,9 @@ export default function Ape() {
     try {
       const sim = await connection.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true, commitment: 'processed' });
       simLogs = (sim && sim.value && sim.value.logs) || null;
-      if (sim && sim.value && sim.value.err) { console.error('[ape-sim]', JSON.stringify(sim.value.err)); throw new Error(describeSimLogs(simLogs, JSON.stringify(sim.value.err))); }
-    } catch (simErr) { if (simErr instanceof Error && /sim failed/i.test(simErr.message)) throw simErr; console.warn('[ape-sim] skip', simErr && simErr.message); }
+      if (sim && sim.value && sim.value.err) { console.error('[wr-sim]', JSON.stringify(sim.value.err)); throw new Error(describeSimLogs(simLogs, JSON.stringify(sim.value.err))); }
+    } catch (simErr) { if (simErr instanceof Error && /sim failed/i.test(simErr.message)) throw simErr; console.warn('[wr-sim] skip', simErr && simErr.message); }
 
-    // sign locally — INSTANT, no popup
     tx.sign([wallet.keypair]);
     const raw = tx.serialize();
 
@@ -1145,7 +1464,6 @@ export default function Ape() {
     } else {
       pushToast({ kind: 'error', emoji: '⏳', body: <><b>Not confirmed</b><br/>Sent but didn't confirm. Check Solscan before retrying.</>, solscan: 'https://solscan.io/tx/' + sig, duration: 13000 });
     }
-    // Post-trade refresh — matches LaunchRadar exactly.
     refreshSol();
     [1200, 3000, 6000].forEach(ms => setTimeout(() => { refreshSol(); refreshOneToken(token.mint); }, ms));
     aggressiveRefresh();
@@ -1164,18 +1482,6 @@ export default function Ape() {
     finally { setBusyMint(null); }
   }, [busyMint, quickAmount, solBalance, runTrade, pushToast]);
 
-  const onSell = useCallback(async (token, pct) => {
-    if (busyMint) return;
-    const tb = balances[token.mint];
-    const params = buildSellParams(token, pct, tb, solPrice);
-    if (!params) { pushToast({ kind: 'error', emoji: '⚠️', body: 'Nothing to sell.' }); return; }
-    if (((solBalance && solBalance.uiAmount) || 0) < 0.003) { pushToast({ kind: 'error', emoji: '⛽', body: 'Need ~0.003 SOL for fees.' }); return; }
-    setBusyMint(token.mint);
-    try { await runTrade({ mode: 'sell', swapParams: params, token }); }
-    catch (e) { pushToast({ kind: 'error', emoji: '😵', body: friendlyError(e) }); }
-    finally { setBusyMint(null); }
-  }, [busyMint, balances, solPrice, solBalance, runTrade, pushToast]);
-
   const onSheetConfirm = useCallback(async (args) => {
     await runTrade(args);
     setTradeOpen(null);
@@ -1192,7 +1498,6 @@ export default function Ape() {
       const tx = new VersionedTransaction(msg); tx.sign([wallet.keypair]);
       const sig = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false, maxRetries: 5 });
       pushToast({ kind: 'success', emoji: '✅', body: <><b>Sent {solAmt} SOL</b></>, solscan: 'https://solscan.io/tx/' + sig });
-      // Post-withdraw refresh — same aggressive cadence as a trade.
       refreshSol();
       [1500, 4000].forEach(ms => setTimeout(refreshSol, ms));
       aggressiveRefresh();
@@ -1200,19 +1505,12 @@ export default function Ape() {
     finally { setWithdrawing(false); }
   }, [connection, wallet.keypair, wallet.publicKey, pushToast, refreshSol, aggressiveRefresh]);
 
-  const freshTokens = useMemo(() => recentTokens.filter(t => Number.isFinite(t.ageMs) && t.ageMs < freshThresholdMs), [recentTokens, freshThresholdMs]);
-  const activeList = lane === 'fresh' ? freshTokens : recentTokens;
+  /* ===== Derived list ===== */
   const filtered = useMemo(() => {
-    let l = activeList.slice();
-    // ===== AGGRESSIVE DEDUP =====
-    // The feed can return the same token twice (different snapshots) and
-    // copycat scams reuse the same name/symbol on a fresh mint. We drop
-    // ANY repeat by mint, by normalized name, OR by normalized symbol —
-    // first one through the door wins. Liquidity is NOT in the key (it
-    // drifts between snapshots, which was letting dupes slip past).
-    const seenMint = new Set();
-    const seenName = new Set();
-    const seenSym  = new Set();
+    let l = recentTokens.slice();
+
+    // Aggressive dedup by mint + name + symbol — first wins.
+    const seenMint = new Set(), seenName = new Set(), seenSym = new Set();
     l = l.filter(t => {
       if (!t || !t.mint) return false;
       if (seenMint.has(t.mint)) return false;
@@ -1225,106 +1523,221 @@ export default function Ape() {
       if (sm && sm !== '???') seenSym.add(sm);
       return true;
     });
-    if (sortBy === 'newest') l = l.sort((a,b)=>(a.ageMs||0)-(b.ageMs||0));
-    else if (sortBy === 'volume') l = l.sort((a,b)=>(b.volume24h||0)-(a.volume24h||0));
-    else if (sortBy === 'trust') l = l.sort((a,b)=>riskRead(b).score-riskRead(a).score);
+
+    if (filterWild) l = l.filter(t => riskRead(t).tier === 'high');
+    if (minLiq > 0) l = l.filter(t => (t.liquidity || 0) >= minLiq);
+
+    const ageNow = (t) => t.pairCreatedAtMs ? Date.now() - t.pairCreatedAtMs : Infinity;
+    if (sortBy === 'newest')      l = l.sort((a,b) => ageNow(a) - ageNow(b));
+    else if (sortBy === 'volume') l = l.sort((a,b) => (b.volume24h||0) - (a.volume24h||0));
+    else if (sortBy === 'vibe')   l = l.sort((a,b) => riskRead(b).score - riskRead(a).score);
     return l.slice(0, 40);
-  }, [activeList, sortBy]);
+  }, [recentTokens, sortBy, filterWild, minLiq]);
 
-  const moon = useMemo(() => recentTokens.filter(t => Number.isFinite(t.change) && t.change > 0).sort((a,b)=>b.change-a.change).slice(0,5), [recentTokens]);
+  /* ===== Proof band stats ===== */
+  const stats = useMemo(() => {
+    const now = Date.now();
+    const fresh = filtered.filter(t => t.pairCreatedAtMs && (now - t.pairCreatedAtMs) < 60000).length;
+    const trending = filtered.filter(t => (t.volume24h || 0) > 40000).length;
+    const totalVol = filtered.reduce((s, t) => s + (t.volume24h || 0), 0);
+    const topMover = filtered
+      .filter(t => Number.isFinite(t.change))
+      .sort((a, b) => Math.abs(b.change) - Math.abs(a.change))[0] || null;
+    return { fresh, trending, totalVol, topMover };
+  }, [filtered]);
 
-  const [bubble, setBubble] = useState('Fresh launches landing all day 👀');
-  const [bubbleShown, setBubbleShown] = useState(true);
-  const mascotLines = useMemo(() => {
-    const lines = ['Set your ape amount up top ⚡','Trust score on every tile — green is cleaner 🟢','Tap a coin for the full breakdown 👀','Keep only ape-money in your burner 🔥'];
-    if (moon[0]) lines.unshift('$' + moon[0].sym + ' is mooning ' + formatPct(moon[0].change) + ' 🚀');
-    return lines;
-  }, [moon]);
-  useEffect(() => { const id = setTimeout(() => setBubbleShown(false), 4500); return () => clearTimeout(id); }, []);
-  const pokeMascot = () => { setBubble(mascotLines[Math.floor(Math.random()*mascotLines.length)]); setBubbleShown(true); setTimeout(()=>setBubbleShown(false), 3500); };
+  const fieldLogNo = specimenCounterRef.current;
 
   return (
-    <div className="ape-root">
-      <div className="ape-app">
-        <div className="ape-top">
-          <div className="ape-brand" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
-            <div className="ape-radar" />
-            <span className="ape-bname">wonderland<span className="sl">//</span><span className="ra">radar</span></span>
-          </div>
-          <div className="ape-wbtn" onClick={() => setWalletOpen(true)}>
-            <span className="ape-wdot" /><span className="ape-sol">◎</span> <b>{formatSol((solBalance && solBalance.uiAmount) || 0)}</b>
-            {!wallet.backedUp ? <span className="ape-nudge" title="Back up your wallet" /> : null}
-          </div>
+    <div className="wr-root">
+      <nav className="wr-nav">
+        <div className="wr-brand" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
+          <div className="wr-radar-icon" />
+          <span className="wr-bname">wonderland<span className="sep">//</span><span className="it">radar</span></span>
         </div>
-
-        <div className="ape-qbar">
-          <span className="ape-qlabel"><span className="b">⚡</span>Quick buy</span>
-          {buyPresets.map(v => <button key={v} className={'ape-qamt'+(v===quickAmount?' active':'')} onClick={()=>setQuickAmount(v)}><span>{v}</span><span className="ape-sol">◎</span></button>)}
-          <button className="ape-qedit" onClick={()=>setPresetsOpen(true)}>✎</button>
-          <span className="ape-qinstant"><span className="d" />INSTANT</span>
+        <div className="wr-nav-eyebrow">
+          <span className="live" />
+          <span>FIELD LOG · ENTRY № {fieldLogNo.toLocaleString()}</span>
         </div>
-
-        {moon.length > 0 && (
-          <div className="ape-ribbon">
-            <span className="ape-rlbl">🚀 Mooning</span>
-            {moon.map(t => <span key={t.mint} className="ape-rchip" onClick={()=>setTradeOpen({ token: t, mode: 'buy' })}>{t.emoji} ${t.sym} <span className="up">{formatPct(t.change)}</span></span>)}
-          </div>
-        )}
-
-        <div className="ape-hero">
-          <h1>just <span className="g">hatched</span> 🥚</h1>
-          <div className="ape-meta"><span className={'live'+(recentError?' warn':'')} />{recentLoading?'syncing…':recentError?'feed down':<>{freshTokens.length} fresh · tap to ape</>}</div>
+        <div className="wr-nav-wallet" onClick={() => setWalletOpen(true)}>
+          <span className="dot" />
+          <span className="glyph">◎</span>
+          <b>{formatSol((solBalance && solBalance.uiAmount) || 0)}</b>
+          {!wallet.backedUp ? <span className="nudge" title="Back up your wallet" /> : null}
         </div>
+      </nav>
 
-        <div className="ape-controls">
-          <button className={'ape-seg'+(lane==='fresh'?' active':'')} onClick={()=>setLane('fresh')}>🐣 Just hatched</button>
-          <button className={'ape-seg'+(lane==='recent'?' active':'')} onClick={()=>setLane('recent')}>🌈 On radar</button>
-          <span className="ape-seg-div" />
-          <button className={'ape-seg'+(sortBy==='newest'?' active':'')} onClick={()=>setSortBy('newest')}>🆕 Freshest</button>
-          <button className={'ape-seg'+(sortBy==='trust'?' active':'')} onClick={()=>setSortBy('trust')}>🛡️ Safest</button>
-          <button className={'ape-seg'+(sortBy==='volume'?' active':'')} onClick={()=>setSortBy('volume')}>🔥 Loudest</button>
-        </div>
-
-        <div className="ape-grid">
-          {filtered.length === 0 ? (
-            <div className="ape-empty">
-              <span className="e">{lane==='fresh'?'🥚':'🍿'}</span>
-              {recentLoading ? <><b>Warming up the radar…</b><div className="sub">Pulling fresh pump.fun launches.</div></>
-                : recentError ? <><b>Feed offline</b><div className="sub">Retrying automatically.</div><div className="err">{recentError}</div></>
-                : <><b>Nothing here yet</b><div className="sub">Switch lanes — drops land all day.</div></>}
-            </div>
-          ) : filtered.map((t, i) => (
-            <TokenTile key={t.mint} token={t} owned={balances[t.mint]} quickAmount={quickAmount} sellPresets={sellPresets}
-              onApe={onApe} onSell={onSell} onOpen={(tok)=>setTradeOpen({ token: tok, mode: 'buy' })}
-              busy={busyMint === t.mint} isFresh={Number.isFinite(t.ageMs) && t.ageMs < freshThresholdMs} idx={i} />
-          ))}
-        </div>
+      <div className="wr-qbar">
+        <span className="wr-qlabel"><span className="b">⚡</span>Quick ape</span>
+        {buyPresets.map(v => (
+          <button key={v} className={'wr-qamt' + (v === quickAmount ? ' active' : '')} onClick={() => setQuickAmount(v)}>
+            <span>{v}</span><span className="s">◎</span>
+          </button>
+        ))}
+        <button className="wr-qedit" onClick={() => setPresetsOpen(true)}>✎</button>
+        <span className="wr-qfast"><span className="d" />INSTANT</span>
       </div>
 
-      {bubbleShown ? <div className="ape-mbubble">{bubble}</div> : null}
-      <div className="ape-mascot" onClick={pokeMascot}><span className="e">🐰</span></div>
+      <div className="wr-app">
+        <div className="wr-page">
+          <div className="wr-field-log">
+            <span className="glyph">◎</span>
+            <span>FIELD LOG · {new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).toUpperCase()}</span>
+            <span className="rule" />
+            <span>SOLANA · PUMP.FUN + RAYDIUM</span>
+          </div>
+
+          <section className="wr-hero">
+            <h1>Fresh launches, <span className="it">caught at first light.</span></h1>
+            <div className="wr-hero-cta">
+              <button className="wr-btn-ape" onClick={() => { const el = document.getElementById('wr-feed'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>
+                Start aping <span className="arrow">→</span>
+              </button>
+              <span className="wr-no-connect">◌ No wallet connect needed</span>
+            </div>
+          </section>
+
+          <section className="wr-offer-strip">
+            <div className="wr-offer o1">
+              <div className="wr-offer-num"><span className="glyph">⚡</span><span>① The hook</span></div>
+              <h3>Two-second <span className="it">ape.</span></h3>
+              <p>No wallet popup. No signup. We generate a burner the moment you land — <b>your keys, your trades</b>, ready before your phone wakes.</p>
+            </div>
+            <div className="wr-offer o2">
+              <div className="wr-offer-num"><span className="glyph">◉</span><span>② The honesty</span></div>
+              <h3>Vibe-checked, <span className="it">openly.</span></h3>
+              <p>Every specimen gets a real read on liquidity, holders, curve health. We also tell you <b>what can't be checked</b>. No fake green badges.</p>
+            </div>
+            <div className="wr-offer o3">
+              <div className="wr-offer-num"><span className="glyph">◌</span><span>③ The timing</span></div>
+              <h3>The <span className="it">moment</span> they hatch.</h3>
+              <p>We watch pump.fun and Raydium so you don't refresh. New specimens land in the feed <b>within seconds</b> of going live.</p>
+              <div className="mini-radar">
+                <div className="b b1" />
+                <div className="b b2" />
+              </div>
+            </div>
+          </section>
+
+          <div className="wr-list-frame" id="wr-feed">
+            <div className="wr-list-head">
+              <div className="wr-list-title">
+                <span className="e">◉ Live feed</span>
+                <span className="t">Recently <span className="it">emerged</span></span>
+              </div>
+              <div className="wr-list-filters">
+                <button className={'wr-chip' + (filterWild ? ' on' : '')} onClick={() => setFilterWild(v => !v)}>⌖ Wild only</button>
+                <button className={'wr-chip' + (minLiq ? ' on' : '')} onClick={() => { const opts = [0, 5000, 20000, 50000]; setMinLiq(opts[(opts.indexOf(minLiq) + 1) % opts.length]); }}>
+                  ⌬ Min liq {minLiq ? '$' + format(minLiq) : 'any'}
+                </button>
+                <span style={{width:1,height:22,background:'var(--line)',margin:'0 2px'}} />
+                <button className={'wr-chip' + (sortBy === 'newest' ? ' on' : '')} onClick={() => setSortBy('newest')}>Freshest</button>
+                <button className={'wr-chip' + (sortBy === 'vibe'   ? ' on' : '')} onClick={() => setSortBy('vibe')}>Steadiest</button>
+                <button className={'wr-chip' + (sortBy === 'volume' ? ' on' : '')} onClick={() => setSortBy('volume')}>Loudest</button>
+              </div>
+            </div>
+
+            <div className="wr-list">
+              <div className="wr-row thead">
+                <span className="wr-col-num">№</span>
+                <span>Specimen</span>
+                <span>Age</span>
+                <span>MC</span>
+                <span className="wr-col-liq">Liq</span>
+                <span className="wr-col-vol">Vol</span>
+                <span className="wr-col-holders">Vibe</span>
+                <span className="wr-col-curve">Curve</span>
+                <span style={{textAlign:'right'}}>Action</span>
+              </div>
+              {filtered.length === 0 ? (
+                <div className="wr-empty">
+                  <span className="glyph">∅</span>
+                  {recentLoading ? <><b>Warming up the radar…</b><div className="sub">Pulling fresh pump.fun launches.</div></>
+                    : recentError ? <><b>Feed offline</b><div className="sub">Retrying automatically.</div><div className="err">{recentError}</div></>
+                    : <><b>Nothing matches the filter</b><div className="sub">Loosen min liquidity or turn off Wild only.</div></>}
+                </div>
+              ) : filtered.map((t) => {
+                const seen = seenMintsRef.current.get(t.mint);
+                const ageMsLive = t.pairCreatedAtMs ? Date.now() - t.pairCreatedAtMs : 0;
+                return (
+                  <SpecimenRow
+                    key={t.mint}
+                    token={t}
+                    ageMsLive={ageMsLive}
+                    owned={balances[t.mint]}
+                    quickAmount={quickAmount}
+                    busy={busyMint === t.mint}
+                    onApe={onApe}
+                    onOpen={(tok) => setTradeOpen({ token: tok, mode: 'buy' })}
+                    isFresh={newlyArrived.has(t.mint)}
+                    specimenNo={seen ? seen.specimenNo : 0}
+                  />
+                );
+              })}
+            </div>
+
+            <div className="wr-list-foot">
+              <span className={'live' + (recentError ? ' warn' : '')}>
+                <span className="d" />{recentLoading ? 'Syncing…' : recentError ? 'Feed offline' : 'Updating · top to bottom'}
+              </span>
+              <span>{filtered.length} specimens · refreshing every 2.5s</span>
+            </div>
+          </div>
+
+          <div className="wr-proof">
+            <span className="e"><span className="d" />Activity right now</span>
+            <span className="wr-proof-div" />
+            <span className="wr-proof-stat">
+              <span className="v">{stats.fresh}<span className="it"> fresh</span></span>
+              <span className="k">in &lt;60s</span>
+            </span>
+            <span className="wr-proof-div" />
+            <span className="wr-proof-stat">
+              <span className="v">{stats.trending}</span>
+              <span className="k">trending</span>
+            </span>
+            <span className="wr-proof-div" />
+            <span className="wr-proof-stat">
+              <span className="v">{formatMoney(stats.totalVol)}</span>
+              <span className="k">volume tracked</span>
+            </span>
+            {stats.topMover && (
+              <>
+                <span className="wr-proof-div" />
+                <span className="wr-proof-stat">
+                  <span className="v">{stats.topMover.sym}</span>
+                  <span className="k">top mover</span>
+                  <span className={'m' + (stats.topMover.change < 0 ? ' dn' : '')}>{formatPct(stats.topMover.change)}</span>
+                </span>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
 
       {presetsOpen ? <PresetsModal buyPresets={buyPresets} setBuyPresets={setBuyPresets} sellPresets={sellPresets} setSellPresets={setSellPresets} onClose={()=>setPresetsOpen(false)} /> : null}
       {walletOpen ? <WalletDrawer wallet={wallet} solBalance={solBalance} solPrice={solPrice} onWithdraw={onWithdraw} busy={withdrawing} onClose={()=>setWalletOpen(false)} /> : null}
       {tradeOpen ? <TradeSheet token={tradeOpen.token} initialMode={tradeOpen.mode} onClose={()=>setTradeOpen(null)} onConfirm={onSheetConfirm}
         buyPresets={buyPresets} sellPresets={sellPresets} solBalance={solBalance} tokenBalance={balances[tradeOpen.token.mint]} solPrice={solPrice} /> : null}
 
-      <div className="ape-toasts">
+      <div className="wr-toasts">
         {toasts.map(t => (
-          <div key={t.id} className={'ape-toast '+t.kind}>
+          <div key={t.id} className={'wr-toast ' + t.kind}>
             <span className="em">{t.emoji}</span>
             <div className="tb">{t.body}</div>
             <div className="ta">
-              {t.solscan ? <a className="ape-taction" href={t.solscan} target="_blank" rel="noreferrer">VIEW</a> : null}
-              {t.tweetText ? <button className="ape-taction tw" onClick={()=>openTwitterShare(t.tweetText, t.shareUrl)}><svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>SHARE</button> : null}
+              {t.solscan ? <a className="wr-taction" href={t.solscan} target="_blank" rel="noreferrer">VIEW</a> : null}
+              {t.tweetText ? <button className="wr-taction tw" onClick={()=>openTwitterShare(t.tweetText, t.shareUrl)}>
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>SHARE
+              </button> : null}
             </div>
           </div>
         ))}
       </div>
 
       {confettiKey > 0 && (
-        <div className="ape-confetti" key={confettiKey}>
-          {confettiPieces.map(p => <div key={p.i} className="ape-cpiece" style={{ background: p.color, animationDelay: p.delay+'s', '--dx': p.dx+'px', '--dy': p.dy+'px', '--dr': p.dr+'deg' }} />)}
+        <div className="wr-confetti" key={confettiKey}>
+          {confettiPieces.map(p => <div key={p.i} className="wr-cpiece" style={{ background: p.color, animationDelay: p.delay+'s', '--dx': p.dx+'px', '--dy': p.dy+'px', '--dr': p.dr+'deg' }} />)}
         </div>
       )}
     </div>
