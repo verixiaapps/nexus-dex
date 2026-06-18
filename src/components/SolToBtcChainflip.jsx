@@ -1,3 +1,4 @@
+```jsx
 /**
  * NEXUS · SolToBtcChainflip.jsx
  * SOL → Native BTC via Chainflip (single-signature, two-tx atomic flow).
@@ -9,9 +10,8 @@
  *   - channel → /api/chainflip/channel  (POST quote+addrs)
  *   - status  → /api/chainflip/status?id=<depositChannelId>
  *
- * RPC: local public-RPC pool with race-fallback. No reliance on the app
- * ConnectionProvider, so this page survives even if app-level RPC is
- * misconfigured / paid endpoint missing.
+ * RPC: single dRPC endpoint, no fallbacks. Reads REACT_APP_DRPC_RPC_URL
+ * as a full URL with the api key embedded.
  */
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
@@ -216,31 +216,24 @@ const LAMPORTS_PER_SOL = 1_000_000_000;
 const SATS_PER_BTC     = 1e8;
 const MAX_RESERVE_LAMPORTS = 10_000_000;
 
-// PUBLIC FREE RPCs ONLY.
-const RPC_POOL = [
-  'https://solana-rpc.publicnode.com',
-  'https://solana.drpc.org',
-  'https://rpc.ankr.com/solana',
-  'https://api.mainnet-beta.solana.com',
-];
+// dRPC single endpoint — no fallbacks.
+// REACT_APP_DRPC_RPC_URL holds the FULL URL with key embedded.
+const RPC_URL = process.env.REACT_APP_DRPC_RPC_URL || '';
 
 const _connCache = new Map();
-const getConn = (url, commitment) => {
-  const key = url + '|' + commitment;
-  let c = _connCache.get(key);
-  if (!c) { c = new Connection(url, commitment); _connCache.set(key, c); }
+const getConn = (commitment) => {
+  let c = _connCache.get(commitment);
+  if (!c) { c = new Connection(RPC_URL, commitment); _connCache.set(commitment, c); }
   return c;
 };
 
-// Race all RPCs; rejects only when ALL fail.
+// Single-RPC wrapper. Same `(label, op) => Promise` signature so all
+// existing rpcRace(...) call sites work unchanged.
 const rpcRace = (label, op, commitment = 'confirmed') => {
-  const conns = RPC_POOL.map(u => getConn(u, commitment));
-  return Promise.any(conns.map((c, i) =>
-    op(c).catch(e => {
-      console.warn(`[rpc] ${label} failed on ${RPC_POOL[i]}:`, e?.message);
-      throw e;
-    })
-  )).catch(() => { throw new Error(`${label}: all RPCs failed`); });
+  return op(getConn(commitment)).catch(e => {
+    console.warn(`[rpc] ${label} failed:`, e?.message);
+    throw new Error(`${label}: dRPC failed`);
+  });
 };
 
 // =====================================================================
@@ -385,9 +378,8 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
 
   const { publicKey, connected, signAllTransactions } = useWallet();
 
-  // Local connection from the public RPC pool — independent of app-level
-  // ConnectionProvider so this page works on free RPCs regardless of app config.
-  const connection = useMemo(() => getConn(RPC_POOL[0], 'confirmed'), []);
+  // Single dRPC connection — independent of app-level ConnectionProvider.
+  const connection = useMemo(() => getConn('confirmed'), []);
 
   const [solAmount, setSolAmount] = useState('');
   const [btcAddr,   setBtcAddr]   = useState(() => {
@@ -425,8 +417,7 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
     return () => { alive = false; clearInterval(id); };
   }, []);
 
-  // SOL balance — uses RPC pool race so any one of the four endpoints
-  // working is enough. Resets to 'fail' only when ALL four reject.
+  // SOL balance — uses dRPC. Sets 'fail' if the endpoint rejects.
   const refreshBalance = useCallback(async () => {
     if (!publicKey) {
       setSolBalance(null);
@@ -579,7 +570,6 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
       const owner = publicKey;
 
       setSubmit({ kind: 'loading', message: 'Building transactions…' });
-      // Use rpcRace for blockhash so any working RPC unblocks us.
       const { blockhash, lastValidBlockHeight } = await rpcRace(
         'getLatestBlockhash',
         c => c.getLatestBlockhash('confirmed'),
