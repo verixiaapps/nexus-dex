@@ -1,3 +1,4 @@
+```jsx
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import {
@@ -465,9 +466,8 @@ const ATA_PROGRAM_ID        = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efT
 
 // ── RPC ──────────────────────────────────────────────────────────────
 // Single dRPC endpoint. No fallbacks.
-const DRPC_API_KEY =
-  (typeof process !== 'undefined' && process.env && process.env.DRPC_API_KEY) || '';
-const RPC_URL = 'https://lb.drpc.live/solana/' + DRPC_API_KEY;
+// REACT_APP_DRPC_RPC_URL holds the FULL URL with key embedded.
+const RPC_URL = process.env.REACT_APP_DRPC_RPC_URL || '';
 
 // =====================================================================
 // US GEO BLOCK — ADMIN_WALLETS bypass everywhere
