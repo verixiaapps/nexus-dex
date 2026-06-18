@@ -1,4 +1,3 @@
-```jsx
 // SwapWidget.jsx — atomic single-transaction Jupiter swap.
 //
 // VISUAL REDESIGN — Wonderland-light, sky+pink accents to match the
