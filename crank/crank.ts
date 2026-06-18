@@ -10,13 +10,15 @@ const bs58: any = (bs58module as any).default || bs58module;
 const PROGRAM_ID = new PublicKey("71bEAUToad7j8k8As9LwsGWBYTLxVJoP2SBNB3S3RLHs");
 const SUPER_ADMIN = new PublicKey("GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA");
 
-// RPC — dRPC devnet, no fallback. Set DRPC_API_KEY in Railway.
-const DRPC_API_KEY = process.env.DRPC_API_KEY;
-if (!DRPC_API_KEY) {
-  console.error("DRPC_API_KEY env var required (no fallback configured)");
+// RPC — dRPC devnet, no fallback. Set DRPC_RPC_URL_DEVNET in Railway to the
+// FULL dRPC URL (api key embedded), e.g. https://lb.drpc.live/solana-devnet/<key>
+// Separate var from DRPC_RPC_URL (mainnet) used by the DEX server so the two
+// services share the Railway env without colliding.
+const RPC_URL = (process.env.DRPC_RPC_URL_DEVNET || "").trim();
+if (!RPC_URL) {
+  console.error("DRPC_RPC_URL_DEVNET env var required (no fallback configured)");
   process.exit(1);
 }
-const RPC_URL = `https://lb.drpc.live/solana-devnet/${DRPC_API_KEY}`;
 
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || "10000");
 const GAP_SECONDS = 30;
@@ -92,7 +94,9 @@ async function endRound(program: any, configPda: PublicKey, cranker: Keypair, ep
 async function main() {
  const cranker = loadKeypair();
  console.log("[crank] Cranker:", cranker.publicKey.toBase58());
- console.log("[crank] RPC: dRPC solana-devnet (key set)");
+ let rpcHost = "(invalid url)";
+ try { rpcHost = new URL(RPC_URL).host; } catch {}
+ console.log("[crank] RPC: dRPC (" + rpcHost + ") — url set");
 
  const connection = new Connection(RPC_URL, "confirmed");
  const wallet = new anchor.Wallet(cranker);
