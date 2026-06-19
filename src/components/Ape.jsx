@@ -75,7 +75,7 @@ const WR_CSS = `
 .wr-page{padding:24px 28px 80px}
 @media(max-width:768px){.wr-page{padding:16px 14px 80px}}
 
-.wr-nav{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:14px 28px 0;background:transparent}
+.wr-nav{position:sticky;top:0;z-index:60;display:flex;align-items:center;gap:18px;padding:14px 28px;background:rgba(14,11,31,.7);backdrop-filter:blur(20px) saturate(140%);border-bottom:1px solid var(--line)}
 .wr-brand{display:flex;align-items:center;gap:11px;cursor:pointer}
 .wr-radar-icon{position:relative;width:30px;height:30px;border-radius:50%;border:1px solid rgba(107,238,255,.4);background:radial-gradient(circle,rgba(107,238,255,.15),transparent 70%);overflow:hidden;flex-shrink:0}
 .wr-radar-icon::before{content:'';position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 0deg,transparent 0 280deg,var(--cyan) 350deg,transparent 360deg);animation:wr-sweep 3.5s linear infinite;opacity:.7}
@@ -93,9 +93,7 @@ const WR_CSS = `
 .wr-nav-wallet .glyph{color:var(--butter);font-weight:800}
 .wr-nav-wallet .dot{width:6px;height:6px;border-radius:50%;background:var(--mint);box-shadow:0 0 8px var(--mint)}
 .wr-nav-wallet .nudge{position:absolute;top:-3px;right:-3px;width:10px;height:10px;border-radius:50%;background:var(--butter);border:2px solid var(--iris);box-shadow:0 0 6px var(--butter)}
-@media(max-width:768px){.wr-nav{padding:12px 14px 0;gap:6px}.wr-nav-stats span:not(.gl){display:none}.wr-nav-stats{padding:0 11px}.wr-nav-burner span:not(.gl){display:inline}}
-.wr-nav-burner{position:relative}
-.wr-burner-nudge{position:absolute;top:-3px;right:-3px;width:9px;height:9px;border-radius:50%;background:var(--butter);border:2px solid var(--bg);box-shadow:0 0 6px var(--butter)}
+@media(max-width:768px){.wr-nav{padding:12px 14px;gap:10px}.wr-nav-eyebrow{display:none}.wr-nav-stats span:not(.gl){display:none}.wr-nav-stats{padding:0 11px}}
 
 .wr-qbar{position:sticky;top:54px;z-index:55;display:flex;align-items:center;gap:8px;padding:10px 28px;background:rgba(14,11,31,.85);backdrop-filter:blur(18px);border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none}
 .wr-qbar::-webkit-scrollbar{display:none}
@@ -3171,11 +3169,12 @@ export default function Ape({ mainWalletPubkey } = {}) {
 
   return (
     <div className="wr-root">
-      {/* Slim action-chip row. No brand, no eyebrow, no duplicate wallet pill —
-          the outer app shell already provides all three. Just the functional
-          buttons users need from inside Ape (open Stats, open Auto-trade,
-          open the burner-wallet drawer). */}
-      <div className="wr-nav">
+      <nav className="wr-nav">
+        <div className="wr-brand" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
+          <div className="wr-radar-icon" />
+          <span className="wr-bname">wonderland<span className="sep">//</span><span className="it">radar</span></span>
+        </div>
+        <div className="wr-nav-eyebrow"><span className="live" /><span>FIELD LOG · ENTRY № {fieldLogNo.toLocaleString()}</span></div>
         <button className="wr-nav-stats" onClick={() => setStatsOpen(true)}>
           <span className="gl">§</span><span>STATS</span>
         </button>
@@ -3183,12 +3182,12 @@ export default function Ape({ mainWalletPubkey } = {}) {
           <span className="gl" style={{color: auto.enabled && !auto.paused ? 'var(--mint)' : auto.paused ? 'var(--butter)' : 'var(--cyan)'}}>⚡</span>
           <span>AUTO{auto.enabled && !auto.paused ? ' · ON' : auto.paused ? ' · PAUSED' : ''}</span>
         </button>
-        <button className="wr-nav-stats wr-nav-burner" onClick={() => setWalletOpen(true)}>
-          <span className="gl" style={{color:'var(--butter)'}}>◎</span>
-          <span>{formatSol((solBalance && solBalance.uiAmount) || 0)}</span>
-          {!wallet.backedUp ? <span className="wr-burner-nudge" title="Back up your burner wallet" /> : null}
-        </button>
-      </div>
+        <div className="wr-nav-wallet" onClick={() => setWalletOpen(true)}>
+          <span className="dot" /><span className="glyph">◎</span>
+          <b>{formatSol((solBalance && solBalance.uiAmount) || 0)}</b>
+          {!wallet.backedUp ? <span className="nudge" title="Back up your wallet" /> : null}
+        </div>
+      </nav>
 
       <div className="wr-qbar">
         <span className="wr-qlabel"><span className="b">⚡</span>Quick buy</span>
