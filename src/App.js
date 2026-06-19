@@ -313,8 +313,6 @@ function HomeBelow({ onSwitchTab }) {
         <span>Powered by</span>
         <span style={{ color: C.ink, fontWeight: 800 }}>JUPITER</span>
         <span style={{ color: C.ink3, opacity: 0.5 }}>·</span>
-        <span style={{ color: C.ink, fontWeight: 800 }}>LI.FI</span>
-        <span style={{ color: C.ink3, opacity: 0.5 }}>·</span>
         <span style={{ color: C.ink, fontWeight: 800 }}>CHAINALYSIS</span>
       </div>
 
@@ -405,7 +403,6 @@ function HomeBelow({ onSwitchTab }) {
           background: 'linear-gradient(120deg,#A0E7FF,#FF8FBE)',
           WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent',
         }}>Always.</em>
-        <br />Sanctions-screened via Chainalysis · Open-source UI
       </div>
     </div>
   );
@@ -911,7 +908,6 @@ const NAV_TABS = [
   { id: 'swap', label: 'Swap' }, { id: 'launchradar', label: 'Radar' }, { id: 'ape', label: 'Ape' },
   { id: 'wonderland', label: 'Wonder' }, { id: 'markets', label: 'Markets' }, { id: 'flipsy', label: 'Flipsy' },
   { id: 'holdings', label: 'Bags' },
-  { id: 'getstarted', label: 'Wallet' },
 ];
 
 // =====================================================================
@@ -1128,4 +1124,3 @@ function AppInner() {
 }
 
 export default function App() { return (<BrowserRouter><AppInner /></BrowserRouter>); }
- 
