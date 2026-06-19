@@ -1,9 +1,13 @@
 // referrals.js — Wonderland Radar growth layer.
 //
-// MOUNT (one line in server.js, e.g. near the bottom, before the catch-all
-// 404 handler):
+// MOUNT (one line in server.js, before the catch-all 404 handler):
 //
-//     require('./referrals')(app);
+//     require('./referrals')(app, { rpcUrl: DRPC_RPC_URL });
+//
+// The `rpcUrl` option is optional — without it, the honeypot-check endpoint
+// falls back to SOLANA_RPC_URL / ALCHEMY_SOLANA_URL / DRPC_RPC_URL env vars,
+// finally to public mainnet RPC (rate-limited and slow). Pass your existing
+// Alchemy URL for speed.
 //
 // WHAT IT DOES:
 //   - Tracks the referrer for each trader wallet, locked on first visit.
@@ -125,7 +129,8 @@ function _refSplitBpsForReferrer(referrer) {
 }
 
 // ── mount ─────────────────────────────────────────────────────────
-function mount(app) {
+function mount(app, options) {
+  const opts = options || {};
 
   // POST /api/ref/register
   //   { wallet, referrer?, boost? }
@@ -492,10 +497,14 @@ function mount(app) {
   const SPL_TOKEN_PROGRAM  = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
   const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 
-  // Use whichever RPC the rest of server.js uses. Falls back to public.
-  const RPC_URL = process.env.SOLANA_RPC_URL
-                || process.env.ALCHEMY_SOLANA_URL
-                || 'https://api.mainnet-beta.solana.com';
+  // RPC URL resolution: passed option wins, then env vars, then public fallback.
+  // server.js exposes its already-resolved URL as DRPC_RPC_URL — passing it as
+  // an option via `mount(app, { rpcUrl: DRPC_RPC_URL })` is the cleanest path.
+  const RPC_URL = opts.rpcUrl
+               || process.env.SOLANA_RPC_URL
+               || process.env.ALCHEMY_SOLANA_URL
+               || process.env.DRPC_RPC_URL
+               || 'https://api.mainnet-beta.solana.com';
 
   async function rpcGetAccountInfo(mint) {
     const r = await fetch(RPC_URL, {
