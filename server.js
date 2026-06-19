@@ -1637,6 +1637,18 @@ app.get('/api/debug/wallet/:wallet', async (req, res) => {
   res.json(out);
 });
 
+/* ========================================================================
+ * Referrals + P&L + leaderboard + honeypot check
+ *
+ * Mounts: /api/ref/register, /api/ref/lookup, /api/ref/log-trade,
+ *         /api/ref/stats, /api/ref/leaderboard, /api/ref/pnl,
+ *         /share/:wallet, /api/honeypot-check/:mint
+ *
+ * Persists to ./data/referrals.json. Edit KOL_BOOST_CODES inside referrals.js
+ * to onboard new boosted referrers.
+ * ===================================================================== */
+require('./referrals')(app, { rpcUrl: DRPC_RPC_URL });
+
 app.all('/api/*', (req, res) => res.status(404).json({ error: 'API route not found: ' + req.path }));
 
 /* ========================================================================
