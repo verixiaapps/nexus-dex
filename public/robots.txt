@@ -1,0 +1,17 @@
+User-agent: *
+Allow: /
+
+# Admin + internal
+Disallow: /flipsy-admin.html
+Disallow: /admin
+Disallow: /admin/
+
+# API + embed widgets
+Disallow: /api/
+Disallow: /embed/
+
+# Tracking params
+Disallow: /*?*ref=
+Disallow: /*?*utm_
+
+Sitemap: https://swap.verixiaapps.com/nexus-sitemap.xml
