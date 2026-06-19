@@ -13,6 +13,7 @@
 //   GET  /api/ref/leaderboard   standings (24h/7d/all)
 //   GET  /api/ref/pnl           personal field log
 //   GET  /share/:wallet         OG-unfurl + redirect with ?ref locked in
+//   GET  /api/dex/chart/:mint?tf=5m   NEW — pair price history (see TokenChart)
 //
 // On-chain fee splitting: 70/30 default (50/50 boosted). The referrer's share
 // is a second SystemProgram.transfer instruction in the SAME signed tx as the
@@ -123,6 +124,39 @@ const WR_CSS = `
 .wr-no-connect{display:inline-flex;align-items:center;gap:7px;font-family:'JetBrains Mono';font-size:10.5px;font-weight:700;letter-spacing:.6px;color:var(--mint);padding:6px 11px;border-radius:999px;background:var(--mint-soft);border:1px solid rgba(61,255,194,.2)}
 @media(max-width:768px){.wr-hero h1{font-size:32px}.wr-hero{flex-direction:column;align-items:flex-start;gap:14px}}
 
+/* ── NEW: Returning-user lure (replaces hero+offers for repeat visits) ── */
+.wr-lure{display:flex;align-items:center;gap:14px;padding:14px 0 16px;border-bottom:1px solid var(--line);margin-bottom:18px;animation:wr-rise .35s cubic-bezier(.2,1,.3,1)}
+.wr-lure-text{flex:1;min-width:0}
+.wr-lure-h{font-family:'Fraunces';font-weight:500;font-size:24px;letter-spacing:-.015em;line-height:1.1;font-variation-settings:"opsz" 96}
+.wr-lure-h .it{font-style:italic;font-weight:400;color:var(--cyan)}
+.wr-lure-s{font-family:'JetBrains Mono';font-size:10.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--ink3);margin-top:5px}
+.wr-lure-s b{color:var(--mint);font-weight:800}
+.wr-lure-intro{display:inline-flex;align-items:center;gap:6px;font-family:'JetBrains Mono';font-size:10px;font-weight:800;letter-spacing:.8px;color:var(--ink2);background:var(--vapor);border:1px solid var(--line);padding:8px 12px;border-radius:8px;flex-shrink:0;cursor:pointer;transition:.14s}
+.wr-lure-intro:hover{color:var(--cyan);border-color:rgba(107,238,255,.32)}
+.wr-lure-close{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;background:var(--vapor);border:1px solid var(--line);color:var(--ink2);font-family:initial;font-size:14px;cursor:pointer;flex-shrink:0}
+.wr-lure-close:hover{color:var(--ink);border-color:var(--line2)}
+@media(max-width:768px){.wr-lure-h{font-size:20px}.wr-lure-s{font-size:9.5px}}
+
+/* ── NEW: Open positions strip ── */
+.wr-positions{background:linear-gradient(135deg,rgba(155,123,255,.10),rgba(25,19,47,.7));border:1px solid rgba(155,123,255,.25);border-radius:16px;overflow:hidden;margin-bottom:22px;animation:wr-rise .4s cubic-bezier(.2,1,.3,1)}
+.wr-positions-head{padding:11px 16px 8px;display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.wr-positions-head .e{font-family:'JetBrains Mono';font-size:9.5px;font-weight:800;letter-spacing:1.3px;text-transform:uppercase;color:var(--lavender)}
+.wr-positions-head .roll{font-family:'JetBrains Mono';font-size:10px;font-weight:700;color:var(--ink2)}
+.wr-positions-head .roll b{color:var(--mint);font-weight:800}
+.wr-positions-head .roll b.dn{color:var(--coral)}
+.wr-pos-strip-row{padding:8px 16px;display:flex;align-items:center;gap:12px;border-top:1px solid rgba(155,123,255,.12)}
+.wr-pos-strip-av{flex-shrink:0;width:26px;height:26px;border-radius:7px;display:grid;place-items:center;font-family:'Fraunces';font-weight:700;font-size:11px;color:#fff;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.3)}
+.wr-pos-strip-av img{width:100%;height:100%;object-fit:cover}
+.wr-pos-strip-sym{font-family:'Fraunces';font-weight:600;font-size:13.5px;letter-spacing:-.005em;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wr-pos-strip-pnl{font-family:'JetBrains Mono';font-weight:700;font-size:12px;color:var(--mint);letter-spacing:.2px}
+.wr-pos-strip-pnl.dn{color:var(--coral)}
+.wr-pos-strip-pnl.dim{color:var(--ink3);font-weight:500}
+.wr-pos-strip-pct{font-family:'JetBrains Mono';font-size:10.5px;font-weight:700;color:var(--ink2);min-width:50px;text-align:right;letter-spacing:.2px}
+.wr-pos-strip-pct.up{color:var(--mint)}
+.wr-pos-strip-pct.dn{color:var(--coral)}
+.wr-positions-foot{padding:8px 16px 10px;font-family:'JetBrains Mono';font-size:9.5px;font-weight:800;letter-spacing:.7px;text-transform:uppercase;color:var(--lavender);text-align:right;border-top:1px solid rgba(155,123,255,.12);cursor:pointer;background:none;border-left:none;border-right:none;border-bottom:none;width:100%;display:block}
+.wr-positions-foot:hover{color:var(--ink)}
+
 .wr-offer-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:28px}
 .wr-offer{position:relative;overflow:hidden;background:linear-gradient(180deg,var(--plum),rgba(25,19,47,.6));border:1px solid var(--line);border-radius:18px;padding:22px 22px 20px;transition:border-color .2s}
 .wr-offer:hover{border-color:var(--line2)}
@@ -151,6 +185,16 @@ const WR_CSS = `
 .wr-list-title .e{font-family:'JetBrains Mono';font-size:10px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;color:var(--cyan)}
 .wr-list-title .t{font-family:'Fraunces';font-weight:500;font-size:24px;letter-spacing:-.015em}
 .wr-list-title .t .it{font-style:italic;color:var(--ink2);font-weight:400}
+
+/* ── NEW: Sort bar (replaces wr-list-filters) ── */
+.wr-sortbar{padding:10px 22px;display:flex;align-items:center;gap:7px;border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none}
+.wr-sortbar::-webkit-scrollbar{display:none}
+.wr-sortbar .label{font-family:'JetBrains Mono';font-size:9px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:var(--ink3);margin-right:4px;flex-shrink:0}
+.wr-sortbar .wr-chip{flex-shrink:0}
+.wr-filter-btn{flex-shrink:0;margin-left:auto;display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border-radius:10px;background:var(--vapor);border:1px solid var(--line2);font-family:inherit;font-size:11.5px;font-weight:600;color:var(--ink);cursor:pointer;transition:.14s}
+.wr-filter-btn:hover{background:var(--vapor2);border-color:var(--line3)}
+.wr-filter-btn.on{border-color:var(--magenta);color:var(--ink)}
+.wr-filter-btn .ct{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:99px;background:var(--magenta);color:#1B0410;font-family:'JetBrains Mono';font-weight:800;font-size:9.5px;letter-spacing:.3px}
 .wr-list-filters{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
 .wr-chip{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:999px;background:var(--vapor);border:1px solid var(--line);font-family:inherit;font-size:11.5px;font-weight:500;color:var(--ink2);cursor:pointer;transition:.15s}
 .wr-chip:hover{color:var(--ink);border-color:var(--line2)}
@@ -167,12 +211,19 @@ const WR_CSS = `
 .wr-row-tk{display:flex;align-items:center;gap:12px;min-width:0}
 .wr-av{width:38px;height:38px;border-radius:11px;flex-shrink:0;display:grid;place-items:center;font-family:'Fraunces';font-weight:700;font-size:15px;color:#fff;text-transform:uppercase;box-shadow:0 4px 14px rgba(0,0,0,.3);overflow:hidden;position:relative}
 .wr-av img{width:100%;height:100%;object-fit:cover}
-.wr-name{min-width:0}
+.wr-name{min-width:0;flex:1}
 .wr-sym-row{font-family:'Fraunces';font-weight:600;font-size:15px;letter-spacing:-.01em;display:flex;align-items:center;gap:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wr-sym-row .chg{font-family:'JetBrains Mono';font-size:10.5px;font-weight:800;color:var(--mint)}
 .wr-sym-row .chg.dn{color:var(--coral)}
 .wr-full{font-size:11.5px;color:var(--ink2);font-weight:400;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wr-full .dex{color:var(--ink3);font-family:'JetBrains Mono';font-size:10px;text-transform:uppercase;letter-spacing:.5px;margin-left:6px}
+/* NEW: Mobile-only second line (price · age · MC) */
+.wr-mob-meta{display:none;font-family:'JetBrains Mono';font-size:10.5px;font-weight:600;color:var(--ink2);margin-top:3px;letter-spacing:.15px;align-items:center;gap:6px;overflow:hidden;white-space:nowrap}
+.wr-mob-meta .price{color:var(--ink);font-weight:700}
+.wr-mob-meta .mob-age{color:var(--mint);font-weight:700}
+.wr-mob-meta .mob-age.med{color:var(--lavender)}
+.wr-mob-meta .mob-age.old{color:var(--ink3)}
+.wr-mob-meta .dot{color:var(--ink3);opacity:.5}
 .wr-num{font-family:'JetBrains Mono';font-weight:700;font-size:12.5px;color:var(--ink)}
 .wr-num.dim{color:var(--ink2);font-weight:500}
 .wr-age{font-family:'JetBrains Mono';font-weight:700;font-size:12.5px;color:var(--mint)}
@@ -200,7 +251,20 @@ const WR_CSS = `
 .wr-list-foot .live.warn{color:var(--butter)}
 .wr-list-foot .live.warn .d{background:var(--butter);box-shadow:0 0 10px var(--butter)}
 @media(max-width:1100px){.wr-row{grid-template-columns:40px 1fr 70px 80px 90px 100px 120px;gap:10px;padding:12px 16px}.wr-row.thead{padding:10px 16px}.wr-col-vol,.wr-col-holders{display:none}}
-@media(max-width:720px){.wr-row{grid-template-columns:1.5fr 60px 80px 95px 110px;gap:8px;padding:11px 14px}.wr-row.thead{padding:10px 14px}.wr-col-num,.wr-col-liq,.wr-col-curve{display:none}.wr-av{width:32px;height:32px;font-size:13px}.wr-sym-row{font-size:13.5px}.wr-full{font-size:10.5px}}
+/* ── NEW: Mobile row override — flex layout with 2-line stack ── */
+@media(max-width:720px){
+  .wr-row{display:flex;grid-template-columns:none;align-items:center;gap:11px;padding:11px 14px}
+  .wr-row.thead{display:none}
+  .wr-row-tk{flex:1;min-width:0;gap:11px}
+  .wr-row-actions{flex-shrink:0;margin-left:0}
+  .wr-col-num,.wr-col-liq,.wr-col-vol,.wr-col-holders,.wr-col-curve{display:none}
+  .wr-row > .wr-age{display:none}
+  .wr-row > .wr-num{display:none}
+  .wr-full{display:none}
+  .wr-mob-meta{display:flex}
+  .wr-av{width:36px;height:36px;font-size:14px;border-radius:10px}
+  .wr-sym-row{font-size:14px}
+}
 
 .wr-proof{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:18px 22px;border-radius:18px;background:linear-gradient(180deg,var(--plum),rgba(25,19,47,.4));border:1px solid var(--line)}
 .wr-proof .e{font-family:'JetBrains Mono';font-size:10px;font-weight:800;letter-spacing:1.3px;text-transform:uppercase;color:var(--ink3);display:flex;align-items:center;gap:8px}
@@ -233,6 +297,28 @@ const WR_CSS = `
 .wr-tshead .title{flex:1;min-width:0}
 .wr-tshead .sym{font-family:'Fraunces';font-weight:500;font-size:26px;letter-spacing:-.02em;line-height:1;font-variation-settings:"opsz" 96}
 .wr-tshead .sub{font-family:'JetBrains Mono';font-size:11px;color:var(--ink2);font-weight:600;margin-top:4px}
+
+/* ── NEW: Token chart (inside TradeSheet header) ── */
+.wr-chart-wrap{margin:14px 22px 0;padding:12px 0 6px;border-top:1px solid var(--line)}
+.wr-chart{position:relative;width:100%;height:84px;display:block}
+.wr-chart svg{display:block;width:100%;height:100%}
+.wr-chart-empty{height:84px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;text-align:center}
+.wr-chart-empty .radar-mini{width:30px;height:30px;border-radius:50%;border:1px solid rgba(201,184,255,.4);background:radial-gradient(circle,rgba(201,184,255,.15),transparent 70%);position:relative;overflow:hidden}
+.wr-chart-empty .radar-mini::before{content:'';position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 0deg,transparent 0 280deg,var(--lavender) 350deg,transparent 360deg);animation:wr-sweep 3.5s linear infinite;opacity:.7}
+.wr-chart-empty .radar-mini::after{content:'';position:absolute;inset:5px;border-radius:50%;border:1px solid rgba(201,184,255,.25)}
+.wr-chart-empty .em-h{font-family:'Fraunces';font-style:italic;font-weight:400;font-size:13.5px;color:var(--ink2);letter-spacing:-.005em;line-height:1.2}
+.wr-chart-empty .em-s{font-family:'JetBrains Mono';font-size:9px;font-weight:700;letter-spacing:.9px;text-transform:uppercase;color:var(--ink3)}
+.wr-chart-loading{height:84px;display:grid;place-items:center}
+.wr-chart-loading .sp{width:14px;height:14px;border-radius:50%;border:2px solid rgba(244,239,255,.18);border-top-color:var(--cyan);animation:wr-spin .8s linear infinite}
+.wr-tf-pills{display:flex;align-items:center;gap:4px;margin-top:6px;padding:0 2px}
+.wr-tf{flex:0 0 auto;padding:4px 10px;border:none;background:transparent;font-family:'JetBrains Mono';font-size:10px;font-weight:800;letter-spacing:.7px;color:var(--ink3);border-radius:7px;transition:.12s;cursor:pointer}
+.wr-tf:hover{color:var(--ink2)}
+.wr-tf.on{background:var(--vapor2);color:var(--ink)}
+.wr-tf.on.up{color:var(--mint)}
+.wr-tf.on.dn{color:var(--coral)}
+.wr-tf:disabled{opacity:.4;cursor:default}
+.wr-tf:disabled:hover{color:var(--ink3)}
+.wr-tf-meta{margin-left:auto;font-family:'JetBrains Mono';font-size:8.5px;font-weight:700;letter-spacing:.6px;color:var(--ink3);text-transform:uppercase}
 
 .wr-vibe{margin:14px 22px 0;background:rgba(0,0,0,.2);border:1px solid var(--line);border-radius:14px;padding:13px 15px}
 .wr-vibe.amber{border-color:rgba(255,216,107,.2);background:rgba(255,216,107,.06)}
@@ -320,6 +406,19 @@ const WR_CSS = `
 .wr-eadd .plus{width:30px;height:30px;border-radius:50%;background:var(--magenta);color:#1B0410;border:none;cursor:pointer;font-size:17px;font-family:initial}
 .wr-sec-lbl{font-family:'JetBrains Mono';font-size:10px;letter-spacing:1.2px;text-transform:uppercase;font-weight:800;color:var(--ink3);margin:16px 0 9px}
 .wr-esave{width:100%;margin-top:18px;padding:14px 0;border:none;border-radius:13px;font-family:inherit;font-weight:600;font-size:14px;cursor:pointer;background:var(--magenta);color:#1B0410;box-shadow:0 6px 18px -6px var(--magenta-glow)}
+
+/* ── NEW: Filters modal rows ── */
+.wr-filter-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}
+.wr-filter-row:last-child{border-bottom:none}
+.wr-filter-row .lbl{font-family:'Fraunces';font-weight:500;font-size:15px;letter-spacing:-.005em}
+.wr-filter-row .lbl-sub{font-family:'JetBrains Mono';font-size:10px;font-weight:700;color:var(--ink3);letter-spacing:.3px;margin-top:3px;text-transform:none}
+.wr-toggle{position:relative;width:48px;height:28px;border-radius:999px;background:var(--vapor2);border:1px solid var(--line2);cursor:pointer;transition:.2s;flex-shrink:0}
+.wr-toggle::after{content:'';position:absolute;top:2px;left:2px;width:22px;height:22px;border-radius:50%;background:var(--ink);transition:.22s cubic-bezier(.2,1.3,.4,1)}
+.wr-toggle.on{background:var(--magenta);border-color:transparent}
+.wr-toggle.on::after{transform:translateX(20px);background:#1B0410}
+.wr-liq-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.wr-liq-chip{padding:6px 12px;border-radius:999px;background:var(--vapor);border:1px solid var(--line);color:var(--ink2);font-family:'JetBrains Mono';font-weight:700;font-size:11px;cursor:pointer}
+.wr-liq-chip.on{background:var(--magenta);color:#1B0410;border-color:transparent}
 
 .wr-toasts{position:fixed;bottom:calc(20px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);z-index:1100;display:flex;flex-direction:column;gap:8px;max-width:440px;width:calc(100% - 24px);pointer-events:none}
 .wr-toast{pointer-events:auto;display:flex;align-items:center;gap:10px;padding:13px 14px;border-radius:14px;backdrop-filter:blur(20px);box-shadow:0 12px 32px rgba(0,0,0,.5);animation:wr-toast .3s ease;font-size:13px;font-weight:500;border:1px solid var(--line2)}
@@ -537,14 +636,12 @@ const WR_CSS = `
 .wa-sub{font-family:'Fraunces';font-style:italic;font-weight:400;font-size:16px;line-height:1.5;color:rgba(244,239,255,.66);margin:0 0 22px;max-width:620px}
 @media(max-width:768px){.wa-h1{font-size:30px}}
 
-/* ── Mode tabs ── */
 .wa-modes{display:grid;grid-template-columns:1fr 1fr;background:rgba(0,0,0,.25);border:1px solid var(--line);border-radius:14px;padding:4px;position:relative;margin-bottom:18px;max-width:360px}
 .wa-mode-ind{position:absolute;top:4px;bottom:4px;width:calc(50% - 4px);background:var(--magenta);border-radius:11px;transition:transform .28s cubic-bezier(.2,1.3,.4,1);z-index:1;box-shadow:0 4px 14px -4px var(--magenta-glow)}
 .wa-modes.custom .wa-mode-ind{transform:translateX(100%)}
 .wa-mode-t{position:relative;z-index:2;padding:10px 0;text-align:center;font-family:'Fraunces';font-weight:500;font-size:14.5px;letter-spacing:-.005em;color:rgba(244,239,255,.66);border:none;background:none;cursor:pointer;min-height:42px}
 .wa-mode-t.active{color:#1B0410;font-weight:600}
 
-/* ── Master toggle ── */
 .wa-master{display:flex;align-items:center;gap:18px;padding:18px 22px;border-radius:16px;background:linear-gradient(180deg,var(--plum),rgba(25,19,47,.7));border:1px solid var(--line2);margin-bottom:18px;flex-wrap:wrap}
 .wa-master.on{background:linear-gradient(180deg,rgba(61,255,194,.06),rgba(25,19,47,.7));border-color:rgba(61,255,194,.28)}
 .wa-master.paused{background:linear-gradient(180deg,rgba(255,216,107,.08),rgba(25,19,47,.7));border-color:rgba(255,216,107,.3)}
@@ -558,7 +655,6 @@ const WR_CSS = `
 .wa-tog.on{background:var(--mint);border-color:transparent}
 .wa-tog.on::after{transform:translateX(28px);background:#001B0F}
 
-/* ── Locked settings (Balanced) ── */
 .wa-locked-card{background:linear-gradient(180deg,var(--plum),rgba(25,19,47,.8));border:1px solid var(--line);border-radius:18px;padding:22px;margin-bottom:18px}
 .wa-locked-eye{font-family:'JetBrains Mono';font-size:10px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;color:var(--cyan);display:flex;align-items:center;gap:8px;margin-bottom:14px}
 .wa-locked-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:0;border-top:1px solid var(--line)}
@@ -572,7 +668,6 @@ const WR_CSS = `
 .wa-locked-v.rd{color:var(--coral)}
 @media(max-width:600px){.wa-locked-grid{grid-template-columns:1fr}.wa-locked-row:nth-child(even){padding-left:0;border-left:none}}
 
-/* ── Custom sliders ── */
 .wa-sliders{background:linear-gradient(180deg,var(--plum),rgba(25,19,47,.8));border:1px solid var(--line);border-radius:18px;padding:22px;margin-bottom:18px}
 .wa-slider{padding:14px 0;border-bottom:1px solid var(--line)}
 .wa-slider:last-child{border-bottom:none}
@@ -589,11 +684,9 @@ const WR_CSS = `
 .wa-slider input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;border-radius:50%;background:var(--magenta);border:3px solid var(--iris);box-shadow:0 0 0 1px var(--line2),0 4px 10px -2px var(--magenta-glow);margin-top:-9px;cursor:grab}
 .wa-slider input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:var(--magenta);border:3px solid var(--iris);box-shadow:0 0 0 1px var(--line2),0 4px 10px -2px var(--magenta-glow);cursor:grab}
 
-/* ── Always-on footer ── */
 .wa-floor{margin-top:14px;padding:12px 16px;border-radius:12px;background:rgba(61,255,194,.05);border:1px dashed rgba(61,255,194,.22);font-family:'JetBrains Mono';font-size:11px;line-height:1.55;color:rgba(244,239,255,.66);font-weight:600;letter-spacing:.2px}
 .wa-floor b{color:var(--mint);font-weight:700}
 
-/* ── Stats grid ── */
 .wa-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:24px 0 18px}
 .wa-statc{padding:14px 14px 12px;background:linear-gradient(180deg,var(--plum),rgba(25,19,47,.5));border:1px solid var(--line);border-radius:14px}
 .wa-statc-l{font-family:'JetBrains Mono';font-size:9.5px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:rgba(244,239,255,.66);margin-bottom:6px}
@@ -604,7 +697,6 @@ const WR_CSS = `
 .wa-statc-v.dim{color:rgba(244,239,255,.42)}
 @media(max-width:600px){.wa-stats{grid-template-columns:1fr 1fr;gap:8px}.wa-statc-v{font-size:20px}}
 
-/* ── Positions ── */
 .wa-pos-frame{background:linear-gradient(180deg,var(--plum),rgba(25,19,47,.8));border:1px solid var(--line);border-radius:18px;overflow:hidden;margin-bottom:18px}
 .wa-section-head{padding:14px 20px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--line);font-family:'JetBrains Mono';font-size:10.5px;font-weight:800;letter-spacing:1.3px;text-transform:uppercase;color:var(--cyan)}
 .wa-section-head .count{margin-left:auto;color:rgba(244,239,255,.66)}
@@ -625,7 +717,6 @@ const WR_CSS = `
 .wa-pos-close{flex-shrink:0;min-width:38px;min-height:38px;padding:0 12px;border-radius:10px;background:var(--vapor);border:1px solid var(--line);color:var(--ink);font-family:'JetBrains Mono';font-size:10px;font-weight:800;letter-spacing:.5px;cursor:pointer}
 .wa-pos-close:hover{background:var(--coral);color:#2E0009;border-color:transparent}
 
-/* ── Log ── */
 .wa-log-frame{background:linear-gradient(180deg,var(--plum),rgba(25,19,47,.8));border:1px solid var(--line);border-radius:18px;overflow:hidden;margin-bottom:24px}
 .wa-log-list{max-height:340px;overflow-y:auto}
 .wa-log-list::-webkit-scrollbar{width:8px}
@@ -641,7 +732,6 @@ const WR_CSS = `
 .wa-log-tag.info{background:rgba(107,238,255,.1);color:var(--cyan)}
 .wa-log-msg{flex:1;min-width:0;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
-/* ── Kill bar (sticky bottom) ── */
 .wa-kill{position:sticky;bottom:0;left:0;right:0;display:flex;gap:10px;padding:14px 28px;background:linear-gradient(180deg,transparent,rgba(14,11,31,.95) 30%);backdrop-filter:blur(20px);border-top:1px solid var(--line);z-index:10;margin-top:24px}
 .wa-kill-btn{flex:1;min-height:48px;padding:0 20px;border-radius:13px;border:none;cursor:pointer;font-family:inherit;font-weight:700;font-size:13.5px;letter-spacing:.4px;display:inline-flex;align-items:center;justify-content:center;gap:8px;transition:transform .12s}
 .wa-kill-btn.stop{background:var(--coral);color:#2E0009;box-shadow:0 6px 20px -6px rgba(255,122,110,.5)}
@@ -651,14 +741,12 @@ const WR_CSS = `
 .wa-kill-btn:disabled{opacity:.4;cursor:not-allowed}
 @media(max-width:600px){.wa-kill{padding:12px 14px;flex-direction:column}.wa-kill-btn{width:100%}}
 
-/* ── Empty ── */
 .wa-empty{padding:36px 24px;text-align:center}
 .wa-empty .gl{display:block;font-family:'Fraunces';font-style:italic;font-size:36px;color:rgba(244,239,255,.42);margin-bottom:10px}
 .wa-empty .h{font-family:'Fraunces';font-weight:500;font-size:16px;letter-spacing:-.005em;color:var(--ink);margin-bottom:4px}
 .wa-empty .h .it{font-style:italic;color:rgba(244,239,255,.66)}
 .wa-empty .s{font-size:12.5px;color:rgba(244,239,255,.66);max-width:340px;margin:0 auto;line-height:1.5}
 
-/* ── Pause banner ── */
 .wa-pause-banner{padding:14px 18px;border-radius:14px;background:linear-gradient(135deg,rgba(255,216,107,.14),rgba(255,216,107,.04));border:1px solid rgba(255,216,107,.32);display:flex;align-items:center;gap:14px;margin-bottom:16px}
 .wa-pause-banner .gl{font-size:20px;color:var(--butter);flex-shrink:0}
 .wa-pause-banner .t{flex:1;min-width:0}
@@ -702,9 +790,14 @@ const getConn = (commitment) => {
 };
 const balRpcRace = (op) => op(getConn(BAL_COMMITMENT));
 
-const POLL_RECENT  = 2500;
-const POLL_SOL     = 30000;
-const POLL_BALANCE = 30000;
+const POLL_RECENT    = 2500;
+const POLL_SOL       = 30000;
+const POLL_BALANCE   = 30000;
+const POLL_POSITIONS = 30000;  // NEW — open positions strip refresh
+
+// NEW: flag set on first confirmed trade — used to detect returning users
+// and collapse the marketing hero+offers on subsequent visits.
+const HAS_TRADED_KEY = 'lr_has_traded_v1';
 
 /* ============================================================
    BURNER WALLET
@@ -834,6 +927,13 @@ function ageClass(ms) {
   if (ms < 30000) return 'wr-age';
   if (ms < 180000) return 'wr-age med';
   return 'wr-age old';
+}
+// NEW: variant of ageClass for the mobile-meta line (uses `.mob-age` base)
+function mobAgeClass(ms) {
+  if (!Number.isFinite(ms)) return 'mob-age old';
+  if (ms < 30000) return 'mob-age';
+  if (ms < 180000) return 'mob-age med';
+  return 'mob-age old';
 }
 const lamportsToSol = (l) => Number(l || 0) / 1e9;
 const truncWallet = (w) => w ? w.slice(0,4) + '…' + w.slice(-4) : '';
@@ -1080,6 +1180,116 @@ const IconX = () => (<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="t
 const IconTg = () => (<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z"/></svg>);
 
 /* ════════════════════════════════════════════════════════════════
+   NEW — TOKEN CHART. Simple SVG line + soft gradient. PancakeSwap-style.
+   ════════════════════════════════════════════════════════════════
+   Fetches from GET /api/dex/chart/:mint?tf=5m
+   Expected response shape:  { points: [{ts: number, price: number}, ...] }
+   Server should cache 5 minutes per (mint, tf) and proxy Dexscreener
+   pair-candles. If endpoint 404s or returns fewer than 2 points, the
+   "too fresh" empty state shows — the chart degrades gracefully.
+   ════════════════════════════════════════════════════════════════ */
+const CHART_TFS = ['5m', '1H', '6H', '24H'];
+const FRESH_FLOOR_MS = 5 * 60 * 1000; // tokens younger than 5min → empty state
+
+function TokenChart({ token }) {
+  const [tf, setTf] = useState('5m');
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const ageMs = token && token.pairCreatedAtMs ? Date.now() - token.pairCreatedAtMs : null;
+  const tooFresh = ageMs != null && ageMs < FRESH_FLOOR_MS;
+
+  useEffect(() => {
+    if (!token || !token.mint) return;
+    if (tooFresh) { setData(null); setLoading(false); return; }
+    let cancelled = false;
+    setLoading(true);
+    fetch('/api/dex/chart/' + encodeURIComponent(token.mint) + '?tf=' + encodeURIComponent(tf))
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (!cancelled) { setData(d); setLoading(false); } })
+      .catch(() => { if (!cancelled) { setData(null); setLoading(false); } });
+    return () => { cancelled = true; };
+  }, [token && token.mint, tf, tooFresh]);
+
+  const points = (data && Array.isArray(data.points)) ? data.points.filter(p => p && Number.isFinite(p.price)) : [];
+  const hasChart = points.length >= 2;
+
+  if (tooFresh || (!loading && !hasChart)) {
+    return (
+      <div className="wr-chart-wrap">
+        <div className="wr-chart-empty">
+          <div className="radar-mini" />
+          <div className="em-h">Too fresh to chart <i>yet</i></div>
+          <div className="em-s">Check back in a few minutes</div>
+        </div>
+        <div className="wr-tf-pills">
+          {CHART_TFS.map(t => (
+            <button key={t} className={'wr-tf' + (t === tf ? ' on' : '')} disabled>{t}</button>
+          ))}
+          <span className="wr-tf-meta">{ageMs != null ? fmtAgeShort(ageMs) + ' old' : '—'}</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="wr-chart-wrap">
+        <div className="wr-chart-loading"><span className="sp" /></div>
+        <div className="wr-tf-pills">
+          {CHART_TFS.map(t => (
+            <button key={t} className={'wr-tf' + (t === tf ? ' on' : '')} onClick={() => setTf(t)}>{t}</button>
+          ))}
+          <span className="wr-tf-meta">Loading…</span>
+        </div>
+      </div>
+    );
+  }
+
+  const first = points[0].price, last = points[points.length - 1].price;
+  const isUp = last >= first;
+  const color = isUp ? '#3DFFC2' : '#FF7A6E';
+  const tfClass = isUp ? ' on up' : ' on dn';
+
+  const minP = Math.min.apply(null, points.map(p => p.price));
+  const maxP = Math.max.apply(null, points.map(p => p.price));
+  const range = (maxP - minP) || (maxP * 0.001) || 1;
+  const W = 320, H = 84, pad = 6;
+  const xStep = W / Math.max(1, points.length - 1);
+  const coords = points.map((p, i) => {
+    const x = i * xStep;
+    const y = H - pad - ((p.price - minP) / range) * (H - 2 * pad);
+    return [x, y];
+  });
+  const linePath = coords.map((c, i) => (i === 0 ? 'M' : 'L') + c[0].toFixed(1) + ',' + c[1].toFixed(1)).join(' ');
+  const fillPath = linePath + ' L ' + W + ',' + H + ' L 0,' + H + ' Z';
+  const gradId = 'wr-chart-grad-' + (token.mint || 'x').slice(0, 8);
+
+  return (
+    <div className="wr-chart-wrap">
+      <div className="wr-chart">
+        <svg viewBox={'0 0 ' + W + ' ' + H} preserveAspectRatio="none">
+          <defs>
+            <linearGradient id={gradId} x1="0" x2="0" y1="0" y2="1">
+              <stop offset="0%" stopColor={color} stopOpacity="0.32" />
+              <stop offset="100%" stopColor={color} stopOpacity="0" />
+            </linearGradient>
+          </defs>
+          <path d={fillPath} fill={'url(#' + gradId + ')'} />
+          <path d={linePath} fill="none" stroke={color} strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />
+        </svg>
+      </div>
+      <div className="wr-tf-pills">
+        {CHART_TFS.map(t => (
+          <button key={t} className={'wr-tf' + (t === tf ? tfClass : '')} onClick={() => setTf(t)}>{t}</button>
+        ))}
+        <span className="wr-tf-meta">Dexscreener</span>
+      </div>
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════
    STATS PANEL — Referrals · Field log · Standings
    ════════════════════════════════════════════════════════════════ */
 
@@ -1120,15 +1330,11 @@ function ReferralsSection({ walletStr, stats, statsLoading, statsError, onBoostA
 
   const inviteTweet = "I've been logging fresh launches on Wonderland Radar — burner wallet, 2-second trade, honest reads.\n\nFollow my line:";
 
-  // Gate: no main wallet connected → don't show a link backed by a disposable
-  // burner. Referral fees route on-chain to the wallet in the link, so we want
-  // a wallet the user will still own next month.
   if (!walletStr) return (
     <>
       <div className="wp-eyebrow"><span className="glyph">◉</span><span>Section § Referrals</span><span className="rule" /></div>
       <h1 className="wp-h1">Connect a <span className="it">main wallet.</span></h1>
       <p className="wp-sub">Your referral link pays out on-chain to whichever wallet it points at. We won't build that link against the burner — burners are disposable, and your fees shouldn't be. Connect a wallet you'll still own next year (Phantom, Solflare, Backpack) and your link will appear here.</p>
-
       <div className="wp-card feature">
         <div className="wp-card-eye"><span className="gl">⊘</span><span>Not connected</span></div>
         <div style={{padding:'18px 4px 4px',fontFamily:"'JetBrains Mono'",fontSize:11.5,lineHeight:1.7,color:'var(--ink2)',letterSpacing:.2}}>
@@ -1473,7 +1679,6 @@ const BALANCED_SETTINGS = {
   maxPerHour:      10,
 };
 
-// Hardcoded safety floor — applies in BOTH modes, can't be overridden.
 const SAFETY_FLOOR = {
   dailyLossCapSol:    1.0,
   maxHoldMin:         30,
@@ -1481,10 +1686,10 @@ const SAFETY_FLOOR = {
   posPollMs:          7000,
 };
 
-const AT_SETTINGS_KEY  = 'lr_at_settings_v1';
-const AT_STATE_KEY     = 'lr_at_state_v1';
-const AT_POSITIONS_KEY = 'lr_at_positions_v1';
-const AT_POS_MAX_AGE_MS = 6 * 60 * 60 * 1000;  // drop restored positions older than 6h
+const AT_SETTINGS_KEY   = 'lr_at_settings_v1';
+const AT_STATE_KEY      = 'lr_at_state_v1';
+const AT_POSITIONS_KEY  = 'lr_at_positions_v1';
+const AT_POS_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
 function loadCustomSettings() {
   try {
@@ -1494,7 +1699,6 @@ function loadCustomSettings() {
     return { ...BALANCED_SETTINGS, ...parsed };
   } catch (e) { return { ...BALANCED_SETTINGS }; }
 }
-
 function saveCustomSettings(s) { try { localStorage.setItem(AT_SETTINGS_KEY, JSON.stringify(s)); } catch (e) {} }
 
 function loadDailyState() {
@@ -1508,9 +1712,6 @@ function loadDailyState() {
 }
 function saveDailyState(d) { try { localStorage.setItem(AT_STATE_KEY, JSON.stringify({ ...d, day: new Date().toDateString() })); } catch (e) {} }
 
-// Position persistence — survives page refreshes. The monitoring tick re-fetches
-// fresh prices; sellPosition self-heals if a position's balance is now zero
-// (user manually sold while the page was reloading).
 function loadPositions() {
   try {
     const raw = localStorage.getItem(AT_POSITIONS_KEY);
@@ -1523,15 +1724,11 @@ function loadPositions() {
       .map(p => ({ ...p, exiting: false }));
   } catch (e) { return []; }
 }
-function savePositions(arr) {
-  try { localStorage.setItem(AT_POSITIONS_KEY, JSON.stringify(arr || [])); } catch (e) {}
-}
+function savePositions(arr) { try { localStorage.setItem(AT_POSITIONS_KEY, JSON.stringify(arr || [])); } catch (e) {} }
 
 function useAutoTrade(deps) {
   const { wallet, recentTokens, solBalance, solPrice, balances, executeSwap, refreshSol, refreshOneToken, pushToast } = deps;
 
-  // Load saved state once on mount. useMemo with empty deps avoids the
-  // localStorage hit on every render that the previous version had.
   const initialDaily = useMemo(() => loadDailyState() || {}, []);
 
   const [enabled, setEnabled]   = useState(false);
@@ -1553,10 +1750,6 @@ function useAutoTrade(deps) {
   const evaluatedRef = useRef(new Set());
   const firingRef    = useRef(new Set());
   const positionsRef = useRef([]);
-  // Sync ref + clean firingRef: once a mint appears in positions state,
-  // it's no longer "in-flight" so we drop it from firingRef. This is the
-  // single source of truth for "trade just landed" so subsequent maxOpen
-  // checks don't double-count between firingRef and positionsRef.
   useEffect(() => {
     positionsRef.current = positions;
     for (const p of positions) firingRef.current.delete(p.mint);
@@ -1566,11 +1759,8 @@ function useAutoTrade(deps) {
     setLog(prev => [{ ts: Date.now(), tag, msg }, ...prev].slice(0, 120));
   }, []);
 
-  // Persist positions on every change (including price/peak updates).
-  // Cheap: small array, fires only when positions actually change.
   useEffect(() => { savePositions(positions); }, [positions]);
 
-  // Persist daily state on changes
   useEffect(() => {
     saveDailyState({
       scanned: stats.scanned, passed: stats.passed, traded: stats.traded, realized: stats.realized,
@@ -1578,11 +1768,8 @@ function useAutoTrade(deps) {
     });
   }, [stats]);
 
-  // Persist custom settings
   useEffect(() => { if (mode === 'custom') saveCustomSettings(custom); }, [custom, mode]);
 
-  // Daily-loss-cap circuit breaker — reacts to realized changes from any
-  // source (auto exits, manual closes, etc.). Pauses exactly once per breach.
   useEffect(() => {
     if (!paused && stats.realized <= -SAFETY_FLOOR.dailyLossCapSol) {
       setPaused(true);
@@ -1591,7 +1778,6 @@ function useAutoTrade(deps) {
     }
   }, [stats.realized, paused, appendLog, pushToast]);
 
-  // If we restored positions from a prior session, tell the user.
   useEffect(() => {
     if (positions.length > 0 && log.length === 0) {
       appendLog('info', '· restored ' + positions.length + ' position(s) from previous session');
@@ -1599,18 +1785,12 @@ function useAutoTrade(deps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Evaluation loop ───────────────────────────────────────────
   useEffect(() => {
     if (!enabled || paused) return;
     if (!recentTokens || recentTokens.length === 0) return;
     let cancelled = false;
 
     (async () => {
-      // solBalance is a closure capture — frozen for the duration of this
-      // useEffect run. Track SOL spent within the run so subsequent
-      // iterations see commitments from earlier ones. firingRef + positionsRef
-      // together handle the position-count side (firingRef is held until the
-      // position appears in state, via the sync useEffect above).
       let runSpentSol = 0;
 
       for (const token of recentTokens) {
@@ -1619,19 +1799,14 @@ function useAutoTrade(deps) {
         evaluatedRef.current.add(token.mint);
         setStats(s => ({ ...s, scanned: s.scanned + 1 }));
 
-        // Already holding this mint?
         if (positionsRef.current.some(p => p.mint === token.mint)) continue;
-        // Already trading?
         if (firingRef.current.has(token.mint)) continue;
 
-        // Concurrent positions cap. firingRef stays populated from .add()
-        // until the resulting position appears in state, so no double-count.
         if (positionsRef.current.length + firingRef.current.size >= config.maxOpen) {
           appendLog('skip', '· ' + token.sym + ' — at max positions (' + config.maxOpen + ')');
           continue;
         }
 
-        // Hourly rate limit
         const hourAgo = Date.now() - 3600000;
         recentTradesRef.current = recentTradesRef.current.filter(ts => ts > hourAgo);
         if (recentTradesRef.current.length >= config.maxPerHour) {
@@ -1639,14 +1814,12 @@ function useAutoTrade(deps) {
           continue;
         }
 
-        // Daily loss cap
         if (Math.abs(Math.min(0, stats.realized)) >= SAFETY_FLOOR.dailyLossCapSol) {
           appendLog('skip', '· daily loss cap hit, pausing for the day');
           setPaused(true);
           return;
         }
 
-        // Age window
         const ageMs = token.pairCreatedAtMs ? Date.now() - token.pairCreatedAtMs : 0;
         const minAgeMs = Math.max(SAFETY_FLOOR.ageMinAbsolute, config.minAgeMin) * 60000;
         if (ageMs < minAgeMs) {
@@ -1658,26 +1831,20 @@ function useAutoTrade(deps) {
           continue;
         }
 
-        // Liquidity
         if ((token.liquidity || 0) < config.minLiqUsd) {
           appendLog('skip', '· ' + token.sym + ' — thin liq ' + formatMoney(token.liquidity || 0));
           continue;
         }
-        // Holders
         if ((token.holders || 0) < config.minHolders) {
           appendLog('skip', '· ' + token.sym + ' — low holders (' + (token.holders || 0) + ')');
           continue;
         }
-        // Vibe
         const vibe = riskRead(token);
         if (vibe.score < config.minVibe) {
           appendLog('skip', '· ' + token.sym + ' — vibe ' + vibe.score + ' below floor');
           continue;
         }
 
-        // Fund check — runs BEFORE the expensive honeypot RPC. Accounts for
-        // SOL committed earlier in this loop run, since solBalance is a
-        // closure capture and refreshSol() is async.
         const walletSol = (solBalance && solBalance.uiAmount) || 0;
         const availSol = Math.max(0, walletSol - SOL_RESERVE - runSpentSol);
         if (config.perTradeSol > availSol) {
@@ -1685,7 +1852,6 @@ function useAutoTrade(deps) {
           continue;
         }
 
-        // Honeypot check (async, last gate — saves RPC on tokens that already failed)
         try {
           const r = await fetch('/api/honeypot-check/' + encodeURIComponent(token.mint));
           const d = await r.json();
@@ -1698,7 +1864,6 @@ function useAutoTrade(deps) {
           continue;
         }
 
-        // ALL PASSED — fire
         setStats(s => ({ ...s, passed: s.passed + 1 }));
         if (firingRef.current.has(token.mint)) continue;
         firingRef.current.add(token.mint);
@@ -1715,14 +1880,10 @@ function useAutoTrade(deps) {
           const res = await executeSwap({ mode: 'buy', swapParams: params, token });
 
           if (res && res.confirmed) {
-            // Commit local spend tracker so the next iteration in this same
-            // loop run sees the SOL committed (closure has stale solBalance).
             runSpentSol += config.perTradeSol;
             recentTradesRef.current.push(Date.now());
             const tokensReceived = (token.price > 0 && solPrice > 0)
               ? (Number(params.tradeLamports)/1e9 * solPrice) / token.price : 0;
-            // Note: firingRef stays populated for this mint — the positions
-            // sync useEffect drops it once the new position lands in state.
             setPositions(p => [...p, {
               mint: token.mint, sym: token.sym, name: token.name, icon: token.icon,
               entrySol: config.perTradeSol,
@@ -1738,7 +1899,6 @@ function useAutoTrade(deps) {
             refreshSol();
             setTimeout(() => refreshOneToken(token.mint), 3000);
           } else {
-            // Buy didn't land — clear firingRef so the slot is freed.
             firingRef.current.delete(token.mint);
             appendLog('error', '· ' + token.sym + ' — not confirmed');
           }
@@ -1752,15 +1912,8 @@ function useAutoTrade(deps) {
     return () => { cancelled = true; };
   }, [enabled, paused, recentTokens, config, solBalance, solPrice, executeSwap, refreshSol, refreshOneToken, appendLog, stats.realized]);
 
-  // Ref to the latest sellPosition. The position monitor's interval can't
-  // include sellPosition in its deps (it'd restart on every balances/solPrice
-  // tick, which is constant), but it also can't use a stale closure (the
-  // captured sellPosition would have stale solPrice → wrong realized P&L).
-  // The ref bridges this: the monitor calls sellPositionRef.current(...) and
-  // gets the freshest version. Synced via the useEffect after sellPosition.
   const sellPositionRef = useRef(null);
 
-  // ── Position monitoring & exits ───────────────────────────────
   useEffect(() => {
     if (positions.length === 0) return;
     let cancelled = false;
@@ -1771,7 +1924,6 @@ function useAutoTrade(deps) {
         if (cancelled) return;
         if (pos.exiting) continue;
 
-        // Fetch latest price
         let priceUsd = pos.currentPriceUsd;
         try {
           const r = await fetch('/api/dex/token/' + encodeURIComponent(pos.mint));
@@ -1780,7 +1932,7 @@ function useAutoTrade(deps) {
             const p = Number(d?.token?.price);
             if (Number.isFinite(p) && p > 0) priceUsd = p;
           }
-        } catch (e) { /* keep stale price */ }
+        } catch (e) {}
 
         const peakPriceUsd = Math.max(pos.peakPriceUsd, priceUsd);
         const pnlPct = pos.entryPriceUsd > 0 ? ((priceUsd / pos.entryPriceUsd) - 1) * 100 : 0;
@@ -1791,12 +1943,9 @@ function useAutoTrade(deps) {
         else if (pnlPct <= -config.stopLossPct)     exitReason = 'SL ' + Math.round(pnlPct) + '%';
         else if (ageMin >= SAFETY_FLOOR.maxHoldMin) exitReason = 'max hold ' + SAFETY_FLOOR.maxHoldMin + 'm';
 
-        // Update price + peak
         setPositions(prev => prev.map(p => p.mint === pos.mint ? { ...p, currentPriceUsd: priceUsd, peakPriceUsd } : p));
 
         if (exitReason) {
-          // Use ref (set after sellPosition is defined) so the monitor always
-          // calls the latest version, not the one captured at effect setup.
           if (sellPositionRef.current) {
             await sellPositionRef.current(pos, exitReason);
           }
@@ -1805,14 +1954,11 @@ function useAutoTrade(deps) {
     };
 
     const id = setInterval(tick, SAFETY_FLOOR.posPollMs);
-    tick(); // immediate
+    tick();
     return () => { cancelled = true; clearInterval(id); };
-  }, [positions.length, config.takeProfitPct, config.stopLossPct]);  // re-run when positions enter/leave
+  }, [positions.length, config.takeProfitPct, config.stopLossPct]);
 
-  // ── Sell helper (used by exit + manual close) ─────────────────
   const sellPosition = useCallback(async (pos, reason) => {
-    // Read live state — `pos` is a snapshot and may be stale if another
-    // caller (flattenAll, manual click, monitor) just marked it exiting.
     const live = positionsRef.current.find(p => p.mint === pos.mint);
     if (!live || live.exiting) return;
     setPositions(prev => prev.map(p => p.mint === pos.mint ? { ...p, exiting: true } : p));
@@ -1822,7 +1968,6 @@ function useAutoTrade(deps) {
     try {
       const bal = balances[pos.mint];
       if (!bal || !bal.amount || BigInt(bal.amount) <= 0n) {
-        // No balance — either already sold, or transferred elsewhere. Drop the position.
         appendLog('info', '· ' + pos.sym + ' — no balance to sell, removing');
         success = true;
         return;
@@ -1843,10 +1988,6 @@ function useAutoTrade(deps) {
         const sign = realizedDelta >= 0 ? '+' : '';
         appendLog('sell', '✓ ' + pos.sym + ' closed · ' + sign + formatSol(realizedDelta) + ' SOL');
 
-        // Pure state update — the daily-loss circuit breaker lives in a
-        // separate useEffect below that reacts to stats.realized changes.
-        // (Side effects inside a setState updater are an anti-pattern: in
-        // React strict mode the updater can be called twice.)
         setStats(s => ({ ...s, realized: s.realized + realizedDelta }));
       } else {
         appendLog('error', '· ' + pos.sym + ' — exit not confirmed, will retry');
@@ -1857,7 +1998,6 @@ function useAutoTrade(deps) {
       if (success) {
         setPositions(prev => prev.filter(p => p.mint !== pos.mint));
       } else {
-        // Keep the position around so the monitor can retry on the next tick.
         setPositions(prev => prev.map(p => p.mint === pos.mint ? { ...p, exiting: false } : p));
       }
       refreshSol();
@@ -1865,8 +2005,6 @@ function useAutoTrade(deps) {
     }
   }, [balances, solPrice, executeSwap, refreshSol, refreshOneToken, appendLog, pushToast]);
 
-  // Keep the ref pointed at the freshest sellPosition so the monitor's
-  // long-running interval always uses up-to-date balances/solPrice closures.
   useEffect(() => { sellPositionRef.current = sellPosition; }, [sellPosition]);
 
   const closeManual = useCallback((pos) => { sellPosition(pos, 'manual close'); }, [sellPosition]);
@@ -1885,10 +2023,6 @@ function useAutoTrade(deps) {
     }
   }, [sellPosition, appendLog]);
 
-  // Resume from the daily-loss pause. Resetting realized to 0 is intentional:
-  // without it, the eval-loop's daily-loss check would see the same losses on
-  // the next iteration and immediately re-pause, making the button useless.
-  // The user explicitly chose to continue; their on-chain SOL is unchanged.
   const resumeFromPause = useCallback(() => {
     setPaused(false);
     setStats(s => ({ ...s, realized: 0 }));
@@ -1935,22 +2069,12 @@ function AutoPanel({ open, onClose, autoState }) {
 
   if (!open) return null;
 
-  // Three states:
-  //   paused  → daily loss cap hit (or other circuit breaker). Coral.
-  //   on      → toggle is on, evaluating tokens as they come in. Mint.
-  //   off     → toggle is off. "idle" was confusing here — in trading parlance
-  //             idle means "running but no opportunities", which isn't the
-  //             state when the user has affirmatively turned it off.
   const statusPill = a.paused
     ? <span className="wa-stat-pill paused">⏸ paused</span>
     : a.enabled
       ? <span className="wa-stat-pill on"><span className="d" />watching</span>
       : <span className="wa-stat-pill off">○ off</span>;
 
-  // Open-P&L approximation per position: entrySol × (1-fee) became tokens at
-  // entry; those tokens at current price are worth entrySol × (1-fee) × ratio;
-  // then sell fee takes another (1-fee). At ratio=1 we show ~−5.9% (the
-  // round-trip fee cost), which is the honest read of "what would I get out".
   const _feeMul = (1 - FEE_BPS/10000);
   const positionPnlSol = (p) => {
     if (!(p.entryPriceUsd > 0) || !(p.currentPriceUsd > 0)) return 0;
@@ -1986,7 +2110,6 @@ function AutoPanel({ open, onClose, autoState }) {
           </div>
         )}
 
-        {/* Master toggle */}
         <div className={'wa-master' + (a.enabled && !a.paused ? ' on' : '') + (a.paused ? ' paused' : '')}>
           <div className="wa-master-l">
             <div className={'wa-master-h' + (a.enabled && !a.paused ? ' on' : '')}>
@@ -2001,14 +2124,12 @@ function AutoPanel({ open, onClose, autoState }) {
           <div className={'wa-tog' + (a.enabled ? ' on' : '')} onClick={() => !a.paused && a.setEnabled(!a.enabled)} role="switch" aria-checked={a.enabled} />
         </div>
 
-        {/* Mode tabs */}
         <div className={'wa-modes' + (a.mode === 'custom' ? ' custom' : '')}>
           <div className="wa-mode-ind" />
           <button className={'wa-mode-t' + (a.mode === 'balanced' ? ' active' : '')} onClick={() => a.setMode('balanced')}>Balanced</button>
           <button className={'wa-mode-t' + (a.mode === 'custom'   ? ' active' : '')} onClick={() => a.setMode('custom')}>Custom</button>
         </div>
 
-        {/* Balanced view */}
         {a.mode === 'balanced' && (
           <div className="wa-locked-card">
             <div className="wa-locked-eye"><span>◌</span><span>What's locked in</span></div>
@@ -2030,7 +2151,6 @@ function AutoPanel({ open, onClose, autoState }) {
           </div>
         )}
 
-        {/* Custom view */}
         {a.mode === 'custom' && (
           <div className="wa-sliders">
             <AutoSlider label="Per trade" value={a.custom.perTradeSol} unit=" SOL" min={0.05} max={2} step={0.05}
@@ -2066,7 +2186,6 @@ function AutoPanel({ open, onClose, autoState }) {
           </div>
         )}
 
-        {/* Daily stats */}
         <div className="wa-stats">
           <div className="wa-statc">
             <div className="wa-statc-l">Scanned today</div>
@@ -2089,7 +2208,6 @@ function AutoPanel({ open, onClose, autoState }) {
           </div>
         </div>
 
-        {/* Open positions */}
         <div className="wa-pos-frame">
           <div className="wa-section-head"><span>◉ Open positions</span><span className="count">{a.positions.length} · open {openPnl >= 0 ? '+' : ''}{formatSol(openPnl)} SOL</span></div>
           {a.positions.length === 0 ? (
@@ -2123,7 +2241,6 @@ function AutoPanel({ open, onClose, autoState }) {
           })}
         </div>
 
-        {/* Log */}
         <div className="wa-log-frame">
           <div className="wa-section-head"><span>§ Today's log</span><span className="count">{a.log.length} entries</span></div>
           <div className="wa-log-list">
@@ -2149,9 +2266,6 @@ function AutoPanel({ open, onClose, autoState }) {
         </div>
       </div>
 
-      {/* Sticky kill bar — only renders if there's actually something to do.
-          When the toggle is off AND no positions are open, a giant coral
-          "STOP AUTO-TRADE" button is loud, useless, and confusing. Hide it. */}
       {(a.enabled || a.positions.length > 0) && (
         <div className="wa-kill">
           {a.enabled && (
@@ -2172,11 +2286,7 @@ function AutoPanel({ open, onClose, autoState }) {
 
 function StatsPanel({ open, onClose, wallet, mainWalletPubkey, solPrice }) {
   const [tab, setTab] = useState('referrals');
-  // Burner = the trader (does swaps on this page). Used for field log + standings.
   const burnerWalletStr = wallet?.publicKey?.toBase58 ? wallet.publicKey.toBase58() : '';
-  // Ref wallet = the user's persistent main wallet (Phantom etc.) the parent
-  // hands us. Used as the payout identity for referrals. No fallback to burner —
-  // we'd rather show a gate than print a link that pays to a disposable wallet.
   const refWalletStr = mainWalletPubkey || '';
 
   const [stats, setStats] = useState(null);
@@ -2404,6 +2514,140 @@ function WalletDrawer({ wallet, solBalance, solPrice, onWithdraw, onClose, busy 
   );
 }
 
+/* ════════════════════════════════════════════════════════════════
+   NEW — FILTERS MODAL.  Wild-only + min-liq.
+   Called from the .wr-filter-btn in the new sortbar.
+   ════════════════════════════════════════════════════════════════ */
+function FiltersModal({ wildOnly, setWildOnly, minLiq, setMinLiq, onClose }) {
+  const liqOptions = [0, 5000, 20000, 50000];
+  return (
+    <div className="wr-overlay center" onClick={onClose}>
+      <div className="wr-sheet mini" onClick={e => e.stopPropagation()}>
+        <div className="wr-tshead">
+          <button className="wr-x" onClick={onClose}>×</button>
+          <h3 style={{fontFamily:"'Fraunces'",fontWeight:500,fontSize:24,margin:0,letterSpacing:'-.015em'}}>Filters</h3>
+          <div style={{fontFamily:"'JetBrains Mono'",fontSize:10.5,color:'var(--ink2)',marginTop:5,fontWeight:600,letterSpacing:'.3px'}}>Narrow the feed</div>
+        </div>
+        <div style={{padding:'8px 22px 22px'}}>
+          <div className="wr-filter-row">
+            <div>
+              <div className="lbl">Wild only</div>
+              <div className="lbl-sub">Show only high-risk · high-reward specimens</div>
+            </div>
+            <div className={'wr-toggle' + (wildOnly ? ' on' : '')} onClick={() => setWildOnly(!wildOnly)} role="switch" aria-checked={wildOnly} />
+          </div>
+          <div className="wr-filter-row" style={{flexDirection:'column',alignItems:'stretch'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:12}}>
+              <div className="lbl">Minimum liquidity</div>
+              <div style={{fontFamily:"'JetBrains Mono'",fontSize:11,fontWeight:700,color:'var(--ink2)'}}>{minLiq ? '$' + format(minLiq) : 'any'}</div>
+            </div>
+            <div className="lbl-sub" style={{marginBottom:6}}>Filter out thin pools</div>
+            <div className="wr-liq-chips">
+              {liqOptions.map(v => (
+                <button key={v} className={'wr-liq-chip' + (minLiq === v ? ' on' : '')} onClick={() => setMinLiq(v)}>
+                  {v === 0 ? 'Any' : '$' + (v >= 1000 ? (v/1000) + 'K' : v)}
+                </button>
+              ))}
+            </div>
+          </div>
+          <button className="wr-esave" onClick={onClose}>Done</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════
+   NEW — OPEN POSITIONS STRIP.  Live P&L for held positions.
+   ════════════════════════════════════════════════════════════════
+   Polls /api/ref/pnl every 30s for the wallet's open positions, then
+   per-mint /api/dex/token/:mint for current prices. Computes unrealized
+   P&L = currentValueSol − costBasisSol. Shows top 3 by absolute size,
+   plus a rollup. Only renders when there's at least one open position.
+   ════════════════════════════════════════════════════════════════ */
+function OpenPositionsStrip({ walletStr, solPrice, onOpenStats }) {
+  const [positions, setPositions] = useState([]);
+  const [prices, setPrices] = useState({});
+
+  useEffect(() => {
+    if (!walletStr) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await fetch('/api/ref/pnl?wallet=' + encodeURIComponent(walletStr));
+        if (!r.ok) return;
+        const d = await r.json();
+        if (cancelled) return;
+        const open = (d.positions || []).filter(p => p.open && p.open_tokens > 0);
+        setPositions(open);
+
+        const next = {};
+        await Promise.all(open.map(async p => {
+          try {
+            const pr = await fetch('/api/dex/token/' + encodeURIComponent(p.mint));
+            if (!pr.ok) return;
+            const pd = await pr.json();
+            const px = Number(pd?.token?.price);
+            if (Number.isFinite(px) && px > 0) next[p.mint] = px;
+          } catch (e) {}
+        }));
+        if (!cancelled) setPrices(prev => ({ ...prev, ...next }));
+      } catch (e) {}
+    };
+    load();
+    const id = setInterval(load, POLL_POSITIONS);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [walletStr]);
+
+  // Compute unrealized P&L per position.
+  const enriched = useMemo(() => {
+    if (!solPrice) return [];
+    return positions.map(p => {
+      const px = prices[p.mint] || 0;
+      const currentValueUsd = p.open_tokens * px;
+      const currentValueSol = currentValueUsd / solPrice;
+      // cost basis: sol_in minus sol already received from partial sells
+      const costBasisSol = Math.max(0, (p.sol_in || 0) - (p.sol_out || 0));
+      const unrealizedSol = currentValueSol - costBasisSol;
+      const unrealizedPct = costBasisSol > 0 ? (unrealizedSol / costBasisSol) * 100 : 0;
+      return { ...p, currentValueSol, costBasisSol, unrealizedSol, unrealizedPct, hasPrice: px > 0 };
+    }).sort((a, b) => Math.abs(b.unrealizedSol) - Math.abs(a.unrealizedSol));
+  }, [positions, prices, solPrice]);
+
+  if (enriched.length === 0) return null;
+
+  const total = enriched.reduce((s, p) => s + p.unrealizedSol, 0);
+  const top = enriched.slice(0, 3);
+
+  return (
+    <div className="wr-positions">
+      <div className="wr-positions-head">
+        <span className="e">◉ Your open marks · {enriched.length}</span>
+        <span className="roll">Unrealized <b className={total < 0 ? 'dn' : ''}>{formatSolSigned(total)} SOL</b></span>
+      </div>
+      {top.map(p => {
+        const c = colorFor(p.mint);
+        const up = p.unrealizedSol > 0.0001, dn = p.unrealizedSol < -0.0001;
+        return (
+          <div className="wr-pos-strip-row" key={p.mint}>
+            <div className="wr-pos-strip-av" style={{background:'linear-gradient(135deg,'+c+','+shade(c,-30)+')'}}>{(p.sym || '?').charAt(0)}</div>
+            <div className="wr-pos-strip-sym">${p.sym || '???'}</div>
+            <div className={'wr-pos-strip-pnl' + (up ? '' : dn ? ' dn' : ' dim')}>
+              {p.hasPrice ? formatSolSigned(p.unrealizedSol) : '—'}
+            </div>
+            <div className={'wr-pos-strip-pct ' + (up ? 'up' : dn ? 'dn' : '')}>
+              {p.hasPrice ? (p.unrealizedPct >= 0 ? '+' : '') + p.unrealizedPct.toFixed(1) + '%' : '…'}
+            </div>
+          </div>
+        );
+      })}
+      <button className="wr-positions-foot" onClick={onOpenStats}>
+        See full field log →
+      </button>
+    </div>
+  );
+}
+
 function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPresets, solBalance, tokenBalance, solPrice }) {
   const [mode, setMode] = useState(initialMode || 'buy');
   const [amount, setAmount] = useState('');
@@ -2460,6 +2704,8 @@ function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPr
             </div>
           </div>
         </div>
+        {/* NEW: Token chart — pulls /api/dex/chart/:mint?tf= */}
+        <TokenChart token={token} />
         <div className={'wr-vibe ' + tierClass}>
           <div className="wr-vibe-top"><span className="wr-vibe-l">Vibe check</span><span className="wr-vibe-s" style={{color:tierColor}}>{read.score}<span className="of">/{RISK_CEIL}</span></span></div>
           <div className="wr-vibe-verdict" style={{color:tierColor}}>{read.verdict}</div>
@@ -2533,6 +2779,14 @@ const SpecimenRow = React.memo(function SpecimenRow({ token, ageMsLive, owned, q
             {ownedUi > 0 ? <span className="wr-owned-mark">owned</span> : null}
           </div>
           <div className="wr-full">{token.name}{token.dex ? <span className="dex">· {token.dex}</span> : null}</div>
+          {/* NEW: Mobile-only second line — price · age · MC. Hidden on desktop via CSS. */}
+          <div className="wr-mob-meta">
+            <span className="price">{formatPrice(token.price)}</span>
+            <span className="dot">·</span>
+            <span className={mobAgeClass(ageMsLive)}>{fmtAgeShort(ageMsLive)}</span>
+            <span className="dot">·</span>
+            <span>{formatMoney(token.mcap)}</span>
+          </div>
         </div>
       </div>
       <span className={ageClass(ageMsLive)}>{fmtAgeShort(ageMsLive)}</span>
@@ -2577,8 +2831,18 @@ export default function Ape({ mainWalletPubkey } = {}) {
   const [filterWild, setFilterWild] = useState(false);
   const [minLiq, setMinLiq] = useState(0);
 
-  // On mount: read ?ref / ?boost from URL, register burner with backend.
-  // Referrer is locked server-side on first set.
+  // NEW: filters modal
+  const [filtersOpen, setFiltersOpen] = useState(false);
+
+  // NEW: returning-user state. Anyone whose wallet has SOL OR who's traded
+  // before is treated as "returning" and gets the compact .wr-lure strip
+  // instead of the marketing hero + 3 offer cards. The trade-once flag is
+  // set inside runTrade on the confirmed branch.
+  const [hasTraded, setHasTraded] = useState(() => {
+    try { return localStorage.getItem(HAS_TRADED_KEY) === '1'; } catch (e) { return false; }
+  });
+  const [showIntro, setShowIntro] = useState(false);
+
   const refRegisteredRef = useRef(false);
   useEffect(() => {
     if (refRegisteredRef.current) return;
@@ -2705,9 +2969,6 @@ export default function Ape({ mainWalletPubkey } = {}) {
     const feeLamports = BigInt(swapParams.feeLamports || '0');
     if (feeLamports <= 0n) throw new Error(isBuy ? 'Fee rounds to zero — amount too small.' : 'Could not estimate sell fee — price unavailable.');
 
-    // ── Referral split: 30% (or 50% boosted) of the fee → referrer wallet.
-    // The remainder goes to FEE_WALLET. Both transfers ride the same signed
-    // tx. Server never holds money.
     const refInfo = await refLookup(userPk.toBase58());
     let refWalletPk = null;
     let refLamports = 0n;
@@ -2715,14 +2976,13 @@ export default function Ape({ mainWalletPubkey } = {}) {
     if (refInfo.referrer && refInfo.refSplitBps > 0) {
       try {
         const candidate = new PublicKey(refInfo.referrer);
-        // Don't pay a self-referral, just in case server check missed it.
         if (!candidate.equals(userPk)) {
           refWalletPk = candidate;
           refLamports = (feeLamports * BigInt(refInfo.refSplitBps)) / 10000n;
           if (refLamports > feeLamports) refLamports = feeLamports;
           platformLamports = feeLamports - refLamports;
         }
-      } catch (e) { /* invalid pubkey — fall back to single transfer */ }
+      } catch (e) {}
     }
 
     const feeIxs = [];
@@ -2782,7 +3042,6 @@ export default function Ape({ mainWalletPubkey } = {}) {
     if (mode === 'buy' && token && token.price > 0 && solPrice > 0) outAmount = ((Number(swapParams.tradeLamports)/1e9)*solPrice)/token.price;
     else if (mode === 'sell' && token && token.price > 0 && solPrice > 0) outAmount = Math.max(0, ((swapParams.tradeTokensUi*token.price)/solPrice)*(1-FEE_BPS/10000));
 
-    // Log the trade for the growth backend. Idempotent on sig.
     if (sig) {
       refLogTrade({
         wallet: wallet.publicKey.toBase58(),
@@ -2800,6 +3059,11 @@ export default function Ape({ mainWalletPubkey } = {}) {
     }
 
     if (confirmed) {
+      // NEW: mark this user as "has traded" so the marketing hero collapses
+      // on their next visit. Persistent, opt-out via WHAT'S THIS? in the lure.
+      try { localStorage.setItem(HAS_TRADED_KEY, '1'); } catch (e) {}
+      setHasTraded(true);
+
       fireConfetti();
       const tweetText = buildTweetText({ mode, token, solAmount: swapParams.solAmount, outAmount, percentage: swapParams.percentage });
       pushToast({
@@ -2851,7 +3115,6 @@ export default function Ape({ mainWalletPubkey } = {}) {
     finally { setWithdrawing(false); }
   }, [connection, wallet.keypair, wallet.publicKey, pushToast, refreshSol, aggressiveRefresh]);
 
-  // Auto-trade: watches recentTokens, applies user filters, fires trades, manages exits.
   const auto = useAutoTrade({
     wallet, recentTokens, solBalance, solPrice, balances,
     executeSwap, refreshSol, refreshOneToken, pushToast,
@@ -2889,6 +3152,20 @@ export default function Ape({ mainWalletPubkey } = {}) {
   }, [filtered]);
 
   const fieldLogNo = specimenCounterRef.current;
+
+  // NEW: returning-user check. Either has SOL OR has logged a trade before.
+  // Honour showIntro override so users can re-expand the marketing block.
+  const isReturning = ((solBalance && solBalance.uiAmount > 0) || hasTraded) && !showIntro;
+
+  // NEW: count of active filters (for the magenta badge on the filter button)
+  const filterCount = (filterWild ? 1 : 0) + (minLiq > 0 ? 1 : 0);
+
+  // NEW: fresh-count for the lure microcopy
+  const freshCount = stats.fresh;
+
+  // Burner wallet str for positions strip (positions tracked under the
+  // wallet that did the trading — the burner).
+  const burnerStr = wallet.publicKey.toBase58();
 
   return (
     <div className="wr-root">
@@ -2932,34 +3209,58 @@ export default function Ape({ mainWalletPubkey } = {}) {
             <span>SOLANA · PUMP.FUN + RAYDIUM</span>
           </div>
 
-          <section className="wr-hero">
-            <h1>Fresh launches, <span className="it">caught at first light.</span></h1>
-            <div className="wr-hero-cta">
-              <button className="wr-btn-ape" onClick={() => { const el = document.getElementById('wr-feed'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>
-                Start trading <span className="arrow">→</span>
+          {/* NEW: hero/offers collapse on return visits. Lure strip + WHAT'S THIS? */}
+          {isReturning ? (
+            <div className="wr-lure">
+              <div className="wr-lure-text">
+                <div className="wr-lure-h">Welcome <span className="it">back.</span></div>
+                <div className="wr-lure-s">
+                  ENTRY № {fieldLogNo.toLocaleString()} ·{' '}
+                  {freshCount > 0 ? <><b>{freshCount}</b> launches in &lt;60s</> : 'feed loaded'}
+                </div>
+              </div>
+              <button className="wr-lure-intro" onClick={() => setShowIntro(true)} title="Re-show the intro">
+                WHAT'S THIS?
               </button>
-              <span className="wr-no-connect">◌ No wallet connect needed</span>
             </div>
-          </section>
+          ) : (
+            <>
+              <section className="wr-hero" style={{position:'relative'}}>
+                {hasTraded && showIntro && (
+                  <button className="wr-lure-close" style={{position:'absolute',top:6,right:0}} onClick={() => setShowIntro(false)} title="Collapse">×</button>
+                )}
+                <h1>Fresh launches, <span className="it">caught at first light.</span></h1>
+                <div className="wr-hero-cta">
+                  <button className="wr-btn-ape" onClick={() => { const el = document.getElementById('wr-feed'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>
+                    Start trading <span className="arrow">→</span>
+                  </button>
+                  <span className="wr-no-connect">◌ No wallet connect needed</span>
+                </div>
+              </section>
 
-          <section className="wr-offer-strip">
-            <div className="wr-offer o1">
-              <div className="wr-offer-num"><span className="glyph">⚡</span><span>① The hook</span></div>
-              <h3>Two-second <span className="it">trade.</span></h3>
-              <p>No wallet popup. No signup. We generate a burner the moment you land — <b>your keys, your trades</b>, ready before your phone wakes.</p>
-            </div>
-            <div className="wr-offer o2">
-              <div className="wr-offer-num"><span className="glyph">◉</span><span>② The honesty</span></div>
-              <h3>Vibe-checked, <span className="it">openly.</span></h3>
-              <p>Every specimen gets a real read on liquidity, holders, curve health. We also tell you <b>what can't be checked</b>. No fake green badges.</p>
-            </div>
-            <div className="wr-offer o3">
-              <div className="wr-offer-num"><span className="glyph">◌</span><span>③ The timing</span></div>
-              <h3>The <span className="it">moment</span> they hatch.</h3>
-              <p>We watch pump.fun and Raydium so you don't refresh. New specimens land in the feed <b>within seconds</b> of going live.</p>
-              <div className="mini-radar"><div className="b b1" /><div className="b b2" /></div>
-            </div>
-          </section>
+              <section className="wr-offer-strip">
+                <div className="wr-offer o1">
+                  <div className="wr-offer-num"><span className="glyph">⚡</span><span>① The hook</span></div>
+                  <h3>Two-second <span className="it">trade.</span></h3>
+                  <p>No wallet popup. No signup. We generate a burner the moment you land — <b>your keys, your trades</b>, ready before your phone wakes.</p>
+                </div>
+                <div className="wr-offer o2">
+                  <div className="wr-offer-num"><span className="glyph">◉</span><span>② The honesty</span></div>
+                  <h3>Vibe-checked, <span className="it">openly.</span></h3>
+                  <p>Every specimen gets a real read on liquidity, holders, curve health. We also tell you <b>what can't be checked</b>. No fake green badges.</p>
+                </div>
+                <div className="wr-offer o3">
+                  <div className="wr-offer-num"><span className="glyph">◌</span><span>③ The timing</span></div>
+                  <h3>The <span className="it">moment</span> they hatch.</h3>
+                  <p>We watch pump.fun and Raydium so you don't refresh. New specimens land in the feed <b>within seconds</b> of going live.</p>
+                  <div className="mini-radar"><div className="b b1" /><div className="b b2" /></div>
+                </div>
+              </section>
+            </>
+          )}
+
+          {/* NEW: Open positions strip — renders only when there's something held */}
+          <OpenPositionsStrip walletStr={burnerStr} solPrice={solPrice} onOpenStats={() => setStatsOpen(true)} />
 
           <div className="wr-list-frame" id="wr-feed">
             <div className="wr-list-head">
@@ -2967,16 +3268,18 @@ export default function Ape({ mainWalletPubkey } = {}) {
                 <span className="e">◉ Live feed</span>
                 <span className="t">Recently <span className="it">emerged</span></span>
               </div>
-              <div className="wr-list-filters">
-                <button className={'wr-chip' + (filterWild ? ' on' : '')} onClick={() => setFilterWild(v => !v)}>⌖ Wild only</button>
-                <button className={'wr-chip' + (minLiq ? ' on' : '')} onClick={() => { const opts = [0, 5000, 20000, 50000]; setMinLiq(opts[(opts.indexOf(minLiq) + 1) % opts.length]); }}>
-                  ⌬ Min liq {minLiq ? '$' + format(minLiq) : 'any'}
-                </button>
-                <span style={{width:1,height:22,background:'var(--line)',margin:'0 2px'}} />
-                <button className={'wr-chip' + (sortBy === 'newest' ? ' on' : '')} onClick={() => setSortBy('newest')}>Freshest</button>
-                <button className={'wr-chip' + (sortBy === 'vibe'   ? ' on' : '')} onClick={() => setSortBy('vibe')}>Steadiest</button>
-                <button className={'wr-chip' + (sortBy === 'volume' ? ' on' : '')} onClick={() => setSortBy('volume')}>Active</button>
-              </div>
+            </div>
+
+            {/* NEW: Simplified sort bar replaces the 5-chip row. Filters live in modal. */}
+            <div className="wr-sortbar">
+              <span className="label">SORT</span>
+              <button className={'wr-chip' + (sortBy === 'newest' ? ' on' : '')} onClick={() => setSortBy('newest')}>Freshest</button>
+              <button className={'wr-chip' + (sortBy === 'vibe'   ? ' on' : '')} onClick={() => setSortBy('vibe')}>Steadiest</button>
+              <button className={'wr-chip' + (sortBy === 'volume' ? ' on' : '')} onClick={() => setSortBy('volume')}>Active</button>
+              <button className={'wr-filter-btn' + (filterCount > 0 ? ' on' : '')} onClick={() => setFiltersOpen(true)}>
+                ⌖ Filter
+                {filterCount > 0 ? <span className="ct">{filterCount}</span> : null}
+              </button>
             </div>
 
             <div className="wr-list">
@@ -3043,6 +3346,7 @@ export default function Ape({ mainWalletPubkey } = {}) {
       {walletOpen ? <WalletDrawer wallet={wallet} solBalance={solBalance} solPrice={solPrice} onWithdraw={onWithdraw} busy={withdrawing} onClose={()=>setWalletOpen(false)} /> : null}
       {tradeOpen ? <TradeSheet token={tradeOpen.token} initialMode={tradeOpen.mode} onClose={()=>setTradeOpen(null)} onConfirm={onSheetConfirm}
         buyPresets={buyPresets} sellPresets={sellPresets} solBalance={solBalance} tokenBalance={balances[tradeOpen.token.mint]} solPrice={solPrice} /> : null}
+      {filtersOpen ? <FiltersModal wildOnly={filterWild} setWildOnly={setFilterWild} minLiq={minLiq} setMinLiq={setMinLiq} onClose={() => setFiltersOpen(false)} /> : null}
 
       <StatsPanel open={statsOpen} onClose={() => setStatsOpen(false)} wallet={wallet} mainWalletPubkey={mainWalletPubkey} solPrice={solPrice} />
       <AutoPanel open={autoOpen} onClose={() => setAutoOpen(false)} autoState={auto} />
