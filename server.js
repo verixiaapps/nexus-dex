@@ -142,31 +142,7 @@ app.use('/api/', (req, res, next) => {
  * /api/solana-rpc gets its own much higher limit (3000/min ≈ 50/s) which is
  * generous enough for normal use but still catches runaway loops.
  * ===================================================================== */
-const apiLimiter = rateLimit({
-  windowMs: 60_000, max: 2000,
-  standardHeaders: true, legacyHeaders: false,
-  skip: r => r.path === '/health'
-          || r.path === '/api/health'
-          || r.path === '/solana-rpc'        // path is relative when mounted on /api/
-          || r.path === '/api/solana-rpc',
-  // Without this, a 429 is invisible — you can't tell which route or IP is
-  // saturating the bucket. Sampled to avoid log spam if it goes sustained.
-  handler: (req, res) => {
-    if (Math.random() < 0.1) console.warn('[ratelimit] api', req.ip, req.method, req.path);
-    res.status(429).json({ error: 'Too many requests, slow down.' });
-  },
-});
-app.use('/api/', apiLimiter);
-
-const rpcLimiter = rateLimit({
-  windowMs: 60_000, max: 3000,
-  standardHeaders: true, legacyHeaders: false,
-  handler: (req, res) => {
-    if (Math.random() < 0.1) console.warn('[ratelimit] rpc', req.ip, req.method, req.path);
-    res.status(429).json({ error: 'RPC rate limit hit — slow down.' });
-  },
-});
-app.use('/api/solana-rpc', rpcLimiter);
+// Rate limiters disabled per request. Bot UA blocker above is sole defense.
 
 /* ========================================================================
  * Shared helpers
@@ -251,10 +227,7 @@ const _LR_PUMP_DEX_IDS = new Set(['pumpfun', 'pumpswap']);
 const _LR_BASE58_RE    = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const _LR_BUFFER_MAX   = 200;
 const _LR_FEED_LIMIT   = 30;
-const _LR_CACHE_MS     = 8_000;  // bumped from 3s. Live feed only needs ~feed pace,
-                                  // and the WebSocket already keeps the buffer fresh in
-                                  // real time. 8s coalesces multiple tabs / users into one
-                                  // upstream call to DexScreener + pump.fun.
+const _LR_CACHE_MS     = 1_000;
 
 const _LR_WebSocket = require('ws');
 
@@ -410,8 +383,7 @@ function _lrShape(mint, pairs, wsMeta) {
 }
 
 const _LR_PF_BASE     = 'https://frontend-api.pump.fun/coins';
-const _LR_PF_CACHE_MS = 60_000;   // bumped from 30s — pump.fun fields are slow-changing,
-                                   // and Cloudflare doesn't love repeat hits. 60s halves load.
+const _LR_PF_CACHE_MS = 10_000;
 const _lrPfCache  = new Map();
 
 async function _lrFetchPumpInfo(mint, solPriceUsd) {
@@ -745,7 +717,7 @@ app.get('/api/jupiter/tokens/v2/tag', async (req, res) => {
 let _solPriceCache = { p: 0, ts: 0 };
 async function fetchSolPriceUsd() {
   const now = Date.now();
-  if (now - _solPriceCache.ts < 30_000 && _solPriceCache.p > 0) return _solPriceCache.p;
+  if (now - _solPriceCache.ts < 5_000 && _solPriceCache.p > 0) return _solPriceCache.p;
   const r = await fetchWithTimeout(`${JUPITER_PRICE_BASE}?ids=${SOL_MINT}`, { headers: { Accept: 'application/json' } }, 8_000);
   const d = await r.json();
   const p = Number(d?.[SOL_MINT]?.usdPrice || 0);
@@ -1053,7 +1025,7 @@ app.get('/api/dex/token/:mint', async (req, res) => {
     const pairs = Array.isArray(data?.pairs) ? data.pairs : [];
     const shaped = _shapePumpToken(mint, pairs);
     const payload = { token: shaped, hasPumpPair: !!shaped };
-    setCachedJson(cacheKey, 200, payload, 15_000);
+    setCachedJson(cacheKey, 200, payload, 2_000);
     return res.json(payload);
   } catch (e) {
     if (e.name === 'AbortError') return res.status(504).json({ error: 'DexScreener token timed out' });
@@ -1086,7 +1058,7 @@ app.get('/api/dex/sol-price', async (req, res) => {
     if (!Number.isFinite(price) || price <= 0)
       return res.status(502).json({ error: 'SOL price unavailable from DexScreener' });
     const payload = { price, ts: Date.now() };
-    setCachedJson(cacheKey, 200, payload, 30_000);
+    setCachedJson(cacheKey, 200, payload, 5_000);
     return res.json(payload);
   } catch (e) {
     if (e.name === 'AbortError') return res.status(504).json({ error: 'DexScreener sol-price timed out' });
