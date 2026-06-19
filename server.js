@@ -3,7 +3,6 @@ require('dotenv').config();
 const express   = require('express');
 const cors      = require('cors');
 const path      = require('path');
-const rateLimit = require('express-rate-limit');
 
 const app      = express();
 const PORT     = process.env.PORT || 3001;
@@ -129,20 +128,6 @@ app.use('/api/', (req, res, next) => {
   if (!ua || BOT_UA_RE.test(ua)) return res.status(403).json({ error: 'Forbidden' });
   next();
 });
-
-/* ========================================================================
- * Rate limiting
- *
- * The global /api/ limiter applies to everything EXCEPT /api/solana-rpc and
- * /api/health. /api/solana-rpc is excluded because a single Ape trade
- * confirmation polls the RPC ~95 times — a 600/min cap on that path will
- * block a real user mid-trade. The bot UA blocker above is the real defense
- * against abuse; the limiter just catches misbehaving scripts.
- *
- * /api/solana-rpc gets its own much higher limit (3000/min ≈ 50/s) which is
- * generous enough for normal use but still catches runaway loops.
- * ===================================================================== */
-// Rate limiters disabled per request. Bot UA blocker above is sole defense.
 
 /* ========================================================================
  * Shared helpers
@@ -1501,6 +1486,6 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('  Jupiter Price:   ' + JUPITER_PRICE_BASE);
   console.log('  Chainflip:       mainnet (SOL → BTC, broker commission disabled)');
   console.log('  Solana RPC:      alchemy ' + SOLANA_NETWORK + ' (key embedded, batches unrolled server-side)');
-  console.log('  Rate limits:     global 2000/min · /api/solana-rpc 3000/min (separate bucket)');
+  console.log('  Rate limits:     none');
   console.log('  Allowed origins: ' + allowedOrigins.join(', '));
 });
