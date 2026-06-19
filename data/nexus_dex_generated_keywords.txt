@@ -340,7 +340,10 @@ spl token swap
 stablecoin liquidity bridge
 swap across blockchains
 swap aggregator
+swap ai16z to sol
 swap any token to any token
+swap bonk to sol
+swap btc to sol
 swap crypto
 swap crypto without account
 swap crypto without kyc
@@ -348,6 +351,16 @@ swap crypto without limits
 swap crypto without login
 swap crypto without registration
 swap crypto without restrictions
+swap dogwifhat to sol
+swap drift to sol
+swap eth to sol
+swap fartcoin to sol
+swap fwog to sol
+swap giga to sol
+swap goat to sol
+swap grass to sol
+swap hnt to sol
+swap io to sol
 swap jup for wen solana
 swap jup for wif solana
 swap jup on solana
@@ -439,6 +452,8 @@ swap kmno to usdt solana
 swap kmno to w
 swap kmno to wen
 swap kmno to wif
+swap melania to sol
+swap meme coin to sol
 swap meme coins
 swap meme coins cross chain
 swap meme coins instantly
@@ -501,6 +516,7 @@ swap mew to usdt solana
 swap mew to w
 swap mew to wen
 swap mew to wif
+swap michi to sol
 swap mnde for act solana
 swap mnde for ai16z solana
 swap mnde for bonk solana
@@ -559,6 +575,7 @@ swap mnde to usdt solana
 swap mnde to w
 swap mnde to wen
 swap mnde to wif
+swap moo deng to sol
 swap moodeng on solana
 swap mother on solana
 swap msol for act solana
@@ -738,6 +755,7 @@ swap pnut to wen
 swap pnut to wif
 swap polygon to solana
 swap ponke on solana
+swap ponke to sol
 swap ponke to sol solana
 swap ponke to usdc solana
 swap ponke to usdt solana
@@ -1037,12 +1055,15 @@ swap sol to cloud
 swap sol to cloud solana
 swap sol to daddy solana
 swap sol to doge
+swap sol to dogwifhat
 swap sol to drift
 swap sol to drift solana
 swap sol to eth
 swap sol to fartcoin
 swap sol to fartcoin solana
+swap sol to fwog
 swap sol to fwog solana
+swap sol to giga
 swap sol to giga solana
 swap sol to gigachad solana
 swap sol to goat
@@ -1066,11 +1087,15 @@ swap sol to kas
 swap sol to kmno
 swap sol to kmno solana
 swap sol to link
+swap sol to melania
+swap sol to meme coin
 swap sol to mew
 swap sol to mew solana
+swap sol to michi
 swap sol to mkr
 swap sol to mnde
 swap sol to mnde solana
+swap sol to moo deng
 swap sol to moodeng solana
 swap sol to mother solana
 swap sol to msol
@@ -1085,6 +1110,7 @@ swap sol to pepe
 swap sol to pnut
 swap sol to pnut solana
 swap sol to polygon
+swap sol to ponke
 swap sol to ponke solana
 swap sol to popcat
 swap sol to popcat solana
@@ -1105,6 +1131,7 @@ swap sol to sui
 swap sol to tnsr
 swap sol to tnsr solana
 swap sol to tron
+swap sol to trump
 swap sol to uni
 swap sol to usdc
 swap sol to usdc solana
@@ -1116,6 +1143,7 @@ swap sol to wen
 swap sol to wen solana
 swap sol to wif
 swap sol to wif solana
+swap sol to xrp
 swap sol tokens on iphone
 swap solana
 swap solana during high gas
@@ -1202,6 +1230,7 @@ swap tnsr to wen
 swap tnsr to wif
 swap tokens
 swap tokens solflare wallet
+swap trump to sol
 swap usdc
 swap usdc cross chain
 swap usdc to act solana
@@ -1462,6 +1491,7 @@ swap wif to usdt solana
 swap wif to w
 swap wif to wen
 swap without kyc
+swap xrp to sol
 token analytics
 token audit
 token credibility checker
