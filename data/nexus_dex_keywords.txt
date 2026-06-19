@@ -40,18 +40,8 @@ swap sol to base
 swap usdc to sol
 swap sol to usdc
 swap sol to usdt
-netflix token swap
-token scam checker
 token risk checker
 crypto scam checker
-rug pull checker
-solana rug checker
-solana token risk
-is this token safe
-is this token a scam
-token safety score
-crypto contract checker
-contract risk checker
 smart contract checker
 token audit checker
 verify token contract

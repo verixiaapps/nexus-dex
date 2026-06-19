@@ -100,6 +100,7 @@ cheaper alternative to dexscreener
 cheaper alternative to gmgn
 cheaper alternative to photon
 contract risk analysis
+contract risk checker
 contract scanner
 cross border defi
 cross chain app
@@ -139,6 +140,7 @@ crypto analytics
 crypto assets
 crypto bridge
 crypto bridge platform
+crypto contract checker
 crypto due diligence
 crypto ecosystem
 crypto exchange
@@ -250,6 +252,8 @@ is slippage normal when swapping msol
 is slippage normal when swapping pyth
 is slippage normal when swapping ray
 is slippage normal when swapping render
+is this token a scam
+is this token safe
 kaspa exchange
 liquidity pools
 liquidity provider
@@ -304,6 +308,7 @@ netflix stock token
 netflix token
 netflix token chart
 netflix token price
+netflix token swap
 new crypto launches
 new crypto tokens
 new meme coins
@@ -340,6 +345,7 @@ pyth exchange
 render token exchange
 rug check
 rug checker
+rug pull checker
 secure crypto trading
 security scanner crypto
 self custody crypto
@@ -367,8 +373,10 @@ solana meme coin platform
 solana meme coin swap
 solana meme coin trading
 solana meme coins
+solana rug checker
 solana token exchange
 solana token explorer
+solana token risk
 solana token scanner
 solana token swaps
 solana token tracker
@@ -1570,6 +1578,8 @@ token opportunities
 token research
 token risk checker
 token safety checker
+token safety score
+token scam checker
 token scanner
 token screener
 token swaps
