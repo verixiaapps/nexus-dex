@@ -1389,6 +1389,7 @@ function BrandsRegionBlock() {
 
 // =====================================================================
 // MAIN — Wonderland hero + glass list
+// (Internal .st-head removed — global nexus DEX header above handles brand.)
 // =====================================================================
 function BrandsInner({ onConnectWallet }) {
   useStocksCSS();
@@ -1443,15 +1444,6 @@ function BrandsInner({ onConnectWallet }) {
         <div className="st-blob" style={{ width: 320, height: 320, background: '#B794F6', bottom: '10%', left: -100, animationDelay: '6s' }}/>
 
         <div className="st-inner">
-          <div className="st-head">
-            <div className="st-brand">
-              <div className="st-brand-dot"/>
-              <span className="st-wordmark">
-                stocks<span className="slash">//</span><span className="grad">on-chain</span>
-              </span>
-            </div>
-          </div>
-
           <div className="st-hero">
             <div className="st-eyebrow">
               <span className="dot"/>LIVE · <b>{totalPriced || BRANDS.length} BRANDS</b>
