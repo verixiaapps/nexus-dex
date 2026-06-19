@@ -1,16 +1,17 @@
-app.get('/robots.txt', (req, res) => {
-  res.type('text/plain').send(
-`User-agent: *
+User-agent: *
 Allow: /
 
+# Admin + internal
 Disallow: /flipsy-admin.html
 Disallow: /admin
 Disallow: /admin/
+
+# API + embed widgets (shouldn't show up as standalone pages)
 Disallow: /api/
 Disallow: /embed/
+
+# Common noise
 Disallow: /*?*ref=
 Disallow: /*?*utm_
 
 Sitemap: https://swap.verixiaapps.com/nexus-sitemap.xml
-`);
-});
