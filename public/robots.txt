@@ -6,11 +6,11 @@ Disallow: /flipsy-admin.html
 Disallow: /admin
 Disallow: /admin/
 
-# API + embed widgets
+# API + embed widgets (shouldn't show up as standalone pages)
 Disallow: /api/
 Disallow: /embed/
 
-# Tracking params
+# Common noise
 Disallow: /*?*ref=
 Disallow: /*?*utm_
 
