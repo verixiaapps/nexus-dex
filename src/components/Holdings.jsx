@@ -10,12 +10,8 @@
 // Holdings picks which drawer to mount based on getTokenRoute(token).
 // SOL row uses JupiterDrawer with mode forced to 'sell' → USDC.
 //
-// PUMP.FUN ROUTING (matches LaunchRadar):
-//   On BUY/SELL click for a "pump"-suffix mint, we probe
-//   /api/dex/token/:mint. If hasPumpPair → enrich the token with the
-//   DexScreener price/sym/icon/decimals and open PumpfunDrawer. If the
-//   token has no pump pair (graduated past PumpSwap to Raydium/Orca),
-//   we route to JupiterDrawer instead — so the user can always trade.
+// PUMP.FUN ROUTING: every mint ending in "pump" goes straight to
+// PumpfunDrawer. No probe, no Jupiter fallback. Trust the suffix.
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Buffer } from 'buffer';
@@ -375,18 +371,6 @@ const friendlyError = (err) => {
   return err?.message || 'Swap failed. Please try again.';
 };
 
-// =====================================================================
-// PUMP.FUN DETECTION via DexScreener (matches LaunchRadar's data source).
-// Returns { token, hasPumpPair }. token may be null even if hasPumpPair.
-// =====================================================================
-async function fetchPumpTokenInfo(mint) {
-  try {
-    const r = await fetch('/api/dex/token/' + encodeURIComponent(mint));
-    if (!r.ok) return null;
-    return await r.json();
-  } catch { return null; }
-}
-
 function MintIcon({ mint, meta, size = 22 }) {
   const [errored, setErrored] = useState(false);
   useEffect(() => { setErrored(false); }, [mint]);
@@ -487,10 +471,16 @@ async function fetchPortfolio(addressStr) {
 
   const tokenMints = Object.keys(byMint).filter(m => m !== SOL_MINT);
 
-  const [metaMap, priceMap] = await Promise.all([
+  // Meta + price fetches are best-effort. If Jupiter is rate-limiting or down,
+  // we still want to show the user's tokens (just without names/prices).
+  const [metaSettled, priceSettled] = await Promise.allSettled([
     fetchMetaBatched(tokenMints),
     fetchPricesBatched([SOL_MINT, ...tokenMints]),
   ]);
+  const metaMap  = metaSettled.status  === 'fulfilled' ? metaSettled.value  : {};
+  const priceMap = priceSettled.status === 'fulfilled' ? priceSettled.value : {};
+  if (metaSettled.status  === 'rejected') console.warn('[Holdings] meta fetch failed',  metaSettled.reason);
+  if (priceSettled.status === 'rejected') console.warn('[Holdings] price fetch failed', priceSettled.reason);
 
   const enriched = Object.values(byMint).map(h => {
     const fetched = metaMap[h.mint];
@@ -2242,7 +2232,6 @@ export default function Holdings({ onConnectWallet }) {
   const [sortBy, setSortBy]         = useState('value');
   const [query, setQuery]           = useState('');
   const [drawer, setDrawer]         = useState(null);
-  const [probingMint, setProbingMint] = useState(null);
   const [seenMap, setSeenMap]       = useState({});
   const inFlightRef = useRef(false);
 
@@ -2309,51 +2298,25 @@ export default function Holdings({ onConnectWallet }) {
   }, [portfolio, sortBy, seenMap]);
 
   // ─── ROUTING ──────────────────────────────────────────────────────
-  // For pump-suffix mints, probe /api/dex/token/:mint to see if the
-  // token still has a pump.fun pair. If yes → enrich with DexScreener
-  // price/sym/icon/decimals (matching LaunchRadar's data source) and
-  // open PumpfunDrawer. If no (graduated past PumpSwap to Raydium/Orca)
-  // → fall back to JupiterDrawer so the user can still trade.
+  // SOL row             → JupiterDrawer (SOL→USDC).
+  // Any *pump mint      → PumpfunDrawer. No probe, no fallback.
+  // Brand xStock mints  → XstockDrawer.
+  // Everything else     → JupiterDrawer.
   // ─────────────────────────────────────────────────────────────────
-  const openTrade = useCallback(async (token, mode) => {
+  const openTrade = useCallback((token, mode) => {
     if (!token?.mint) return;
 
-    if (token.mint === SOL_MINT || !isPumpFunMint(token.mint)) {
-      setDrawer({ token, mode });
+    if (token.mint === SOL_MINT) {
+      setDrawer({ token, mode, route: 'jupiter' });
       return;
     }
 
-    setProbingMint(token.mint);
-    try {
-      const info = await fetchPumpTokenInfo(token.mint);
-      if (info?.hasPumpPair && info.token) {
-        const d = info.token;
-        const baseMeta = token.meta || buildFallbackMeta(token.mint);
-        const enriched = {
-          ...token,
-          price:    d.price > 0 ? d.price : token.price,
-          hasPrice: d.price > 0 || token.hasPrice,
-          decimals: Number.isFinite(d.decimals) ? d.decimals : token.decimals,
-          meta: {
-            ...baseMeta,
-            symbol:   d.sym  || baseMeta.symbol,
-            name:     d.name || baseMeta.name,
-            icon:     d.icon || baseMeta.icon,
-            decimals: Number.isFinite(d.decimals) ? d.decimals : (baseMeta.decimals ?? 6),
-            isPump:   true,
-          },
-        };
-        setDrawer({ token: enriched, mode, route: 'pumpfun' });
-      } else {
-        // Graduated past PumpSwap (or never on pump). Use Jupiter.
-        setDrawer({ token, mode, route: 'jupiter' });
-      }
-    } catch (e) {
-      console.warn('[Holdings] pump probe failed, falling back to Jupiter', e?.message);
-      setDrawer({ token, mode, route: 'jupiter' });
-    } finally {
-      setProbingMint(null);
+    if (isPumpFunMint(token.mint)) {
+      setDrawer({ token, mode, route: 'pumpfun' });
+      return;
     }
+
+    setDrawer({ token, mode });
   }, []);
 
   const openBuy  = useCallback((token) => openTrade(token, 'buy'),  [openTrade]);
@@ -2460,8 +2423,9 @@ export default function Holdings({ onConnectWallet }) {
   const visibleTokens = tokens.filter(matchHolding);
   const noMatches     = !showSol && visibleTokens.length === 0;
 
-  // Pick the right drawer for the open token. Honor the route override
-  // computed by openTrade (so pump.fun probes don't get re-evaluated).
+  // Pick the right drawer for the open token. Honor the route field
+  // set by openTrade (so we never re-decide and accidentally route a
+  // pump mint back to Jupiter).
   let drawerEl = null;
   if (drawer) {
     const isSolRow = drawer.token.mint === SOL_MINT;
@@ -2577,7 +2541,6 @@ export default function Holdings({ onConnectWallet }) {
               idx={0}
               onBuy={openBuy}
               onSell={openSell}
-              busy={probingMint === solHolding.mint}
             />
           )}
           {!qRaw && tokens.length === 0 && (
@@ -2599,7 +2562,6 @@ export default function Holdings({ onConnectWallet }) {
               idx={i + 1}
               onBuy={openBuy}
               onSell={openSell}
-              busy={probingMint === t.mint}
             />
           ))}
         </div>
