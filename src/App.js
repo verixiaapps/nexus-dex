@@ -1069,7 +1069,7 @@ function AppInner() {
         )}
         {tab === 'launchradar' && <LaunchRadar onConnectWallet={openWallet} />}
         {tab === 'ape' && (canApe
-          ? <Ape onConnectWallet={openWallet} />
+          ? <Ape onConnectWallet={openWallet} mainWalletPubkey={wallet.walletAddress} />
           : <ApeLocked connected={wallet.isConnected} onConnectWallet={openWallet} />
         )}
         {tab === 'bridge'      && <><BridgeHero onSwitchTab={switchTab} /><CrossChainSwap onConnectWallet={openWallet} /></>}
