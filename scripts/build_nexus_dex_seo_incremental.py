@@ -1,28 +1,18 @@
 #!/usr/bin/env python3
 """
-build_nexus_dex_seo_incremental.py -- v4.2 (swap.v migration)
+build_nexus_dex_seo_incremental.py -- v4.3 (sitemap-in-public fix)
 
-WHAT CHANGED vs v4.1
+WHAT CHANGED vs v4.2
 --------------------
-Pages now ship to public/<slug>/index.html (CRA copies public/ into build/ at
-build time), so they're served at https://swap.verixiaapps.com/<slug>/. This
-puts the SEO pages on the same origin as the approved swap dApp so Phantom
-doesn't show a "new website" warning when users sign from the embedded swap.
+SITEMAP_FILE now points at public/nexus-sitemap.xml (same file the GitHub
+Actions workflow writes). Previously it wrote to nexus-sitemap.xml at the
+repo root on every checkpoint, which left a stale root-level sitemap that
+shadowed the one in public/.
 
-Concrete diffs vs v4.1:
-  - OUTPUT_DIR moved from "defi" to "public".
-  - Canonical / og:url / twitter:url / JSON-LD URL all use swap.verixiaapps.com
-    via the new SWAP_SITE constant.
-  - Internal hub + related + more links now emit href="/<slug>/" instead of
-    href="/nexus-dex/defi/<slug>/".
-  - rebuild_sitemap() emits <loc>https://swap.verixiaapps.com/<slug>/</loc>
-    and scans public/ on disk.
-  - SITE (https://verixiaapps.com) is kept and still used for OG_IMAGE and any
-    other parent-brand asset references.
-
-v4.1 sitemap-on-checkpoint behaviour is preserved: every COMMIT_EVERY-page
-checkpoint also rebuilds + commits the sitemap, so timeouts don't desync
-public/ vs the sitemap.
+Everything else is unchanged from v4.2:
+  - Pages still ship to public/<slug>/index.html
+  - Canonical/og/JSON-LD URLs still use swap.verixiaapps.com
+  - Sitemap is still rebuilt on every COMMIT_EVERY-page checkpoint
 """
 
 import os
@@ -59,7 +49,7 @@ REJECTED_KEYWORDS_FILE  = os.path.join(BASE_DIR, "data", "nexus_dex_rejected_key
 
 TEMPLATE_FILE = os.path.join(BASE_DIR, "template", "defi-template.html")
 OUTPUT_DIR    = os.path.join(BASE_DIR, "public")
-SITEMAP_FILE  = os.path.join(BASE_DIR, "nexus-sitemap.xml")
+SITEMAP_FILE  = os.path.join(OUTPUT_DIR, "nexus-sitemap.xml")
 
 # SITE is the parent brand origin. Used for og:image and any
 # parent-brand asset references that intentionally stay cross-origin.
@@ -82,7 +72,7 @@ RESET_ENGINE        = os.getenv("RESET_ENGINE", "false").lower() == "true"
 # the swap app. If a generated keyword happens to slugify into one of these,
 # we skip it to avoid shadowing real routes.
 PROTECTED_SLUGS = {
-    # CRA public/ entries — never overwrite these
+    # CRA public/ entries -- never overwrite these
     "index.html", "favicon.ico", "manifest.json", "robots.txt",
     "asset-manifest.json", "logo192.png", "logo512.png",
     # Reserved server.js routes
@@ -913,7 +903,7 @@ def build_title_fallback(keyword):
         return f"{title_case(raw)} | Verixia Solana Guide"
     if is_question_style_keyword(raw):
         return f"{title_case(raw)}? Verixia Non-Custodial Trading"
-    return f"{readable} | Verixia — Non-Custodial Swap on Solana"
+    return f"{readable} | Verixia -- Non-Custodial Swap on Solana"
 
 
 def build_description_fallback(keyword):
@@ -934,7 +924,7 @@ def build_description_fallback(keyword):
 def build_intro_fallback(keyword):
     readable = readable_keyword(keyword)
     return (
-        f"{readable} on Verixia — a non-custodial swap on Solana. Connect a wallet "
+        f"{readable} on Verixia -- a non-custodial swap on Solana. Connect a wallet "
         f"and you're trading. No KYC. No accounts. No limits."
     )
 
@@ -1224,13 +1214,18 @@ def _git_lastmod_for(file_path):
 
 def rebuild_sitemap():
     """
-    Rebuild nexus-sitemap.xml by scanning OUTPUT_DIR (public/) on disk.
+    Rebuild public/nexus-sitemap.xml by scanning OUTPUT_DIR (public/) on disk.
 
     Every public/<slug>/index.html present on disk ends up in the sitemap
     pointing at https://swap.verixiaapps.com/<slug>/. Called from
     git_checkpoint() so each COMMIT_EVERY-page commit ships a matching
     sitemap, even if the workflow is killed before the workflow's
     end-of-run sitemap step runs.
+
+    v4.3: writes to public/nexus-sitemap.xml (same file the GitHub Actions
+    workflow updates). Previously wrote to nexus-sitemap.xml at repo root,
+    which left a stale root-level sitemap getting served instead of the
+    one in public/.
     """
     urls = []
     if os.path.isdir(OUTPUT_DIR):
@@ -1254,9 +1249,10 @@ def rebuild_sitemap():
         + ("\n".join(urls) + "\n" if urls else "")
         + '</urlset>\n'
     )
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
     with open(SITEMAP_FILE, "w", encoding="utf-8") as f:
         f.write(xml)
-    print(f"[sitemap] Wrote {len(urls)} URLs to nexus-sitemap.xml")
+    print(f"[sitemap] Wrote {len(urls)} URLs to {SITEMAP_FILE}")
 
 
 # -----------------------------
@@ -1361,6 +1357,7 @@ def main():
     print(f"Resume mode: {RESUME}")
     print(f"Reset engine registries: {RESET_ENGINE}")
     print(f"Output dir: {OUTPUT_DIR}")
+    print(f"Sitemap file: {SITEMAP_FILE}")
     print(f"Canonical base: {SWAP_SITE}")
 
     generated_count = 0
