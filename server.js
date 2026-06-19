@@ -1131,6 +1131,112 @@ app.get('/api/dex/sol-price', async (req, res) => {
   }
 });
 
+/* ------------------------------------------------------------------------
+ * Token chart — price history for the TokenChart in Ape.jsx TradeSheet.
+ * Used by:  GET /api/dex/chart/:mint?tf=5m   (also 1H, 6H, 24H)
+ *
+ * Returns: { points: [{ ts: number(ms), price: number(USD) }, ...] }
+ *
+ * Two-hop lookup:
+ *   1) DexScreener tokens/{mint} → highest-liquidity Solana pair address
+ *   2) GeckoTerminal pool OHLCV  → candles for that pool
+ *
+ * Cached 5min per (mint, tf) on success, 1min on miss. Returns 404 with
+ * empty points when no pair is found or candles are sparse — the frontend
+ * handles that as the "too fresh to chart" empty state, so the chart
+ * degrades gracefully on flaky upstream / brand-new tokens.
+ *
+ * GeckoTerminal is unauthenticated and rate-limits generously; the cache
+ * keeps us well under their limits even at heavy traffic.
+ * ---------------------------------------------------------------------- */
+const _chartTfs = {
+  '5m':  { timeframe: 'minute', aggregate: 1,  limit: 5  },
+  '1H':  { timeframe: 'minute', aggregate: 5,  limit: 12 },
+  '6H':  { timeframe: 'minute', aggregate: 15, limit: 24 },
+  '24H': { timeframe: 'hour',   aggregate: 1,  limit: 24 },
+};
+
+app.get('/api/dex/chart/:mint', async (req, res) => {
+  try {
+    const mint = String(req.params.mint || '');
+    if (!PUMP_BASE58_RE.test(mint)) return res.status(400).json({ error: 'Invalid mint' });
+    const tf = String(req.query.tf || '5m');
+    const tfDef = _chartTfs[tf];
+    if (!tfDef) return res.status(400).json({ error: 'Invalid tf (use 5m, 1H, 6H, 24H)' });
+
+    const cacheKey = 'dex:chart:' + mint + ':' + tf;
+    const cached = getCachedJson(cacheKey);
+    if (cached) return res.status(cached.status).json(cached.payload);
+
+    // 1) Find the best Solana pair for this mint.
+    const dexR = await fetchWithTimeout(
+      DEX_BASE + '/latest/dex/tokens/' + mint,
+      { headers: { Accept: 'application/json' } },
+      8_000,
+    );
+    if (!dexR.ok) {
+      const payload = { points: [] };
+      setCachedJson(cacheKey, 404, payload, 60_000);
+      return res.status(404).json(payload);
+    }
+    const dexData = await dexR.json();
+    const pairs = (dexData?.pairs || []).filter(p => p?.chainId === 'solana' && p?.pairAddress);
+    if (pairs.length === 0) {
+      const payload = { points: [] };
+      setCachedJson(cacheKey, 404, payload, 60_000);
+      return res.status(404).json(payload);
+    }
+    const best = pairs.reduce(
+      (a, b) => (Number(b.liquidity?.usd || 0) > Number(a.liquidity?.usd || 0) ? b : a),
+      pairs[0],
+    );
+    const pairAddress = best.pairAddress;
+
+    // 2) Pull OHLCV from GeckoTerminal for that pool.
+    const gtUrl = GECKOTERMINAL_BASE
+      + '/networks/solana/pools/' + pairAddress
+      + '/ohlcv/' + tfDef.timeframe
+      + '?aggregate=' + tfDef.aggregate
+      + '&limit=' + tfDef.limit
+      + '&currency=usd';
+    const gtR = await fetchWithTimeout(gtUrl, { headers: GT_HEADERS }, 8_000);
+    if (!gtR.ok) {
+      const payload = { points: [] };
+      setCachedJson(cacheKey, 404, payload, 60_000);
+      return res.status(404).json(payload);
+    }
+    const gtData = await gtR.json();
+
+    // GeckoTerminal: { data: { attributes: { ohlcv_list: [[ts_sec,o,h,l,c,vol], ...] } } }
+    // Returned most-recent-first → reverse so chart reads left-to-right.
+    const raw = gtData?.data?.attributes?.ohlcv_list;
+    if (!Array.isArray(raw) || raw.length === 0) {
+      const payload = { points: [] };
+      setCachedJson(cacheKey, 404, payload, 60_000);
+      return res.status(404).json(payload);
+    }
+    const points = raw
+      .slice()
+      .reverse()
+      .map(row => ({ ts: Number(row[0]) * 1000, price: Number(row[4]) }))
+      .filter(p => Number.isFinite(p.ts) && Number.isFinite(p.price) && p.price > 0);
+
+    if (points.length < 2) {
+      const payload = { points: [] };
+      setCachedJson(cacheKey, 404, payload, 60_000);
+      return res.status(404).json(payload);
+    }
+
+    const payload = { points };
+    setCachedJson(cacheKey, 200, payload, 5 * 60_000);  // 5min per spec
+    return res.json(payload);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'Chart timed out' });
+    logError('dex-chart', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+
 app.post('/api/pumpfun/trade', async (req, res) => {
   try {
     const b = req.body || {};
