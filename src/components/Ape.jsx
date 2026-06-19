@@ -1120,6 +1120,26 @@ function ReferralsSection({ walletStr, stats, statsLoading, statsError, onBoostA
 
   const inviteTweet = "I've been logging fresh launches on Wonderland Radar — burner wallet, 2-second trade, honest reads.\n\nFollow my line:";
 
+  // Gate: no main wallet connected → don't show a link backed by a disposable
+  // burner. Referral fees route on-chain to the wallet in the link, so we want
+  // a wallet the user will still own next month.
+  if (!walletStr) return (
+    <>
+      <div className="wp-eyebrow"><span className="glyph">◉</span><span>Section § Referrals</span><span className="rule" /></div>
+      <h1 className="wp-h1">Connect a <span className="it">main wallet.</span></h1>
+      <p className="wp-sub">Your referral link pays out on-chain to whichever wallet it points at. We won't build that link against the burner — burners are disposable, and your fees shouldn't be. Connect a wallet you'll still own next year (Phantom, Solflare, Backpack) and your link will appear here.</p>
+
+      <div className="wp-card feature">
+        <div className="wp-card-eye"><span className="gl">⊘</span><span>Not connected</span></div>
+        <div style={{padding:'18px 4px 4px',fontFamily:"'JetBrains Mono'",fontSize:11.5,lineHeight:1.7,color:'var(--ink2)',letterSpacing:.2}}>
+          <div>· Use the wallet button in the top nav to connect.</div>
+          <div>· Once connected, your link shows here and starts earning immediately.</div>
+          <div>· Already shared a link? Earnings on it route to whichever wallet was in it — no migration available.</div>
+        </div>
+      </div>
+    </>
+  );
+
   return (
     <>
       <div className="wp-eyebrow"><span className="glyph">◉</span><span>Section § Referrals</span><span className="rule" /></div>
@@ -1915,11 +1935,17 @@ function AutoPanel({ open, onClose, autoState }) {
 
   if (!open) return null;
 
+  // Three states:
+  //   paused  → daily loss cap hit (or other circuit breaker). Coral.
+  //   on      → toggle is on, evaluating tokens as they come in. Mint.
+  //   off     → toggle is off. "idle" was confusing here — in trading parlance
+  //             idle means "running but no opportunities", which isn't the
+  //             state when the user has affirmatively turned it off.
   const statusPill = a.paused
     ? <span className="wa-stat-pill paused">⏸ paused</span>
     : a.enabled
       ? <span className="wa-stat-pill on"><span className="d" />watching</span>
-      : <span className="wa-stat-pill off">○ idle</span>;
+      : <span className="wa-stat-pill off">○ off</span>;
 
   // Open-P&L approximation per position: entrySol × (1-fee) became tokens at
   // entry; those tokens at current price are worth entrySol × (1-fee) × ratio;
@@ -2022,7 +2048,7 @@ function AutoPanel({ open, onClose, autoState }) {
             <AutoSlider label="Min liquidity" value={(a.custom.minLiqUsd/1000).toFixed(0)} unit="K USD" min={1} max={100} step={1}
               onChange={(v) => a.setCustom({ ...a.custom, minLiqUsd: v * 1000 })}
               desc={<>Skip tokens with less liquidity. <b>Low = price swings wildly</b> on every trade. Too high = miss small launches that might run.</>} />
-            <AutoSlider label="Min holders" value={a.custom.minHolders} unit="" min={0} max={500} step={5}
+            <AutoSlider label="Min holders" value={a.custom.minHolders} unit="" min={0} max={200} step={5}
               onChange={(v) => a.setCustom({ ...a.custom, minHolders: v })}
               desc={<>Skip tokens with fewer holders. <b>More holders = more organic interest.</b> Below 20 you're often the only retail buyer in the room.</>} />
             <AutoSlider label="Vibe score" labelIt="floor" value={a.custom.minVibe} unit="/ 85" min={0} max={85} step={1}
@@ -2123,22 +2149,35 @@ function AutoPanel({ open, onClose, autoState }) {
         </div>
       </div>
 
-      {/* Sticky kill bar */}
-      <div className="wa-kill">
-        <button className="wa-kill-btn stop" onClick={a.killSwitch} disabled={!a.enabled}>
-          STOP AUTO-TRADE
-        </button>
-        <button className="wa-kill-btn flat" onClick={() => { if (window.confirm('Flatten all ' + a.positions.length + ' position(s) at market?')) a.flattenAll(); }} disabled={a.positions.length === 0}>
-          FLATTEN ALL ({a.positions.length})
-        </button>
-      </div>
+      {/* Sticky kill bar — only renders if there's actually something to do.
+          When the toggle is off AND no positions are open, a giant coral
+          "STOP AUTO-TRADE" button is loud, useless, and confusing. Hide it. */}
+      {(a.enabled || a.positions.length > 0) && (
+        <div className="wa-kill">
+          {a.enabled && (
+            <button className="wa-kill-btn stop" onClick={a.killSwitch}>
+              STOP AUTO-TRADE
+            </button>
+          )}
+          {a.positions.length > 0 && (
+            <button className="wa-kill-btn flat" onClick={() => { if (window.confirm('Flatten all ' + a.positions.length + ' position(s) at market?')) a.flattenAll(); }}>
+              FLATTEN ALL ({a.positions.length})
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-function StatsPanel({ open, onClose, wallet, solPrice }) {
+function StatsPanel({ open, onClose, wallet, mainWalletPubkey, solPrice }) {
   const [tab, setTab] = useState('referrals');
-  const walletStr = wallet?.publicKey?.toBase58 ? wallet.publicKey.toBase58() : '';
+  // Burner = the trader (does swaps on this page). Used for field log + standings.
+  const burnerWalletStr = wallet?.publicKey?.toBase58 ? wallet.publicKey.toBase58() : '';
+  // Ref wallet = the user's persistent main wallet (Phantom etc.) the parent
+  // hands us. Used as the payout identity for referrals. No fallback to burner —
+  // we'd rather show a gate than print a link that pays to a disposable wallet.
+  const refWalletStr = mainWalletPubkey || '';
 
   const [stats, setStats] = useState(null);
   const [statsLoading, setStatsLoading] = useState(false);
@@ -2153,15 +2192,15 @@ function StatsPanel({ open, onClose, wallet, solPrice }) {
   const [toast, setToast] = useState(null);
 
   const fetchStats = useCallback(async () => {
-    if (!walletStr) return; setStatsLoading(true);
-    try { const r = await fetch('/api/ref/stats?wallet=' + walletStr); if (!r.ok) throw new Error('HTTP ' + r.status); setStats(await r.json()); setStatsError(null); }
+    if (!refWalletStr) return; setStatsLoading(true);
+    try { const r = await fetch('/api/ref/stats?wallet=' + refWalletStr); if (!r.ok) throw new Error('HTTP ' + r.status); setStats(await r.json()); setStatsError(null); }
     catch (e) { setStatsError(String(e.message || 'Network').slice(0, 100)); } finally { setStatsLoading(false); }
-  }, [walletStr]);
+  }, [refWalletStr]);
   const fetchPnl = useCallback(async () => {
-    if (!walletStr) return; setPnlLoading(true);
-    try { const r = await fetch('/api/ref/pnl?wallet=' + walletStr); if (!r.ok) throw new Error('HTTP ' + r.status); setPnl(await r.json()); setPnlError(null); }
+    if (!burnerWalletStr) return; setPnlLoading(true);
+    try { const r = await fetch('/api/ref/pnl?wallet=' + burnerWalletStr); if (!r.ok) throw new Error('HTTP ' + r.status); setPnl(await r.json()); setPnlError(null); }
     catch (e) { setPnlError(String(e.message || 'Network').slice(0, 100)); } finally { setPnlLoading(false); }
-  }, [walletStr]);
+  }, [burnerWalletStr]);
   const fetchLb = useCallback(async (w) => {
     setLbLoading(true);
     try { const r = await fetch('/api/ref/leaderboard?window=' + (w || lbWin)); if (!r.ok) throw new Error('HTTP ' + r.status); setLb(await r.json()); setLbError(null); }
@@ -2169,21 +2208,21 @@ function StatsPanel({ open, onClose, wallet, solPrice }) {
   }, [lbWin]);
 
   useEffect(() => {
-    if (!open || !walletStr) return;
-    if (tab === 'referrals') fetchStats();
-    else if (tab === 'fieldlog') fetchPnl();
-    else if (tab === 'standings') fetchLb(lbWin);
-  }, [open, tab, walletStr, lbWin, fetchStats, fetchPnl, fetchLb]);
+    if (!open) return;
+    if (tab === 'referrals') { if (refWalletStr) fetchStats(); }
+    else if (tab === 'fieldlog') { if (burnerWalletStr) fetchPnl(); }
+    else if (tab === 'standings') { fetchLb(lbWin); }
+  }, [open, tab, refWalletStr, burnerWalletStr, lbWin, fetchStats, fetchPnl, fetchLb]);
 
   useEffect(() => {
     if (!open) return;
     const id = setInterval(() => {
-      if (tab === 'referrals') fetchStats();
-      else if (tab === 'fieldlog') fetchPnl();
-      else if (tab === 'standings') fetchLb(lbWin);
+      if (tab === 'referrals') { if (refWalletStr) fetchStats(); }
+      else if (tab === 'fieldlog') { if (burnerWalletStr) fetchPnl(); }
+      else if (tab === 'standings') { fetchLb(lbWin); }
     }, 30000);
     return () => clearInterval(id);
-  }, [open, tab, lbWin, fetchStats, fetchPnl, fetchLb]);
+  }, [open, tab, refWalletStr, burnerWalletStr, lbWin, fetchStats, fetchPnl, fetchLb]);
 
   useEffect(() => {
     if (!open) return;
@@ -2221,9 +2260,9 @@ function StatsPanel({ open, onClose, wallet, solPrice }) {
       </div>
 
       <div className="wp-page" key={tab}>
-        {tab === 'referrals' && <ReferralsSection walletStr={walletStr} stats={stats} statsLoading={statsLoading} statsError={statsError} onBoostActivated={onBoostActivated} />}
-        {tab === 'fieldlog' && <FieldLogSection walletStr={walletStr} pnl={pnl} pnlLoading={pnlLoading} pnlError={pnlError} solPrice={solPrice} />}
-        {tab === 'standings' && <StandingsSection walletStr={walletStr} lb={lb} lbLoading={lbLoading} lbError={lbError} win={lbWin} setWin={setLbWin} />}
+        {tab === 'referrals' && <ReferralsSection walletStr={refWalletStr} stats={stats} statsLoading={statsLoading} statsError={statsError} onBoostActivated={onBoostActivated} />}
+        {tab === 'fieldlog' && <FieldLogSection walletStr={burnerWalletStr} pnl={pnl} pnlLoading={pnlLoading} pnlError={pnlError} solPrice={solPrice} />}
+        {tab === 'standings' && <StandingsSection walletStr={burnerWalletStr} lb={lb} lbLoading={lbLoading} lbError={lbError} win={lbWin} setWin={setLbWin} />}
       </div>
 
       {toast && <div className="wp-toast"><span className="gl">✓</span><span>{toast}</span></div>}
@@ -2514,7 +2553,12 @@ const SpecimenRow = React.memo(function SpecimenRow({ token, ageMsLive, owned, q
 /* ════════════════════════════════════════════════════════════════
    MAIN
    ════════════════════════════════════════════════════════════════ */
-export default function Ape() {
+// mainWalletPubkey: base58 of the user's CONNECTED main wallet (e.g. Phantom),
+// passed in from the parent layout. Used only for the Referrals tab so that
+// referral fees route to a persistent wallet instead of the disposable burner.
+// If not provided, the Referrals tab shows a "connect a main wallet" gate.
+// Field log + standings still use the burner because the burner is the trader.
+export default function Ape({ mainWalletPubkey } = {}) {
   useWrCSS();
   const wallet = useLocalWallet();
   const connection = useMemo(() => getConn('confirmed'), []);
@@ -3000,7 +3044,7 @@ export default function Ape() {
       {tradeOpen ? <TradeSheet token={tradeOpen.token} initialMode={tradeOpen.mode} onClose={()=>setTradeOpen(null)} onConfirm={onSheetConfirm}
         buyPresets={buyPresets} sellPresets={sellPresets} solBalance={solBalance} tokenBalance={balances[tradeOpen.token.mint]} solPrice={solPrice} /> : null}
 
-      <StatsPanel open={statsOpen} onClose={() => setStatsOpen(false)} wallet={wallet} solPrice={solPrice} />
+      <StatsPanel open={statsOpen} onClose={() => setStatsOpen(false)} wallet={wallet} mainWalletPubkey={mainWalletPubkey} solPrice={solPrice} />
       <AutoPanel open={autoOpen} onClose={() => setAutoOpen(false)} autoState={auto} />
 
       <div className="wr-toasts">
