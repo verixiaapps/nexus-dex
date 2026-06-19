@@ -987,6 +987,12 @@ function AppInner() {
   const canApe  = wallet.walletAddress === APE_ACCESS_WALLET;
   const navTabs = NAV_TABS.filter(t => t.id !== 'ape' || canApe);
 
+  // Full-bleed pages: run edge-to-edge inside the global header (no inset frame).
+  // Anything in this list gets no horizontal padding and no maxWidth on <main>,
+  // so the page can render its own background and design system without a
+  // visible "card within a card" feel.
+  const isFullBleed = tab === 'ape' || tab === 'launchradar';
+
   return (
     <div style={{ minHeight: '100dvh', color: C.ink, fontFamily: "'Space Grotesk', sans-serif", overscrollBehavior: 'none', overflowX: 'hidden', width: '100%', position: 'relative' }}>
       {/* Ambient background blobs — rendered globally so they show on every tab */}
@@ -1057,7 +1063,12 @@ function AppInner() {
         </div>
       </header>
 
-      <main style={{ position: 'relative', zIndex: 1, maxWidth: 1100, margin: '0 auto', padding: '0 16px 100px', width: '100%' }}>
+      <main style={{
+        position: 'relative', zIndex: 1,
+        maxWidth: isFullBleed ? 'none' : 1100,
+        margin: '0 auto', width: '100%',
+        padding: isFullBleed ? '0 0 100px' : '0 16px 100px',
+      }}>
         {tab === 'swap' && (
           <>
             <SwapHero onStartTrading={switchTab} onScrollToWidget={scrollToSwapWidget} />
