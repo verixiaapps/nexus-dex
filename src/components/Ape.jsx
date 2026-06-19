@@ -95,7 +95,7 @@ const WR_CSS = `
 .wr-nav-wallet .nudge{position:absolute;top:-3px;right:-3px;width:10px;height:10px;border-radius:50%;background:var(--butter);border:2px solid var(--iris);box-shadow:0 0 6px var(--butter)}
 @media(max-width:768px){.wr-nav{padding:12px 14px;gap:10px}.wr-nav-eyebrow{display:none}.wr-nav-stats span:not(.gl){display:none}.wr-nav-stats{padding:0 11px}}
 
-.wr-qbar{position:sticky;top:56px;z-index:55;display:flex;align-items:center;gap:8px;padding:10px 28px;background:rgba(14,11,31,.85);backdrop-filter:blur(18px);border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none}
+.wr-qbar{position:sticky;top:54px;z-index:55;display:flex;align-items:center;gap:8px;padding:10px 28px;background:rgba(14,11,31,.85);backdrop-filter:blur(18px);border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none}
 .wr-qbar::-webkit-scrollbar{display:none}
 .wr-qlabel{font-family:'JetBrains Mono';font-size:9.5px;font-weight:800;letter-spacing:1.3px;text-transform:uppercase;color:var(--ink3);flex-shrink:0;display:flex;align-items:center;gap:6px}
 .wr-qlabel .b{color:var(--magenta)}
@@ -109,11 +109,6 @@ const WR_CSS = `
 .wr-qfast{flex-shrink:0;margin-left:auto;display:flex;align-items:center;gap:6px;font-family:'JetBrains Mono';font-size:9.5px;font-weight:800;letter-spacing:.6px;color:var(--mint);background:var(--mint-soft);padding:6px 11px;border-radius:999px;white-space:nowrap}
 .wr-qfast .d{width:6px;height:6px;border-radius:50%;background:var(--mint);box-shadow:0 0 8px var(--mint);animation:wr-pulse 1.3s infinite}
 @media(max-width:768px){.wr-qbar{padding:9px 14px}}
-.wr-actions{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
-.wr-actions .wr-nav-wallet{margin-left:auto}
-.wr-actions-eyebrow{display:flex;align-items:center;gap:9px;font-family:'JetBrains Mono';font-size:9.5px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:var(--ink3);margin-right:auto}
-.wr-actions-eyebrow .live{width:6px;height:6px;border-radius:50%;background:var(--mint);box-shadow:0 0 10px var(--mint);animation:wr-pulse 1.4s infinite}
-@media(max-width:480px){.wr-actions-eyebrow{display:none}}
 
 .wr-field-log{font-family:'JetBrains Mono';font-size:10.5px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--ink3);display:flex;align-items:center;gap:10px;margin-bottom:14px}
 .wr-field-log .rule{flex:1;height:1px;background:linear-gradient(90deg,var(--line2),transparent);max-width:200px}
@@ -2040,6 +2035,7 @@ function useAutoTrade(deps) {
     config, killSwitch, flattenAll, closeManual, resumeFromPause,
   };
 }
+
 /* ── Auto-trade panel UI ──────────────────────────────────────── */
 
 function AutoSlider({ label, labelIt, value, unit, min, max, step, onChange, desc }) {
@@ -2807,6 +2803,7 @@ const SpecimenRow = React.memo(function SpecimenRow({ token, ageMsLive, owned, q
     </div>
   );
 });
+
 /* ════════════════════════════════════════════════════════════════
    MAIN
    ════════════════════════════════════════════════════════════════ */
@@ -3172,6 +3169,26 @@ export default function Ape({ mainWalletPubkey } = {}) {
 
   return (
     <div className="wr-root">
+      <nav className="wr-nav">
+        <div className="wr-brand" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
+          <div className="wr-radar-icon" />
+          <span className="wr-bname">wonderland<span className="sep">//</span><span className="it">radar</span></span>
+        </div>
+        <div className="wr-nav-eyebrow"><span className="live" /><span>FIELD LOG · ENTRY № {fieldLogNo.toLocaleString()}</span></div>
+        <button className="wr-nav-stats" onClick={() => setStatsOpen(true)}>
+          <span className="gl">§</span><span>STATS</span>
+        </button>
+        <button className="wr-nav-stats" onClick={() => setAutoOpen(true)} style={auto.enabled && !auto.paused ? {borderColor:'rgba(61,255,194,.4)',background:'rgba(61,255,194,.08)'} : auto.paused ? {borderColor:'rgba(255,216,107,.4)',background:'rgba(255,216,107,.08)'} : null}>
+          <span className="gl" style={{color: auto.enabled && !auto.paused ? 'var(--mint)' : auto.paused ? 'var(--butter)' : 'var(--cyan)'}}>⚡</span>
+          <span>AUTO{auto.enabled && !auto.paused ? ' · ON' : auto.paused ? ' · PAUSED' : ''}</span>
+        </button>
+        <div className="wr-nav-wallet" onClick={() => setWalletOpen(true)}>
+          <span className="dot" /><span className="glyph">◎</span>
+          <b>{formatSol((solBalance && solBalance.uiAmount) || 0)}</b>
+          {!wallet.backedUp ? <span className="nudge" title="Back up your wallet" /> : null}
+        </div>
+      </nav>
+
       <div className="wr-qbar">
         <span className="wr-qlabel"><span className="b">⚡</span>Quick buy</span>
         {buyPresets.map(v => (
@@ -3185,22 +3202,6 @@ export default function Ape({ mainWalletPubkey } = {}) {
 
       <div className="wr-app">
         <div className="wr-page">
-          {/* Compact actions row — replaces the sticky wr-nav. */}
-          <div className="wr-actions">
-            <div className="wr-actions-eyebrow"><span className="live" /><span>FIELD LOG · ENTRY № {fieldLogNo.toLocaleString()}</span></div>
-            <button className="wr-nav-stats" onClick={() => setStatsOpen(true)}>
-              <span className="gl">§</span><span>STATS</span>
-            </button>
-            <button className="wr-nav-stats" onClick={() => setAutoOpen(true)} style={auto.enabled && !auto.paused ? {borderColor:'rgba(61,255,194,.4)',background:'rgba(61,255,194,.08)'} : auto.paused ? {borderColor:'rgba(255,216,107,.4)',background:'rgba(255,216,107,.08)'} : null}>
-              <span className="gl" style={{color: auto.enabled && !auto.paused ? 'var(--mint)' : auto.paused ? 'var(--butter)' : 'var(--cyan)'}}>⚡</span>
-              <span>AUTO{auto.enabled && !auto.paused ? ' · ON' : auto.paused ? ' · PAUSED' : ''}</span>
-            </button>
-            <div className="wr-nav-wallet" onClick={() => setWalletOpen(true)}>
-              <span className="dot" /><span className="glyph">◎</span>
-              <b>{formatSol((solBalance && solBalance.uiAmount) || 0)}</b>
-              {!wallet.backedUp ? <span className="nudge" title="Back up your wallet" /> : null}
-            </div>
-          </div>
           <div className="wr-field-log">
             <span className="glyph">◎</span>
             <span>FIELD LOG · {new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).toUpperCase()}</span>
