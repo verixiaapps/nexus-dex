@@ -40,36 +40,6 @@ swap sol to base
 swap usdc to sol
 swap sol to usdc
 swap sol to usdt
-nvidia token swap
-amazon token
-amazon stock token
-buy amazon with crypto
-amazon token price
-amazon token chart
-amazon token swap
-google token
-google stock token
-buy google with crypto
-google token price
-google token chart
-google token swap
-meta token
-meta stock token
-buy meta with crypto
-meta token price
-meta token chart
-meta token swap
-microsoft token
-microsoft stock token
-buy microsoft with crypto
-microsoft token price
-microsoft token chart
-microsoft token swap
-netflix token
-netflix stock token
-buy netflix with crypto
-netflix token price
-netflix token chart
 netflix token swap
 token scam checker
 token risk checker
