@@ -10,8 +10,10 @@
 // Holdings picks which drawer to mount based on getTokenRoute(token).
 // SOL row uses JupiterDrawer with mode forced to 'sell' → USDC.
 //
-// PUMP.FUN ROUTING: every mint ending in "pump" goes straight to
-// PumpfunDrawer. No probe, no Jupiter fallback. Trust the suffix.
+// PUMP.FUN ROUTING: at portfolio-load we ask DexScreener which DEX each
+// token lives on. Anything on `pumpfun` or `pumpswap` gets `meta.isPump`
+// and routes to PumpfunDrawer. Mint-suffix is kept only as a fallback for
+// cases where DexScreener is unreachable or hasn't indexed the token yet.
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Buffer } from 'buffer';
@@ -302,14 +304,23 @@ const BRAND_TOKENS = {
 };
 const STABLES = new Set([USDC_SOLANA, USDT_SOLANA]);
 
+// Mint-suffix shortcut. Most pump.fun mints end in "pump", but not all —
+// graduated tokens, older mints, and some PumpSwap migrations don't. Used
+// only as a fast-path / fallback. Authoritative detection happens via
+// DexScreener at portfolio-load (see fetchDexScreenerPumpSet).
 function isPumpFunMint(mint) {
   if (!mint || typeof mint !== 'string') return false;
   return /pump$/i.test(mint);
 }
 
+// Resolve the trade route for a holding. Prefers the meta.isPump flag set
+// by the DexScreener pass (reliable for any pump.fun / PumpSwap token);
+// falls back to the mint-suffix heuristic when DexScreener is unreachable
+// or hasn't indexed the token yet.
 function getTokenRoute(token) {
   if (!token?.mint) return 'jupiter';
   if (BRAND_TOKENS[token.mint]) return 'xstock';
+  if (token.meta?.isPump) return 'pumpfun';
   if (isPumpFunMint(token.mint)) return 'pumpfun';
   return 'jupiter';
 }
@@ -471,23 +482,27 @@ async function fetchPortfolio(addressStr) {
 
   const tokenMints = Object.keys(byMint).filter(m => m !== SOL_MINT);
 
-  // Meta + price fetches are best-effort. If Jupiter is rate-limiting or down,
-  // we still want to show the user's tokens (just without names/prices).
-  const [metaSettled, priceSettled] = await Promise.allSettled([
+  // Meta + price + pump-detection are best-effort. If any service is down or
+  // rate-limited we still want to render holdings (without the missing piece).
+  const [metaSettled, priceSettled, pumpSettled] = await Promise.allSettled([
     fetchMetaBatched(tokenMints),
     fetchPricesBatched([SOL_MINT, ...tokenMints]),
+    fetchDexScreenerPumpSet(tokenMints),
   ]);
   const metaMap  = metaSettled.status  === 'fulfilled' ? metaSettled.value  : {};
   const priceMap = priceSettled.status === 'fulfilled' ? priceSettled.value : {};
+  const pumpSet  = pumpSettled.status  === 'fulfilled' ? pumpSettled.value  : new Set();
   if (metaSettled.status  === 'rejected') console.warn('[Holdings] meta fetch failed',  metaSettled.reason);
   if (priceSettled.status === 'rejected') console.warn('[Holdings] price fetch failed', priceSettled.reason);
+  if (pumpSettled.status  === 'rejected') console.warn('[Holdings] pump detect failed', pumpSettled.reason);
 
   const enriched = Object.values(byMint).map(h => {
     const fetched = metaMap[h.mint];
     const meta = fetched || buildFallbackMeta(h.mint);
     const isStable = STABLES.has(h.mint);
     const isBrand  = !!BRAND_TOKENS[h.mint];
-    const isPump   = isPumpFunMint(h.mint);
+    // Authoritative: DexScreener says pump/pumpswap. Fallback: mint suffix.
+    const isPump   = pumpSet.has(h.mint) || isPumpFunMint(h.mint);
     const price   = isStable ? 1 : (priceMap[h.mint] || 0);
     const hasPrice = price > 0;
     return {
@@ -558,6 +573,32 @@ async function fetchPricesBatched(mints) {
       if (Number.isFinite(p) && p > 0) out[m] = p;
     }
   }
+  return out;
+}
+
+// Pump.fun detection via the server-side DexScreener proxy at
+// /api/dex/pump-check. We can't hit api.dexscreener.com directly — the
+// CSP blocks it by design, so the server is the single point of
+// DexScreener load (one cached source, no double traffic).
+//
+// Returns a Set of mint strings whose primary DEX is pumpfun or pumpswap.
+// Best-effort: if the proxy is down or slow, falls back silently and the
+// mint-suffix heuristic in isPumpFunMint takes over.
+async function fetchDexScreenerPumpSet(mints) {
+  const out = new Set();
+  if (!mints.length) return out;
+  // Server caps each request at 100 mints — chunk to match.
+  const chunks = [];
+  for (let i = 0; i < mints.length; i += 100) chunks.push(mints.slice(i, i + 100));
+  const results = await Promise.all(chunks.map(async (chunk) => {
+    try {
+      const r = await fetch(`/api/dex/pump-check?mints=${chunk.join(',')}`);
+      if (!r.ok) return [];
+      const data = await r.json();
+      return Array.isArray(data?.pumpMints) ? data.pumpMints : [];
+    } catch { return []; }
+  }));
+  for (const list of results) for (const m of list) out.add(m);
   return out;
 }
 
@@ -2298,10 +2339,11 @@ export default function Holdings({ onConnectWallet }) {
   }, [portfolio, sortBy, seenMap]);
 
   // ─── ROUTING ──────────────────────────────────────────────────────
-  // SOL row             → JupiterDrawer (SOL→USDC).
-  // Any *pump mint      → PumpfunDrawer. No probe, no fallback.
-  // Brand xStock mints  → XstockDrawer.
-  // Everything else     → JupiterDrawer.
+  // SOL row                  → JupiterDrawer (SOL→USDC).
+  // Pump.fun / PumpSwap      → PumpfunDrawer (detected via DexScreener,
+  //                            with mint-suffix as fallback).
+  // Brand xStock mints       → XstockDrawer.
+  // Everything else          → JupiterDrawer.
   // ─────────────────────────────────────────────────────────────────
   const openTrade = useCallback((token, mode) => {
     if (!token?.mint) return;
@@ -2311,12 +2353,7 @@ export default function Holdings({ onConnectWallet }) {
       return;
     }
 
-    if (isPumpFunMint(token.mint)) {
-      setDrawer({ token, mode, route: 'pumpfun' });
-      return;
-    }
-
-    setDrawer({ token, mode });
+    setDrawer({ token, mode, route: getTokenRoute(token) });
   }, []);
 
   const openBuy  = useCallback((token) => openTrade(token, 'buy'),  [openTrade]);
