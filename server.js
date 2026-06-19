@@ -47,7 +47,9 @@ const CSP_DIRECTIVES = [
     'https://public.chainalysis.com',
     'wss://pumpportal.fun',           // Launch Radar — pump.fun new-token stream
     'https://pumpportal.fun',         // Launch Radar — pump.fun trade-local endpoint
-    'https://api.dexscreener.com',    // Launch Radar — DexScreener enrichment
+    // DexScreener intentionally NOT here. All client calls go through our
+    // proxy at /api/dex/* so we control caching and load. Direct client
+    // hits + server proxy hits would double our load on DexScreener.
     ...EXTRA_CONNECT_SRC,
   ]],
   ['worker-src',      ["'self'", 'blob:']],
@@ -143,18 +145,26 @@ app.use('/api/', (req, res, next) => {
 const apiLimiter = rateLimit({
   windowMs: 60_000, max: 2000,
   standardHeaders: true, legacyHeaders: false,
-  message: { error: 'Too many requests, slow down.' },
   skip: r => r.path === '/health'
           || r.path === '/api/health'
           || r.path === '/solana-rpc'        // path is relative when mounted on /api/
           || r.path === '/api/solana-rpc',
+  // Without this, a 429 is invisible — you can't tell which route or IP is
+  // saturating the bucket. Sampled to avoid log spam if it goes sustained.
+  handler: (req, res) => {
+    if (Math.random() < 0.1) console.warn('[ratelimit] api', req.ip, req.method, req.path);
+    res.status(429).json({ error: 'Too many requests, slow down.' });
+  },
 });
 app.use('/api/', apiLimiter);
 
 const rpcLimiter = rateLimit({
   windowMs: 60_000, max: 3000,
   standardHeaders: true, legacyHeaders: false,
-  message: { error: 'RPC rate limit hit — slow down.' },
+  handler: (req, res) => {
+    if (Math.random() < 0.1) console.warn('[ratelimit] rpc', req.ip, req.method, req.path);
+    res.status(429).json({ error: 'RPC rate limit hit — slow down.' });
+  },
 });
 app.use('/api/solana-rpc', rpcLimiter);
 
@@ -192,6 +202,21 @@ function logError(tag, err) {
   else console.error(`[${tag}]`, msg, err?.stack ? '\n' + scrubSecrets(err.stack) : '');
 }
 
+// Sampled warning — at most once per `intervalMs` per `key`. Use for upstream
+// failures that can repeat thousands of times an hour (Cloudflare throttling,
+// rate-limited APIs). Logging every occurrence drowns the logs; logging the
+// FIRST one only blinds you the next time it breaks. This logs once per
+// minute so persistent issues stay visible.
+const _warnTs = new Map();
+function warnSampled(key, intervalMs, ...args) {
+  const now = Date.now();
+  const last = _warnTs.get(key) || 0;
+  if (now - last < intervalMs) return;
+  _warnTs.set(key, now);
+  console.warn(...args);
+  if (_warnTs.size > 200) { const k = _warnTs.keys().next().value; if (k) _warnTs.delete(k); }
+}
+
 function queryStringOf(req) {
   const u = req.originalUrl || req.url || '';
   const i = u.indexOf('?');
@@ -226,7 +251,10 @@ const _LR_PUMP_DEX_IDS = new Set(['pumpfun', 'pumpswap']);
 const _LR_BASE58_RE    = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const _LR_BUFFER_MAX   = 200;
 const _LR_FEED_LIMIT   = 30;
-const _LR_CACHE_MS     = 3_000;
+const _LR_CACHE_MS     = 8_000;  // bumped from 3s. Live feed only needs ~feed pace,
+                                  // and the WebSocket already keeps the buffer fresh in
+                                  // real time. 8s coalesces multiple tabs / users into one
+                                  // upstream call to DexScreener + pump.fun.
 
 const _LR_WebSocket = require('ws');
 
@@ -382,9 +410,9 @@ function _lrShape(mint, pairs, wsMeta) {
 }
 
 const _LR_PF_BASE     = 'https://frontend-api.pump.fun/coins';
-const _LR_PF_CACHE_MS = 30_000;
+const _LR_PF_CACHE_MS = 60_000;   // bumped from 30s — pump.fun fields are slow-changing,
+                                   // and Cloudflare doesn't love repeat hits. 60s halves load.
 const _lrPfCache  = new Map();
-let   _lrPfLogged = false;
 
 async function _lrFetchPumpInfo(mint, solPriceUsd) {
   const hit = _lrPfCache.get(mint);
@@ -396,23 +424,17 @@ async function _lrFetchPumpInfo(mint, solPriceUsd) {
       6_000,
     );
     if (!r.ok) {
-      if (!_lrPfLogged) {
-        _lrPfLogged = true;
-        console.warn('[lr-pf] non-OK from pump.fun:', r.status, '(likely Cloudflare / rate limit)');
-      }
+      warnSampled('lr-pf:' + r.status, 60_000, '[lr-pf] non-OK from pump.fun:', r.status, '(Cloudflare / rate limit, sampled)');
+      // Negative-cache the failure briefly so we don't hammer Cloudflare with
+      // the same mint. 10s is short enough that genuine flaps recover.
+      const out = { holders: 0, liquidityUsd: 0, imageUrl: null, ts: Date.now() - (_LR_PF_CACHE_MS - 10_000) };
+      _lrPfCache.set(mint, out);
       return null;
     }
     const d = await r.json();
     if (!d || typeof d !== 'object' || d.mint !== mint) {
-      if (!_lrPfLogged) {
-        _lrPfLogged = true;
-        console.warn('[lr-pf] mint mismatch — expected', mint, 'got', d?.mint);
-      }
+      warnSampled('lr-pf:mismatch', 60_000, '[lr-pf] mint mismatch — expected', mint, 'got', d?.mint);
       return null;
-    }
-    if (!_lrPfLogged) {
-      _lrPfLogged = true;
-      console.log('[lr-pf] sample fields:', Object.keys(d).join(','));
     }
     const holders = Number(d.holder_count ?? d.num_holders ?? d.holders ?? 0) || 0;
     const imageUrl = (typeof d.image_uri === 'string' && d.image_uri) ||
@@ -426,17 +448,13 @@ async function _lrFetchPumpInfo(mint, solPriceUsd) {
     _lrPfCache.set(mint, out);
     return out;
   } catch (e) {
-    if (!_lrPfLogged) {
-      _lrPfLogged = true;
-      console.warn('[lr-pf] fetch failed:', e?.message);
-    }
+    warnSampled('lr-pf:fetch', 60_000, '[lr-pf] fetch failed:', e?.message);
     return null;
   }
 }
 
 const _LR_META_CACHE_MS = 5 * 60_000;
 const _lrMetaCache = new Map();
-let   _lrMetaLogged = false;
 
 async function _lrFetchMetaImage(uri) {
   if (!uri || typeof uri !== 'string') return null;
@@ -458,17 +476,10 @@ async function _lrFetchMetaImage(uri) {
                   (typeof d?.image_url === 'string' && d.image_url) ||
                   (typeof d?.imageUrl  === 'string' && d.imageUrl)  || null;
     _lrMetaCache.set(uri, { image, ts: Date.now() });
-    if (!_lrMetaLogged && image) {
-      _lrMetaLogged = true;
-      console.log('[lr-meta] image fallback live');
-    }
     return image;
   } catch (e) {
     _lrMetaCache.set(uri, { image: null, ts: Date.now() });
-    if (!_lrMetaLogged) {
-      _lrMetaLogged = true;
-      console.warn('[lr-meta] fetch failed:', e?.message);
-    }
+    warnSampled('lr-meta:fetch', 60_000, '[lr-meta] fetch failed:', e?.message);
     return null;
   }
 }
@@ -861,7 +872,15 @@ async function _drpcSingle(single) {
     );
     const text = await r.text();
     if (!r.ok) {
-      return { jsonrpc: '2.0', id, error: { code: r.status, message: 'RPC HTTP ' + r.status + ': ' + text.slice(0, 200) } };
+      // Attach the upstream status so forwardRpc can elevate it to the
+      // envelope's HTTP status. Without this, an Alchemy 429 here gets
+      // wrapped into a JSON-RPC error and the whole batch returns 200,
+      // hiding the throttle from the client (which then keeps hammering).
+      return {
+        jsonrpc: '2.0', id,
+        error: { code: r.status, message: 'RPC HTTP ' + r.status + ': ' + text.slice(0, 200) },
+        __httpStatus: r.status,
+      };
     }
     try { return JSON.parse(text); }
     catch { return { jsonrpc: '2.0', id, error: { code: -32700, message: 'Non-JSON response from upstream' } }; }
@@ -880,7 +899,20 @@ async function forwardRpc(body) {
   // Batched request → split into parallel singles, reassemble as array.
   if (Array.isArray(body)) {
     const results = await Promise.all(body.map(_drpcSingle));
-    return { status: 200, parsed: results, raw: null };
+    // If any batch element hit a non-2xx upstream, elevate the worst status
+    // to the envelope. 429 takes priority so clients with Retry-After logic
+    // see it; otherwise the most common non-2xx wins.
+    let worst = 200;
+    for (const r of results) {
+      const s = r && r.__httpStatus;
+      if (!s) continue;
+      if (s === 429) { worst = 429; break; }
+      if (s >= 500 && worst < 500) worst = s;
+      else if (s >= 400 && worst < 400) worst = s;
+    }
+    // Strip the internal marker before returning to the client.
+    for (const r of results) { if (r) delete r.__httpStatus; }
+    return { status: worst, parsed: results, raw: null };
   }
 
   // Single request — original path.
@@ -1021,7 +1053,7 @@ app.get('/api/dex/token/:mint', async (req, res) => {
     const pairs = Array.isArray(data?.pairs) ? data.pairs : [];
     const shaped = _shapePumpToken(mint, pairs);
     const payload = { token: shaped, hasPumpPair: !!shaped };
-    setCachedJson(cacheKey, 200, payload, 5_000);
+    setCachedJson(cacheKey, 200, payload, 15_000);
     return res.json(payload);
   } catch (e) {
     if (e.name === 'AbortError') return res.status(504).json({ error: 'DexScreener token timed out' });
@@ -1398,70 +1430,18 @@ app.get('/api/cf/status', async (req, res) => {
 });
 
 /* ========================================================================
- * Debug — phone-friendly. Visit in Safari, read the JSON.
- * Remove before going to real users.
- *
- *   GET /api/debug/wallet/<base58_wallet>
- *
- * Returns:
- *   - solBalance         (native SOL via getBalance)
- *   - tokenCount         (SPL Token program accounts)
- *   - firstThreeTokens   (mint + uiAmountString, for sanity check)
- *   - token2022Count     (Token-2022 accounts — xStocks live here)
- *   - any error returned by Alchemy at any step
+ * Referrals + honeypot check — mounted from ./referrals.js
+ * Routes: /api/ref/{register,lookup,log-trade,stats,leaderboard,pnl}
+ *         /api/honeypot-check/:mint
+ *         /share/:wallet
  * ===================================================================== */
-app.get('/api/debug/wallet/:wallet', async (req, res) => {
-  const wallet = req.params.wallet;
-  const out = {
-    wallet,
-    network:    SOLANA_NETWORK,
-    alchemyUrl: DRPC_RPC_URL.replace(/v2\/.+/, 'v2/***'),
-    checks:     {},
-  };
+require('./referrals')(app, { rpcUrl: DRPC_RPC_URL });
 
-  // 1) Native SOL balance
-  try {
-    const r = await forwardRpc({
-      jsonrpc: '2.0', id: 1, method: 'getBalance', params: [wallet],
-    });
-    out.checks.solBalance = r.parsed;
-  } catch (e) { out.checks.solBalance = { error: e.message }; }
-
-  // 2) SPL token accounts (classic Token program)
-  try {
-    const r = await forwardRpc({
-      jsonrpc: '2.0', id: 2, method: 'getTokenAccountsByOwner',
-      params: [
-        wallet,
-        { programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' },
-        { encoding: 'jsonParsed', commitment: 'confirmed' },
-      ],
-    });
-    const accs = r.parsed?.result?.value || [];
-    out.checks.tokenCount = accs.length;
-    out.checks.firstThreeTokens = accs.slice(0, 3).map(a => ({
-      mint:   a?.account?.data?.parsed?.info?.mint,
-      amount: a?.account?.data?.parsed?.info?.tokenAmount?.uiAmountString,
-    }));
-    if (r.parsed?.error) out.checks.tokenError = r.parsed.error;
-  } catch (e) { out.checks.tokenError = e.message; }
-
-  // 3) Token-2022 accounts (xStocks live here)
-  try {
-    const r = await forwardRpc({
-      jsonrpc: '2.0', id: 3, method: 'getTokenAccountsByOwner',
-      params: [
-        wallet,
-        { programId: 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb' },
-        { encoding: 'jsonParsed', commitment: 'confirmed' },
-      ],
-    });
-    out.checks.token2022Count = (r.parsed?.result?.value || []).length;
-    if (r.parsed?.error) out.checks.token2022Error = r.parsed.error;
-  } catch (e) { out.checks.token2022Error = e.message; }
-
-  res.json(out);
-});
+/* ========================================================================
+ * Debug endpoint removed. Was open to anyone, enumerated wallets through
+ * the RPC bucket, and leaked (scrubbed) infra details. If you need it back
+ * for diagnosis, gate it behind a header check against a server-only secret.
+ * ===================================================================== */
 
 app.all('/api/*', (req, res) => res.status(404).json({ error: 'API route not found: ' + req.path }));
 
@@ -1494,10 +1474,20 @@ app.get('/embed/config.js', (req, res) => {
 });
 
 /* ========================================================================
- * robots.txt — keep crawlers off API/embed routes
+ * robots.txt — served from the server so it survives frontend rebuilds and
+ * can be edited without redeploying the SPA. Allows Googlebot to fetch the
+ * JS/CSS bundles it needs to render the app (otherwise SEO tanks on SPAs),
+ * blocks API + embed (no value indexing JSON), and blocks /share/:wallet
+ * (don't want every KOL's referral URL in Google's index).
  * ===================================================================== */
 app.get('/robots.txt', (req, res) => {
-  res.type('text/plain').send('User-agent: *\nDisallow: /api/\nDisallow: /embed/\n');
+  res.type('text/plain').send(
+    'User-agent: *\n' +
+    'Disallow: /api/\n' +
+    'Disallow: /embed/\n' +
+    'Disallow: /share/\n' +
+    'Allow: /\n'
+  );
 });
 
 /* ========================================================================
