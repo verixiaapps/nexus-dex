@@ -9,6 +9,13 @@
 //
 // Holdings picks which drawer to mount based on getTokenRoute(token).
 // SOL row uses JupiterDrawer with mode forced to 'sell' → USDC.
+//
+// PUMP.FUN ROUTING (matches LaunchRadar):
+//   On BUY/SELL click for a "pump"-suffix mint, we probe
+//   /api/dex/token/:mint. If hasPumpPair → enrich the token with the
+//   DexScreener price/sym/icon/decimals and open PumpfunDrawer. If the
+//   token has no pump pair (graduated past PumpSwap to Raydium/Orca),
+//   we route to JupiterDrawer instead — so the user can always trade.
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Buffer } from 'buffer';
@@ -152,10 +159,11 @@ const HP_CSS = `
 .hp-h-value{font-family:"Instrument Serif",serif;font-size:18px;line-height:1;color:var(--ink);font-variant-numeric:tabular-nums}
 .hp-h-actions{display:flex;gap:5px}
 .hp-act-btn{border:none;cursor:pointer;padding:6px 12px;border-radius:999px;font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:700;letter-spacing:.6px;transition:all .15s}
+.hp-act-btn:disabled{cursor:wait;opacity:.6}
 .hp-act-buy{background:linear-gradient(135deg,#7FFFD4,#A0E7FF);color:var(--ink);box-shadow:0 2px 8px rgba(127,255,212,.30)}
-.hp-act-buy:hover{transform:translateY(-1px);box-shadow:0 4px 12px rgba(127,255,212,.40)}
+.hp-act-buy:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 4px 12px rgba(127,255,212,.40)}
 .hp-act-sell{background:linear-gradient(135deg,#FF8FBE,#FFB088);color:#fff;box-shadow:0 2px 8px rgba(255,143,190,.30)}
-.hp-act-sell:hover{transform:translateY(-1px);box-shadow:0 4px 12px rgba(255,143,190,.40)}
+.hp-act-sell:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 4px 12px rgba(255,143,190,.40)}
 
 .hp-empty{padding:30px 22px;text-align:center}
 .hp-empty-title{color:var(--ink-2);font-size:13px;font-weight:600;margin-bottom:4px}
@@ -183,7 +191,7 @@ const HP_CSS = `
 .hp-route-badge.hp-route-jup{background:linear-gradient(135deg,#A0E7FF,#B794F6);color:#fff}
 .hp-route-badge.hp-route-xstock{background:linear-gradient(135deg,#FFD46B,#FFB088);color:var(--ink)}
 .hp-route-badge.hp-route-pump{background:linear-gradient(135deg,#FFB088,#FFD46B);color:var(--ink)}
-.hp-sheet-close{width:34px;height:34px;border-radius:50%;flex-shrink:0;background:var(--glass-strong);border:1px solid var(--border);color:var(--ink);font-size:18px;cursor:pointer;display:grid;place-items:center}
+.hp-sheet-close{width:34px;height:34px;border-radius:50%;flex-shrink:0;background:var(--glass-strong);border:1px solid var(--border);color:var(--ink);font-size:18px;cursor:pointer;font-family:inherit;display:grid;place-items:center}
 .hp-sheet-close:disabled{cursor:not-allowed;opacity:.5}
 
 .hp-side-switch{display:flex;margin:0 22px 14px;padding:4px;gap:4px;background:var(--glass-strong);border:1px solid var(--border);border-radius:999px;flex-shrink:0}
@@ -361,10 +369,23 @@ const friendlyError = (err) => {
   if (m.includes('simulation failed')) return 'Swap simulation failed — the price may have moved.';
   if (m.includes('account not'))       return 'Token account not ready. Please try again in a moment.';
   if (m.includes('rate'))              return 'Too many requests — please wait a moment.';
+  if (m.includes('not a pump') || m.includes('not indexed')) return 'Not a pump.fun bonding-curve token.';
   if (m.includes('could not find any route') || m.includes('no route')) return 'No route available for this pair.';
   if (m.includes('too large') || m.includes('transaction too large')) return 'Route is too complex to fit in one transaction.';
   return err?.message || 'Swap failed. Please try again.';
 };
+
+// =====================================================================
+// PUMP.FUN DETECTION via DexScreener (matches LaunchRadar's data source).
+// Returns { token, hasPumpPair }. token may be null even if hasPumpPair.
+// =====================================================================
+async function fetchPumpTokenInfo(mint) {
+  try {
+    const r = await fetch('/api/dex/token/' + encodeURIComponent(mint));
+    if (!r.ok) return null;
+    return await r.json();
+  } catch { return null; }
+}
 
 function MintIcon({ mint, meta, size = 22 }) {
   const [errored, setErrored] = useState(false);
@@ -553,7 +574,7 @@ async function fetchPricesBatched(mints) {
 // =====================================================================
 // HOLDING ROW
 // =====================================================================
-function HoldingRow({ token, onBuy, onSell, idx }) {
+function HoldingRow({ token, onBuy, onSell, idx, busy }) {
   const meta    = token.meta || buildFallbackMeta(token.mint);
   const val     = token.value || 0;
   const isSol   = token.mint === SOL_MINT;
@@ -584,12 +605,8 @@ function HoldingRow({ token, onBuy, onSell, idx }) {
         <div className="hp-h-value">{val > 0 ? fmtUsd(val) : '—'}</div>
         {!isSol && (
           <div className="hp-h-actions">
-            <button type="button" className="hp-act-btn hp-act-buy" onClick={() => onBuy(token)}>
-              BUY
-            </button>
-            <button type="button" className="hp-act-btn hp-act-sell" onClick={() => onSell(token)}>
-              SELL
-            </button>
+            <button type="button" className="hp-act-btn hp-act-buy"  onClick={() => onBuy(token)}  disabled={busy}>BUY</button>
+            <button type="button" className="hp-act-btn hp-act-sell" onClick={() => onSell(token)} disabled={busy}>SELL</button>
           </div>
         )}
       </div>
@@ -2225,6 +2242,7 @@ export default function Holdings({ onConnectWallet }) {
   const [sortBy, setSortBy]         = useState('value');
   const [query, setQuery]           = useState('');
   const [drawer, setDrawer]         = useState(null);
+  const [probingMint, setProbingMint] = useState(null);
   const [seenMap, setSeenMap]       = useState({});
   const inFlightRef = useRef(false);
 
@@ -2290,8 +2308,56 @@ export default function Holdings({ onConnectWallet }) {
     return arr;
   }, [portfolio, sortBy, seenMap]);
 
-  const openBuy  = useCallback((token) => setDrawer({ token, mode: 'buy' }),  []);
-  const openSell = useCallback((token) => setDrawer({ token, mode: 'sell' }), []);
+  // ─── ROUTING ──────────────────────────────────────────────────────
+  // For pump-suffix mints, probe /api/dex/token/:mint to see if the
+  // token still has a pump.fun pair. If yes → enrich with DexScreener
+  // price/sym/icon/decimals (matching LaunchRadar's data source) and
+  // open PumpfunDrawer. If no (graduated past PumpSwap to Raydium/Orca)
+  // → fall back to JupiterDrawer so the user can still trade.
+  // ─────────────────────────────────────────────────────────────────
+  const openTrade = useCallback(async (token, mode) => {
+    if (!token?.mint) return;
+
+    if (token.mint === SOL_MINT || !isPumpFunMint(token.mint)) {
+      setDrawer({ token, mode });
+      return;
+    }
+
+    setProbingMint(token.mint);
+    try {
+      const info = await fetchPumpTokenInfo(token.mint);
+      if (info?.hasPumpPair && info.token) {
+        const d = info.token;
+        const baseMeta = token.meta || buildFallbackMeta(token.mint);
+        const enriched = {
+          ...token,
+          price:    d.price > 0 ? d.price : token.price,
+          hasPrice: d.price > 0 || token.hasPrice,
+          decimals: Number.isFinite(d.decimals) ? d.decimals : token.decimals,
+          meta: {
+            ...baseMeta,
+            symbol:   d.sym  || baseMeta.symbol,
+            name:     d.name || baseMeta.name,
+            icon:     d.icon || baseMeta.icon,
+            decimals: Number.isFinite(d.decimals) ? d.decimals : (baseMeta.decimals ?? 6),
+            isPump:   true,
+          },
+        };
+        setDrawer({ token: enriched, mode, route: 'pumpfun' });
+      } else {
+        // Graduated past PumpSwap (or never on pump). Use Jupiter.
+        setDrawer({ token, mode, route: 'jupiter' });
+      }
+    } catch (e) {
+      console.warn('[Holdings] pump probe failed, falling back to Jupiter', e?.message);
+      setDrawer({ token, mode, route: 'jupiter' });
+    } finally {
+      setProbingMint(null);
+    }
+  }, []);
+
+  const openBuy  = useCallback((token) => openTrade(token, 'buy'),  [openTrade]);
+  const openSell = useCallback((token) => openTrade(token, 'sell'), [openTrade]);
   const closeDrawer = useCallback(() => setDrawer(null), []);
 
   // Disconnected screen
@@ -2394,11 +2460,14 @@ export default function Holdings({ onConnectWallet }) {
   const visibleTokens = tokens.filter(matchHolding);
   const noMatches     = !showSol && visibleTokens.length === 0;
 
-  // Pick the right drawer for the open token.
+  // Pick the right drawer for the open token. Honor the route override
+  // computed by openTrade (so pump.fun probes don't get re-evaluated).
   let drawerEl = null;
   if (drawer) {
     const isSolRow = drawer.token.mint === SOL_MINT;
-    const route = isSolRow ? 'jupiter' : getTokenRoute(drawer.token);
+    const route = isSolRow
+      ? 'jupiter'
+      : (drawer.route || getTokenRoute(drawer.token));
     const sharedProps = {
       token: drawer.token,
       initialMode: drawer.mode,
@@ -2508,6 +2577,7 @@ export default function Holdings({ onConnectWallet }) {
               idx={0}
               onBuy={openBuy}
               onSell={openSell}
+              busy={probingMint === solHolding.mint}
             />
           )}
           {!qRaw && tokens.length === 0 && (
@@ -2529,6 +2599,7 @@ export default function Holdings({ onConnectWallet }) {
               idx={i + 1}
               onBuy={openBuy}
               onSell={openSell}
+              busy={probingMint === t.mint}
             />
           ))}
         </div>
