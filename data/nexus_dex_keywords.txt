@@ -34,42 +34,12 @@ swap sol to ai16z
 swap sol to goat
 swap sol to eth
 swap sol to btc
-swap sui to sol
 swap sol to sui
-swap hype to sol
-swap sol to hype
-swap bnb to sol
 swap sol to bnb
-swap avax to sol
-swap sol to avax
-swap arb to sol
-swap sol to arb
-swap op to sol
-swap sol to op
-swap base to sol
 swap sol to base
 swap usdc to sol
 swap sol to usdc
-swap usdt to sol
 swap sol to usdt
-swap tesla token
-tesla stock token
-buy tesla with crypto
-trade tesla with crypto
-tesla token price
-tesla token chart
-tesla token swap
-apple token
-apple stock token
-buy apple with crypto
-apple token price
-apple token chart
-apple token swap
-nvidia token
-nvidia stock token
-buy nvidia with crypto
-nvidia token price
-nvidia token chart
 nvidia token swap
 amazon token
 amazon stock token
