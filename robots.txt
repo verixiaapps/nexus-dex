@@ -14,4 +14,4 @@ Disallow: /embed/
 Disallow: /*?*ref=
 Disallow: /*?*utm_
 
-Sitemap: https://verixiaapps.com/nexus-sitemap.xml
+Sitemap: https://swap.verixiaapps.com/nexus-sitemap.xml
