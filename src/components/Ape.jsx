@@ -28,6 +28,7 @@
 // is a second SystemProgram.transfer instruction in the SAME signed tx as the
 // trade. Server never holds funds. No withdraw flow needed.
 
+import { executeSwap as apeExecuteSwap } from './ape-helpers';
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Buffer } from 'buffer';
 import bs58 from 'bs58';
@@ -2559,63 +2560,6 @@ export default function Ape({ mainWalletPubkey } = {}) {
     }),
   [wallet.keypair, wallet.publicKey, tradeConnection, walletStr, solPrice]
 );
-
-    // ALT lookup + route build run on the trade connection.
-    const route = await getPumpRoute({
-      action: isBuy ? 'buy' : 'sell', mint: token.mint, user: userPk,
-      amount: isBuy ? swapParams.tradeLamports : swapParams.tradeTokens,
-      decimals: isBuy ? undefined : swapParams.decimals, connection: tradeConnection,
-    });
-
-    const ixs = [...route.instructions];
-
-    // Append the platform fee transfer to the same atomic tx.
-    const feeLamports = BigInt(swapParams.feeLamports || '0');
-    if (feeLamports > 0n) {
-      ixs.push(SystemProgram.transfer({ fromPubkey: userPk, toPubkey: FEE_WALLET, lamports: feeLamports }));
-      // Referral split: a second transfer to the referrer, carved from the fee.
-      try {
-        const { referrer, refSplitBps } = await refLookup(walletStr);
-        if (referrer && refSplitBps > 0) {
-          const refLamports = (feeLamports * BigInt(refSplitBps)) / 10000n;
-          if (refLamports > 0n) ixs.push(SystemProgram.transfer({ fromPubkey: userPk, toPubkey: new PublicKey(referrer), lamports: refLamports }));
-        }
-      } catch (e) {}
-    }
-
-    const latest = await tradeConnection.getLatestBlockhash('confirmed');
-    const message = new TransactionMessage({ payerKey: userPk, recentBlockhash: latest.blockhash, instructions: ixs }).compileToV0Message(route.alts);
-    const tx = new VersionedTransaction(message);
-
-    // [wr-sim] removed — PumpPortal tx is pre-validated; sim was doubling RPC cost
-    // per trade. Send-error path below still uses describeSimLogs() on returned logs.
-
-    tx.sign([wallet.keypair]);
-    const raw = tx.serialize();
-
-    let sig;
-    try { sig = await tradeConnection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 5 }); }
-    catch (sendErr) { let logs = (sendErr && sendErr.logs) || null; if (!logs && sendErr && typeof sendErr.getLogs === 'function') { try { logs = await sendErr.getLogs(tradeConnection); } catch (e2) {} } throw new Error(describeSimLogs(logs, sendErr && sendErr.message)); }
-
-    let confirmed = false, onchainErr = null; const startedAt = Date.now(); const HARD_CAP_MS = 60000;
-    while (Date.now() - startedAt < HARD_CAP_MS) {
-      try { const st = await tradeConnection.getSignatureStatus(sig, { searchTransactionHistory: true }); if (st && st.value && st.value.err) { onchainErr = st.value.err; break; } const cs = st && st.value && st.value.confirmationStatus; if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; } } catch (e) {}
-      try { const h = await tradeConnection.getBlockHeight('confirmed'); if (h > latest.lastValidBlockHeight) break; } catch (e) {}
-      try { await tradeConnection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }); } catch (e) {}
-      await new Promise(r => setTimeout(r, 5000));
-    }
-
-    if (onchainErr) throw new Error('On-chain error: ' + JSON.stringify(onchainErr).slice(0, 120));
-    if (!confirmed) throw new Error("Sent but didn't confirm in time — check Solscan before retrying.");
-
-    // log to referral / pnl ledger (fire and forget)
-    try {
-      const volSol = isBuy ? Number(swapParams.tradeLamports) / 1e9 : (swapParams.tradeTokensUi * (token.price || 0)) / (solPrice || 1);
-      refLogTrade({ wallet: walletStr, mint: token.mint, sym: token.sym, side: mode, sol: volSol, sig, ts: Date.now() });
-    } catch (e) {}
-
-    return { confirmed: true, sig };
-  }, [wallet.keypair, wallet.publicKey, connection, tradeConnection]);
 
   const runTrade = useCallback(async ({ mode, swapParams, token }) => {
     setBusyMint(token.mint);
