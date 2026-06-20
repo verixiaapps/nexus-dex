@@ -65,12 +65,19 @@ function callMath(fn, { global, feeConfig, mintSupply, bondingCurve, amount }) {
 }
 
 // ── Solana RPC URL resolution ─────────────────────────────────────────────
-// MUST MATCH server.js. If you rotate the Alchemy key, change BOTH files.
-// Override via DRPC_RPC_URL env var. Switch network via SOLANA_NETWORK=devnet.
+// Trade hot path. Resolution order:
+//   1) TRADE_RPC_URL  — dedicated trade RPC (Ankr). Recommended.
+//   2) DRPC_RPC_URL   — general override (legacy name, kept for compat).
+//   3) Hardcoded Alchemy mainnet/devnet by SOLANA_NETWORK.
+// Set TRADE_RPC_URL in Railway to your Ankr endpoint so pump-sdk fetches
+// (fetchBuyState / fetchSellState / fetchGlobal) hit Ankr instead of the
+// shared Alchemy quota used by background reads.
 const _ALCHEMY_MAINNET = 'https://solana-mainnet.g.alchemy.com/v2/3iScOZl86KTeWqY8qisKC';
 const _ALCHEMY_DEVNET  = 'https://solana-devnet.g.alchemy.com/v2/3iScOZl86KTeWqY8qisKC';
 
 function getRpcUrl() {
+  const trade = (process.env.TRADE_RPC_URL || '').trim();
+  if (trade) return trade;
   const override = (process.env.DRPC_RPC_URL || '').trim();
   if (override) return override;
   const net = (process.env.SOLANA_NETWORK || 'mainnet').toLowerCase();
