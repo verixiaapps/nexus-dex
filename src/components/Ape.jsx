@@ -1,5 +1,5 @@
 // Ape.jsx — wonderland//radar — field log + one-tap launch list + stats panel
-//
+// 
 // All-in-one frontend. Includes:
 //   - The radar feed (specimen list, vibe check, trade sheet, burner wallet)
 //   - The stats panel (referrals, personal P&L, standings) — opens from the
