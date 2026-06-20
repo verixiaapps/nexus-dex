@@ -2,7 +2,7 @@
 //  
 // Wonderland palette (pink/mint/lavender/peach pastel on cream gradient).
 // Renders inside the dark Nexus app shell; brings its own background.
-//
+// 
 // THREE STATES — same component, branches on wallet connection + SOL balance:
 //
 //   1) Disconnected → "Get Started"
