@@ -781,6 +781,13 @@ const DEFAULT_SELL_PRESETS = [25, 50, 100];
 const RPC_URL = (typeof window !== 'undefined' && window.location)
   ? window.location.origin + '/api/solana-rpc'
   : 'http://localhost:3001/api/solana-rpc';
+// Dedicated trade-path RPC — Ankr primary, Alchemy fallback (configured in
+// server.js as /api/trade-rpc). Routes sendRawTransaction, getSignatureStatus,
+// getLatestBlockhash, and ALT lookups OFF the free Alchemy quota that the
+// background reads (balances, positions, prices) share.
+const TRADE_RPC_URL = (typeof window !== 'undefined' && window.location)
+  ? window.location.origin + '/api/trade-rpc'
+  : 'http://localhost:3001/api/trade-rpc';
 const BAL_COMMITMENT = 'processed';
 const _connCache = new Map();
 const getConn = (commitment) => {
@@ -788,7 +795,14 @@ const getConn = (commitment) => {
   if (!c) { c = new Connection(RPC_URL, commitment); _connCache.set(commitment, c); }
   return c;
 };
+const _tradeConnCache = new Map();
+const getTradeConn = (commitment) => {
+  let c = _tradeConnCache.get(commitment);
+  if (!c) { c = new Connection(TRADE_RPC_URL, commitment); _tradeConnCache.set(commitment, c); }
+  return c;
+};
 const balRpcRace = (op) => op(getConn(BAL_COMMITMENT));
+
 
 const POLL_RECENT    = 2500;
 const POLL_SOL       = 30000;
@@ -2815,7 +2829,9 @@ const SpecimenRow = React.memo(function SpecimenRow({ token, ageMsLive, owned, q
 export default function Ape({ mainWalletPubkey } = {}) {
   useWrCSS();
   const wallet = useLocalWallet();
-  const connection = useMemo(() => getConn('confirmed'), []);
+    // Trade-path connection — used by executeSwap and onWithdraw. Background
+  // reads (balances, token accounts) still go through balRpcRace → /api/solana-rpc.
+  const connection = useMemo(() => getTradeConn('confirmed'), []);
   const { buyPresets, setBuyPresets, sellPresets, setSellPresets } = usePresets();
   const [quickAmount, setQuickAmount] = useState(() => buyPresets[Math.min(2, buyPresets.length-1)] || 0.5);
   useEffect(() => { if (!buyPresets.includes(quickAmount)) setQuickAmount(buyPresets[Math.min(2, buyPresets.length-1)] || buyPresets[0]); }, [buyPresets]); // eslint-disable-line
