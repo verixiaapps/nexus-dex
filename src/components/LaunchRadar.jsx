@@ -1657,26 +1657,6 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
       <div className="lr-blob" style={{ width: 340, height: 340, background: '#FFD46B', bottom: '10%', left: -100, animationDelay: '6s' }} />
 
       <div className="lr-phone">
-        <div className="lr-topbar">
-          <div className="lr-brand" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
-            <div className="lr-brand-dot" />
-            <span className="lr-brand-text">
-              wonderland<span className="lr-slash">//</span>
-              <span style={{ background: 'linear-gradient(90deg,#FFB088,#FFD46B,#FF8FBE)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>radar</span>
-            </span>
-          </div>
-          <div className="lr-topbar-right">
-            <button type="button" className="lr-gear-btn"
-              onClick={() => setSettingsOpen(true)} aria-label="Settings" title="Edit presets">⚙</button>
-            <button type="button"
-              className={'lr-wallet-btn' + (wallet.publicKey ? ' lr-connected' : '')}
-              onClick={onConnectClick}>
-              {wallet.publicKey
-                ? <><span className="lr-wallet-dot" />{wallet.publicKey.toBase58().slice(0,4)}…{wallet.publicKey.toBase58().slice(-4)}</>
-                : 'Connect Wallet'}
-            </button>
-          </div>
-        </div>
 
         <div className="lr-hero">
           <div className="lr-hero-eyebrow">
@@ -1695,7 +1675,11 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
         </div>
 
         <div className="lr-status">
-          <div className="lr-status-item">
+  <button type="button" className="lr-gear-btn" style={{ width: 22, height: 22, fontSize: 11 }}
+    onClick={() => setSettingsOpen(true)} aria-label="Settings" title="Edit presets">⚙</button>
+  <div className="lr-status-divider" />
+  <div className="lr-status-item">
+
             <span className={'lr-live-dot' + (recentError ? ' lr-warn' : '')} />
             {lane === 'fresh'
               ? (recentLoading ? <>SYNCING…</> : <>LIVE · <b>{freshTokens.length}</b> fresh</>)
