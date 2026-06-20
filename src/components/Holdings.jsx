@@ -2,7 +2,7 @@
 // 
 // THREE INDEPENDENT DRAWERS, one per route, each a verbatim port of its
 // working reference file:
-//
+// 
 //   JupiterDrawer → MemeWonderland.jsx TradeSheet
 //   XstockDrawer  → Stocks.jsx TradeModal
 //   PumpfunDrawer → LaunchRadar.jsx TradeModal + executeSwap
