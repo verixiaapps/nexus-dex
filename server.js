@@ -95,6 +95,12 @@ const DRPC_RPC_URL        = (process.env.DRPC_RPC_URL || '').trim() ||
 const PUBLIC_FALLBACK_URL = (process.env.FALLBACK_RPC_URL || '').trim()
   || (SOLANA_NETWORK === 'devnet' ? PUBLIC_DEVNET_URL : PUBLIC_MAINNET_URL);
 
+// Dedicated trade-path RPC. Used by /api/trade-rpc (Ape.jsx buy/sell) and
+// pumpfun-trade.js. Set to your Ankr endpoint in Railway. If unset, the
+// trade path falls back to DRPC_RPC_URL (Alchemy) — app still works but
+// you lose the rate-limit headroom the split is designed to give you.
+const TRADE_RPC_URL = (process.env.TRADE_RPC_URL || '').trim();
+
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 
 const stripSlash = (s) => String(s || '').replace(/\/+$/, '');
@@ -920,6 +926,101 @@ app.post('/api/solana-rpc', async (req, res) => {
   }
 });
 
+/* ------------------------------------------------------------------------
+ * /api/trade-rpc — dedicated trade-path proxy.
+ *
+ * Hits TRADE_RPC_URL (Ankr) first, falls back to DRPC_RPC_URL (Alchemy)
+ * on failure. Used by Ape.jsx for the buy/sell critical path:
+ * sendRawTransaction, getSignatureStatus, getLatestBlockhash,
+ * getMultipleAccountsInfo (ALT lookup), simulateTransaction.
+ *
+ * Why this exists: trade traffic is bursty and concentrated in a 60s
+ * window; routing it to a paid Ankr endpoint with 250 RPS keeps it off
+ * the free Alchemy quota that the rest of the app reads from.
+ * ---------------------------------------------------------------------- */
+function _tradeUrlChain() {
+  // Primary: Ankr if configured. Fallback: Alchemy (DRPC_RPC_URL).
+  // Dedup so a missing TRADE_RPC_URL doesn't try the same URL twice.
+  const chain = [TRADE_RPC_URL, DRPC_RPC_URL].filter(Boolean);
+  return [...new Set(chain)];
+}
+
+async function _tradeSingle(single) {
+  const id = single?.id ?? null;
+  const urls = _tradeUrlChain();
+  let lastStatus = 0, lastText = '';
+  for (const url of urls) {
+    try {
+      const r = await fetchWithTimeout(
+        url,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(single) },
+        RPC_TIMEOUT_MS,
+      );
+      const text = await r.text();
+      if (r.ok) {
+        try { return JSON.parse(text); }
+        catch { return { jsonrpc: '2.0', id, error: { code: -32700, message: 'Non-JSON response from upstream' } }; }
+      }
+      lastStatus = r.status; lastText = text;
+    } catch (e) {
+      lastStatus = 0; lastText = String(e?.message || e);
+    }
+  }
+  if (lastStatus === 0) {
+    return { jsonrpc: '2.0', id, error: { code: -32000, message: lastText } };
+  }
+  return { jsonrpc: '2.0', id, error: { code: lastStatus, message: 'RPC HTTP ' + lastStatus + ': ' + lastText.slice(0, 200) } };
+}
+
+async function forwardTradeRpc(body) {
+  const urls = _tradeUrlChain();
+  if (urls.length === 0) {
+    const err = new Error('Trade RPC URL is not configured');
+    err.status = 500;
+    throw err;
+  }
+
+  if (Array.isArray(body)) {
+    const results = await Promise.all(body.map(_tradeSingle));
+    return { status: 200, parsed: results, raw: null };
+  }
+
+  let lastErr;
+  for (const url of urls) {
+    try {
+      const r = await fetchWithTimeout(
+        url,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) },
+        RPC_TIMEOUT_MS,
+      );
+      const text = await r.text();
+      if (!r.ok) {
+        lastErr = new Error('RPC HTTP ' + r.status + ': ' + text.slice(0, 200));
+        lastErr.status = r.status;
+        continue;
+      }
+      let parsed;
+      try { parsed = JSON.parse(text); }
+      catch { return { status: r.status, parsed: null, raw: text }; }
+      return { status: r.status, parsed, raw: null };
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr;
+}
+
+app.post('/api/trade-rpc', async (req, res) => {
+  try {
+    const result = await forwardTradeRpc(req.body);
+    return sendForwardedRpc(res, result);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'Trade RPC timed out' });
+    logError('trade-rpc', e);
+    return res.status(e.status && e.status >= 400 ? e.status : 502).json({ error: e.message || 'Unknown error' });
+  }
+});
+
 /* ========================================================================
  * Health
  * ===================================================================== */
@@ -964,6 +1065,21 @@ app.get('/api/health', (req, res) => {
       urlSet:          Boolean(DRPC_RPC_URL),
       timeoutMs:       RPC_TIMEOUT_MS,
       batching:        'server-side unroll',
+    },
+    tradeRpc: {
+      // Dedicated buy/sell path. Ankr primary, Alchemy fallback.
+      configured:      Boolean(TRADE_RPC_URL),
+      primaryProvider: (() => {
+        if (!TRADE_RPC_URL) return null;
+        try {
+          const h = new URL(TRADE_RPC_URL).hostname;
+          if (h.includes('ankr'))      return 'ankr';
+          if (h.includes('helius'))    return 'helius';
+          if (h.includes('quicknode')) return 'quicknode';
+          if (h.includes('alchemy'))   return 'alchemy';
+          return h;
+        } catch { return null; }
+      })(),
     },
     time: new Date().toISOString(),
   });
@@ -1671,6 +1787,19 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('  Jupiter Price:   ' + JUPITER_PRICE_BASE);
   console.log('  Chainflip:       mainnet (SOL → BTC, broker commission disabled)');
   console.log('  Solana RPC:      alchemy ' + SOLANA_NETWORK + ' (primary) + ' + _bootFallbackLabel + ' (fallback)');
+  if (TRADE_RPC_URL) {
+    let tradeLabel = 'configured';
+    try {
+      const h = new URL(TRADE_RPC_URL).hostname;
+      if (h.includes('ankr'))      tradeLabel = 'ankr';
+      else if (h.includes('helius'))    tradeLabel = 'helius';
+      else if (h.includes('quicknode')) tradeLabel = 'quicknode';
+      else tradeLabel = h;
+    } catch {}
+    console.log('  Trade RPC:       ' + tradeLabel + ' (primary) + alchemy (fallback) → /api/trade-rpc');
+  } else {
+    console.log('  Trade RPC:       NOT SET — /api/trade-rpc will use alchemy. Set TRADE_RPC_URL to your Ankr endpoint.');
+  }
   console.log('  Rate limits:     none (removed)');
   console.log('  Allowed origins: ' + allowedOrigins.join(', '));
 });
