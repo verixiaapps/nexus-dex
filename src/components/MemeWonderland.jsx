@@ -1,6 +1,6 @@
 // MemeWonderland.jsx — pastel wonderland. Jupiter swap, full 3% fee → FEE_WALLET.
 // Sections: Hero · Top Signal · Narratives · Whale Radar · Breaking Out · New Launches · Trending · Live Feed.
-   
+  
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Buffer } from 'buffer';
 import {
@@ -457,6 +457,36 @@ const rpcRace = (label, op, commitment = 'confirmed') => {
   return op(getConn(commitment)).catch(e => {
     console.warn(`[rpc] ${label} failed:`, e?.message);
     throw new Error(`${label}: dRPC failed`);
+  });
+};
+
+// ── TRADE RPC (buys & sells only) ─────────────────────────────────────
+// My own additive section — nothing above this is changed. The buy/sell
+// critical path routes through /api/trade-rpc instead of /api/solana-rpc.
+// Server-side, /api/trade-rpc is Alchemy-primary with Ankr fallback, and
+// Ankr is the fallback for buys & sells ONLY — this is the only route in
+// the app that can reach it. Every read/balance/quote stays on
+// /api/solana-rpc above. Same node, same proxy, just a second endpoint
+// on the existing server.
+const TRADE_RPC_URL = (typeof window !== 'undefined' && window.location)
+  ? window.location.origin + '/api/trade-rpc'
+  : 'http://localhost:3001/api/trade-rpc';
+
+const _tradeConnCache = new Map();
+const getTradeConn = (commitment) => {
+  let c = _tradeConnCache.get(commitment);
+  if (!c) { c = new Connection(TRADE_RPC_URL, commitment); _tradeConnCache.set(commitment, c); }
+  return c;
+};
+
+// Same `(label, op) => Promise` signature as rpcRace, so flipping a call
+// site from rpcRace → rpcRaceTrade is a one-word change. Used only on the
+// buy/sell path inside handleSwap (send, blockhash, ALT, mint info, sig
+// status). On an Alchemy outage these calls fall through to Ankr.
+const rpcRaceTrade = (label, op, commitment = 'confirmed') => {
+  return op(getTradeConn(commitment)).catch(e => {
+    console.warn(`[trade-rpc] ${label} failed:`, e?.message);
+    throw new Error(`${label}: trade RPC failed`);
   });
 };
 
@@ -1571,8 +1601,8 @@ function TradeSheet({
         }));
       } else {
         const mintPk = new PublicKey(inputMint);
-        // Use rpcRace so a single RPC outage doesn't kill the swap.
-        const mintInfo = await rpcRace('getMintInfo', c => c.getAccountInfo(mintPk));
+        // Buy/sell critical path → trade RPC (Alchemy primary, Ankr fallback).
+        const mintInfo = await rpcRaceTrade('getMintInfo', c => c.getAccountInfo(mintPk));
         if (!mintInfo) throw new Error('Input mint not found on-chain.');
         const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
           ? TOKEN_2022_PROGRAM_ID
@@ -1604,7 +1634,7 @@ function TradeSheet({
       const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
       let alts = [];
       if (altKeys.length > 0) {
-        const infos = await rpcRace('getAlts',
+        const infos = await rpcRaceTrade('getAlts',
           c => c.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k))));
         alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
           key:   new PublicKey(k),
@@ -1612,7 +1642,7 @@ function TradeSheet({
         }) : null).filter(Boolean);
       }
 
-      const latest = await rpcRace('getLatestBlockhash',
+      const latest = await rpcRaceTrade('getLatestBlockhash',
         c => c.getLatestBlockhash('confirmed'));
       const message = new TransactionMessage({
         payerKey:        wallet.publicKey,
@@ -1647,8 +1677,8 @@ function TradeSheet({
       const signed = await wallet.signTransaction(tx);
       const serialized = signed.serialize();
 
-      // Send via dRPC.
-      const sig = await rpcRace('sendTx', c => c.sendRawTransaction(serialized, {
+      // Send via trade RPC (Alchemy primary, Ankr fallback).
+      const sig = await rpcRaceTrade('sendTx', c => c.sendRawTransaction(serialized, {
         skipPreflight: false,
         maxRetries: 3,
       }));
@@ -1670,7 +1700,7 @@ function TradeSheet({
         while (Date.now() < deadline) {
           await new Promise(r => setTimeout(r, 2000));
           try {
-            const st = await rpcRace('getSigStatus',
+            const st = await rpcRaceTrade('getSigStatus',
               c => c.getSignatureStatus(sig, { searchTransactionHistory: true }));
             const cs = st?.value?.confirmationStatus;
             if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
