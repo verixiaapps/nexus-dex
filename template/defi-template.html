@@ -1,6 +1,5 @@
-<script src="https://verixiaapps.com/nexus-dex/verixia-wc.js"></script>
-<!DOCTYPE html> 
-<html lang="en"> 
+<!DOCTYPE html>
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
@@ -54,6 +53,8 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+
+<script src="https://verixiaapps.com/nexus-dex/verixia-wc.js"></script>
 
 <style>
 :root{
@@ -1129,7 +1130,7 @@ function __verixiaApp() {
           taker: S.publicKey ? S.publicKey.toBase58() : '11111111111111111111111111111111',
           computeUnitPriceMicroLamports: String(PRIORITY_FEE_MICROLAMPORTS),
         });
-        var r = await fetch('https://api.jup.ag/swap/v2/build?' + params.toString(), { signal: ac.signal });
+        var r = await fetch('/api/seo/jupiter/build?' + params.toString(), { signal: ac.signal });
         if (!r.ok) {
           var body = await r.json().catch(function() { return {}; });
           throw new Error(body.error || ('Quote failed (' + r.status + ')'));
