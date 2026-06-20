@@ -132,6 +132,12 @@ const WR_CSS = `
 .wr-btn-ape:hover{transform:translateY(-1px);box-shadow:0 12px 36px -8px var(--magenta-glow)}
 .wr-btn-ape .arrow{font-family:'JetBrains Mono';font-weight:800}
 .wr-no-connect{display:inline-flex;align-items:center;gap:7px;font-family:'JetBrains Mono';font-size:10.5px;font-weight:700;letter-spacing:.6px;color:var(--mint);padding:6px 11px;border-radius:999px;background:var(--mint-soft);border:1px solid rgba(61,255,194,.2)}
+.wr-hero-ref{display:inline-flex;align-items:center;gap:11px;padding:14px 22px;border-radius:14px;border:1px solid rgba(107,238,255,.32);background:linear-gradient(135deg,rgba(107,238,255,.08),rgba(155,123,255,.10));color:var(--ink);font-family:'Fraunces';font-variation-settings:"opsz" 60;font-weight:600;font-size:15px;letter-spacing:-.005em;cursor:pointer;transition:transform .12s,border-color .15s,background .2s}
+.wr-hero-ref:hover{transform:translateY(-1px);border-color:rgba(107,238,255,.55);background:linear-gradient(135deg,rgba(107,238,255,.14),rgba(155,123,255,.16))}
+.wr-hero-ref .gl{color:var(--cyan);font-size:15px;font-family:initial}
+.wr-hero-ref .it{font-style:italic;color:var(--cyan);font-weight:500}
+.wr-hero-ref .pct{font-family:'JetBrains Mono';font-weight:800;font-size:10px;color:var(--mint);background:var(--mint-soft);padding:3px 8px;border-radius:6px;letter-spacing:.5px;font-style:normal}
+@media(max-width:768px){.wr-hero-ref{width:100%;justify-content:center}}
 @media(max-width:768px){.wr-hero h1{font-size:32px}.wr-hero{flex-direction:column;align-items:flex-start;gap:14px}}
 
 .wr-lure{display:flex;align-items:center;gap:14px;padding:14px 0 16px;border-bottom:1px solid var(--line);margin-bottom:18px;animation:wr-rise .35s cubic-bezier(.2,1,.3,1)}
@@ -206,6 +212,7 @@ const WR_CSS = `
 .wr-chip{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:999px;background:var(--vapor);border:1px solid var(--line);font-family:inherit;font-size:11.5px;font-weight:500;color:var(--ink2);cursor:pointer;transition:.15s}
 .wr-chip:hover{color:var(--ink);border-color:var(--line2)}
 .wr-chip.on{background:rgba(107,238,255,.1);border-color:rgba(107,238,255,.3);color:var(--cyan)}
+.wr-chip.owned.on{background:var(--mint-soft);border-color:rgba(61,255,194,.32);color:var(--mint)}
 
 .wr-list{padding:6px 0}
 .wr-row{display:grid;grid-template-columns:48px 1fr 80px 90px 100px 100px 110px 100px 130px;gap:14px;align-items:center;padding:14px 22px;border-bottom:1px solid var(--line);cursor:pointer;transition:background .2s;position:relative;animation:wr-pop .4s cubic-bezier(.2,1.2,.4,1) backwards}
@@ -224,12 +231,14 @@ const WR_CSS = `
 .wr-sym-row .chg.dn{color:var(--coral)}
 .wr-full{font-size:11.5px;color:var(--ink2);font-weight:400;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wr-full .dex{color:var(--ink3);font-family:'JetBrains Mono';font-size:10px;text-transform:uppercase;letter-spacing:.5px;margin-left:6px}
+.wr-full .ownedusd{color:var(--mint);font-family:'JetBrains Mono';font-weight:700;font-size:11px;margin-left:6px}
 .wr-mob-meta{display:none;font-family:'JetBrains Mono';font-size:10.5px;font-weight:600;color:var(--ink2);margin-top:3px;letter-spacing:.15px;align-items:center;gap:6px;overflow:hidden;white-space:nowrap}
 .wr-mob-meta .price{color:var(--ink);font-weight:700}
 .wr-mob-meta .mob-age{color:var(--mint);font-weight:700}
 .wr-mob-meta .mob-age.med{color:var(--lavender)}
 .wr-mob-meta .mob-age.old{color:var(--ink3)}
 .wr-mob-meta .dot{color:var(--ink3);opacity:.5}
+.wr-mob-meta .ownedusd{color:var(--mint);font-weight:800}
 .wr-num{font-family:'JetBrains Mono';font-weight:700;font-size:12.5px;color:var(--ink)}
 .wr-num.dim{color:var(--ink2);font-weight:500}
 .wr-age{font-family:'JetBrains Mono';font-weight:700;font-size:12.5px;color:var(--mint)}
@@ -249,6 +258,11 @@ const WR_CSS = `
 .wr-btn-spec:hover{transform:translateY(-1px);box-shadow:0 6px 18px -5px var(--magenta-glow)}
 .wr-btn-spec:disabled{opacity:.6;cursor:wait}
 .wr-btn-spec .arrow{font-family:'JetBrains Mono';font-weight:800;font-size:11px}
+.wr-btn-spec.compact{padding:8px 11px;font-size:11.5px}
+.wr-btn-sell{padding:8px 13px;border-radius:10px;border:1px solid rgba(255,122,110,.4);cursor:pointer;font-family:inherit;font-weight:600;font-size:12px;background:var(--coral-soft);color:var(--coral);display:inline-flex;align-items:center;gap:6px;transition:.12s}
+.wr-btn-sell:hover{background:var(--coral);color:#2E0009;border-color:transparent;transform:translateY(-1px)}
+.wr-btn-sell:disabled{opacity:.6;cursor:wait}
+.wr-btn-sell.compact{padding:8px 11px;font-size:11.5px}
 .wr-spinner{width:12px;height:12px;border-radius:50%;border:2px solid rgba(27,4,16,.3);border-top-color:#1B0410;animation:wr-spin .7s linear infinite;display:inline-block}
 .wr-owned-mark{font-family:'JetBrains Mono';font-size:9px;font-weight:800;letter-spacing:.5px;padding:2px 7px;border-radius:5px;background:var(--mint-soft);color:var(--mint);text-transform:uppercase}
 .wr-list-foot{padding:14px 22px;display:flex;align-items:center;justify-content:space-between;gap:8px;font-family:'JetBrains Mono';font-size:10px;font-weight:700;color:var(--ink3);letter-spacing:.7px;text-transform:uppercase;border-top:1px solid var(--line)}
@@ -291,8 +305,8 @@ const WR_CSS = `
 
 .wr-overlay{position:fixed;inset:0;background:rgba(4,4,12,.66);backdrop-filter:blur(8px);z-index:1000;display:flex;align-items:flex-end;justify-content:center;animation:wr-fade .2s}
 .wr-overlay.center{align-items:center;padding:18px}
-.wr-sheet{width:100%;max-width:520px;background:linear-gradient(180deg,var(--vapor),var(--plum));border:1px solid var(--line2);border-radius:22px 22px 0 0;box-shadow:0 -20px 60px rgba(0,0,0,.7);animation:wr-sheet .3s cubic-bezier(.2,1.2,.4,1);max-height:92dvh;overflow-y:auto}
-.wr-sheet.mini{border-radius:22px;animation:wr-pop .3s ease;max-width:430px}
+.wr-sheet{width:100%;max-width:520px;background:linear-gradient(180deg,var(--vapor),var(--plum));border:1px solid var(--line2);border-radius:22px 22px 0 0;box-shadow:0 -20px 60px rgba(0,0,0,.7);animation:wr-sheet .3s cubic-bezier(.2,1.2,.4,1);max-height:94dvh;overflow-y:auto;padding-bottom:max(8px,env(safe-area-inset-bottom))}
+.wr-sheet.mini{border-radius:22px;animation:wr-pop .3s ease;max-width:430px;padding-bottom:max(8px,env(safe-area-inset-bottom))}
 .wr-x{position:absolute;top:14px;right:14px;background:var(--vapor);border:1px solid var(--line);border-radius:50%;width:32px;height:32px;display:grid;place-items:center;cursor:pointer;font-family:initial;font-size:16px;color:var(--ink2);z-index:2}
 .wr-x:hover{color:var(--ink);border-color:var(--line2)}
 
@@ -376,7 +390,7 @@ const WR_CSS = `
 .wr-confirm:hover:not(:disabled){transform:translateY(-1px)}
 .wr-confirm.sell{background:var(--coral);color:#2E0009;box-shadow:0 10px 28px -10px rgba(255,122,110,.5)}
 .wr-confirm:disabled{opacity:.45;cursor:not-allowed;background:var(--vapor2);color:var(--ink2);box-shadow:none}
-.wr-tfoot{margin:10px 22px 22px;font-family:'JetBrains Mono';font-size:9.5px;color:var(--ink3);text-align:center;font-weight:600;letter-spacing:.5px;text-transform:uppercase}
+.wr-tfoot{margin:10px 22px 18px;font-family:'JetBrains Mono';font-size:9.5px;color:var(--ink3);text-align:center;font-weight:600;letter-spacing:.5px;text-transform:uppercase}
 
 .wr-balcard{background:linear-gradient(135deg,var(--vapor2),rgba(155,123,255,.12));border:1px solid rgba(155,123,255,.25);border-radius:18px;padding:18px;text-align:center;margin-bottom:13px}
 .wr-ballbl{font-family:'JetBrains Mono';font-size:9.5px;letter-spacing:1.4px;text-transform:uppercase;color:var(--ink3);font-weight:800}
@@ -387,6 +401,13 @@ const WR_CSS = `
 .wr-wact{padding:13px 0;border-radius:13px;border:1px solid var(--line);background:var(--vapor);color:var(--ink);font-family:inherit;font-weight:600;font-size:13px;cursor:pointer}
 .wr-wact.primary{background:var(--magenta);color:#1B0410;border-color:transparent;box-shadow:0 4px 14px -4px var(--magenta-glow)}
 .wr-block{background:var(--vapor);border-radius:14px;padding:13px 14px;margin-bottom:11px}
+.wr-wtoken{display:flex;align-items:center;gap:11px;padding:9px 0;border-bottom:1px solid var(--line)}
+.wr-wtoken:last-child{border-bottom:none}
+.wr-wtoken .wr-av{width:32px;height:32px;border-radius:9px;font-size:13px;flex-shrink:0}
+.wr-wtoken-nm{flex:1;min-width:0}
+.wr-wtoken-sym{font-family:'Fraunces';font-weight:600;font-size:14px;letter-spacing:-.005em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wr-wtoken-amt{font-family:'JetBrains Mono';font-size:10.5px;font-weight:600;color:var(--ink2);margin-top:2px;letter-spacing:.2px}
+.wr-wtoken-usd{font-family:'JetBrains Mono';font-weight:800;font-size:12.5px;color:var(--mint);flex-shrink:0;letter-spacing:.2px}
 .wr-block-l{font-family:'JetBrains Mono';font-size:9.5px;letter-spacing:1.2px;text-transform:uppercase;color:var(--ink3);font-weight:800;margin-bottom:8px}
 .wr-qr{display:grid;place-items:center;margin-bottom:11px}
 .wr-qr canvas,.wr-qr img{border-radius:12px;background:#fff;padding:8px;width:160px;height:160px}
@@ -1419,7 +1440,7 @@ function ReferralsSection({ walletStr, stats, statsLoading, statsError, onBoostA
         ) : (
           <>
             <p style={{margin:'0 0 4px',fontSize:14,lineHeight:1.55,color:'rgba(244,239,255,.66)'}}>
-              Standard rate is <b style={{color:'var(--ink)'}}>0.9% of every trade</b> made through your link. If you have a KOL code, redeem it here for <b style={{color:'var(--butter)'}}>1.5% for 60 days</b>.
+              Standard rate is <b style={{color:'var(--ink)'}}>33% of the fee</b> on every trade made through your link. If you have a KOL code, redeem it here for <b style={{color:'var(--butter)'}}>1.5% for 60 days</b>.
             </p>
             <div className="wp-boost-in">
               <input placeholder="KOL code" value={boostCode}
@@ -1441,7 +1462,7 @@ function ReferralsSection({ walletStr, stats, statsLoading, statsError, onBoostA
           </div></div>
           <div className="wp-rule"><div className="n">02</div><div className="t">
             <div className="h">They <span className="it">trade.</span> You get paid in the same block.</div>
-            <div className="b">Each trade carries a 3% platform fee. <b>30% of that fee</b> is sent directly to your wallet as part of the same on-chain transaction. The server never touches it.</div>
+            <div className="b">Each trade carries a 3% platform fee. <b>33% of that fee</b> is sent directly to your wallet as part of the same on-chain transaction. The server never touches it.</div>
           </div></div>
           <div className="wp-rule"><div className="n">03</div><div className="t">
             <div className="h">Boost codes raise your <span className="it">share.</span></div>
@@ -2112,7 +2133,7 @@ function PresetsModal({ buyPresets, setBuyPresets, sellPresets, setSellPresets, 
   );
 }
 
-function WalletDrawer({ wallet, solBalance, solPrice, onWithdraw, onClose, busy }) {
+function WalletDrawer({ wallet, solBalance, solPrice, onWithdraw, onClose, busy, balances, resolveToken }) {
   const [tab, setTab] = useState('deposit');
   const [copied, setCopied] = useState(false);
   const [dest, setDest] = useState(''); const [amt, setAmt] = useState('');
@@ -2120,6 +2141,17 @@ function WalletDrawer({ wallet, solBalance, solPrice, onWithdraw, onClose, busy 
   const qrRef = useRef(null);
   const addr = wallet.publicKey.toBase58();
   const sol = (solBalance && solBalance.uiAmount) || 0;
+  const ownedList = useMemo(() => {
+    if (!balances) return [];
+    return Object.keys(balances)
+      .filter(m => m !== SOL_MINT && (balances[m].uiAmount || 0) > 0)
+      .map(m => {
+        const tk = resolveToken ? resolveToken(m) : { mint: m, sym: '???', name: 'Unknown', price: 0 };
+        const ui = balances[m].uiAmount || 0;
+        return { tk, ui, usd: ui * (tk.price || 0) };
+      })
+      .sort((a, b) => b.usd - a.usd);
+  }, [balances, resolveToken]);
   useEffect(() => {
     if (tab !== 'deposit' || !qrRef.current) return;
     let alive = true;
@@ -2144,6 +2176,21 @@ function WalletDrawer({ wallet, solBalance, solPrice, onWithdraw, onClose, busy 
             <div className="wr-balval">{formatSol(sol)} <span className="u">SOL</span></div>
             <div className="wr-balusd">{solPrice > 0 ? '≈ $' + format(sol * solPrice) : ' '}</div>
           </div>
+          {ownedList.length > 0 && (
+            <div className="wr-block">
+              <div className="wr-block-l">Your tokens · {ownedList.length}</div>
+              {ownedList.map(({ tk, ui, usd }) => (
+                <div className="wr-wtoken" key={tk.mint}>
+                  <TokenFace token={tk} size={32} />
+                  <div className="wr-wtoken-nm">
+                    <div className="wr-wtoken-sym">${tk.sym}</div>
+                    <div className="wr-wtoken-amt">{formatTokens(ui)}{tk.name && tk.name !== tk.sym ? ' · ' + tk.name : ''}</div>
+                  </div>
+                  <div className="wr-wtoken-usd">{tk.price > 0 ? formatUsdAbs(usd) : '—'}</div>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="wr-wgrid">
             <button className={'wr-wact' + (tab==='deposit'?' primary':'')} onClick={()=>setTab('deposit')}>↓ Deposit</button>
             <button className={'wr-wact' + (tab==='withdraw'?' primary':'')} onClick={()=>setTab('withdraw')}>↑ Withdraw</button>
@@ -2379,10 +2426,12 @@ function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPr
   );
 }
 
-const SpecimenRow = React.memo(function SpecimenRow({ token, ageMsLive, owned, quickAmount, busy, onApe, onOpen, isFresh, specimenNo }) {
+const SpecimenRow = React.memo(function SpecimenRow({ token, ageMsLive, owned, quickAmount, busy, onApe, onSell, onOpen, isFresh, specimenNo, ownedMode }) {
   const r = riskRead(token);
   const ownedUi = (owned && owned.uiAmount) || 0;
+  const ownedUsd = ownedUi * (token.price || 0);
   const ape = (e) => { e.stopPropagation(); if (busy) return; onApe(token); };
+  const sell = (e) => { e.stopPropagation(); if (busy) return; onSell(token); };
   return (
     <div className={'wr-row' + (isFresh ? ' fresh' : '')} onClick={()=>onOpen(token)}>
       <span className="wr-row-num wr-col-num">№{specimenNo.toLocaleString()}</span>
@@ -2392,13 +2441,14 @@ const SpecimenRow = React.memo(function SpecimenRow({ token, ageMsLive, owned, q
           <div className="wr-sym-row">
             {token.sym}
             {Number.isFinite(token.change) && token.change !== 0 ? <span className={'chg' + (token.change < 0 ? ' dn' : '')}>{formatPct(token.change)}</span> : null}
-            {ownedUi > 0 ? <span className="wr-owned-mark">owned</span> : null}
+            {(ownedUi > 0 && !ownedMode) ? <span className="wr-owned-mark">owned</span> : null}
           </div>
-          <div className="wr-full">{token.name}{token.dex ? <span className="dex">· {token.dex}</span> : null}</div>
+          <div className="wr-full">{token.name}{ownedMode ? <span className="ownedusd">{formatTokens(ownedUi)} · {formatUsdAbs(ownedUsd)}</span> : (token.dex ? <span className="dex">· {token.dex}</span> : null)}</div>
           <div className="wr-mob-meta">
             <span className="price">{formatPrice(token.price)}</span><span className="dot">·</span>
-            <span className={mobAgeClass(ageMsLive)}>{fmtAgeShort(ageMsLive)}</span><span className="dot">·</span>
-            <span>{formatMoney(token.mcap)}</span>
+            {ownedMode
+              ? <span className="ownedusd">{formatUsdAbs(ownedUsd)}</span>
+              : <><span className={mobAgeClass(ageMsLive)}>{fmtAgeShort(ageMsLive)}</span><span className="dot">·</span><span>{formatMoney(token.mcap)}</span></>}
           </div>
         </div>
       </div>
@@ -2411,7 +2461,14 @@ const SpecimenRow = React.memo(function SpecimenRow({ token, ageMsLive, owned, q
         {token.bond != null ? (<><span className="wr-curve-bar"><i style={{width:token.bond+'%'}} /></span><span className="wr-curve-pct">{token.bond}%</span></>) : <span className="wr-curve-pct">—</span>}
       </div>
       <div className="wr-row-actions" onClick={e=>e.stopPropagation()}>
-        <button className="wr-btn-spec" disabled={busy} onClick={ape}>{busy ? <><span className="wr-spinner" /> Buying</> : <>Buy {quickAmount} <span className="arrow">→</span></>}</button>
+        {ownedMode ? (
+          <>
+            <button className="wr-btn-spec compact" disabled={busy} onClick={ape}>{busy ? <span className="wr-spinner" /> : 'Buy'}</button>
+            <button className="wr-btn-sell compact" disabled={busy} onClick={sell}>Sell</button>
+          </>
+        ) : (
+          <button className="wr-btn-spec" disabled={busy} onClick={ape}>{busy ? <><span className="wr-spinner" /> Buying</> : <>Buy {quickAmount} <span className="arrow">→</span></>}</button>
+        )}
       </div>
     </div>
   );
@@ -2449,6 +2506,8 @@ export default function Ape({ mainWalletPubkey } = {}) {
   const [showAuto, setShowAuto] = useState(false);
   const [wildOnly, setWildOnly] = useState(false);
   const [minLiq, setMinLiq] = useState(0);
+  const [ownedOnly, setOwnedOnly] = useState(false);
+  const [ownedMeta, setOwnedMeta] = useState({});
   const [busyMint, setBusyMint] = useState(null);
   const [withdrawBusy, setWithdrawBusy] = useState(false);
   const [toasts, setToasts] = useState([]);
@@ -2598,6 +2657,8 @@ export default function Ape({ mainWalletPubkey } = {}) {
     runTrade({ mode: 'buy', swapParams: params, token });
   }, [buyPresets, quickIndex, runTrade, pushToast]);
 
+  const onSell = useCallback((token) => { setSheetMode('sell'); setSheetToken(token); }, []);
+
   const onSheetConfirm = useCallback(async ({ mode, swapParams, token }) => {
     const res = await runTrade({ mode, swapParams, token });
     if (res && res.confirmed) setSheetToken(null);
@@ -2625,12 +2686,71 @@ export default function Ape({ mainWalletPubkey } = {}) {
 
   const autoState = useAutoTrade({ wallet, recentTokens: tokens, solBalance, solPrice, balances, executeSwap, refreshSol, refreshOneToken, pushToast });
 
+  // mint -> feed token, for fast lookup
+  const tokenMap = useMemo(() => {
+    const m = {};
+    for (const t of tokens) m[t.mint] = t;
+    return m;
+  }, [tokens]);
+
+  // For owned tokens that have aged out of the live feed, pull their metadata
+  // (symbol/name/price/icon) so the Owned filter and wallet drawer can show them.
+  useEffect(() => {
+    const missing = Object.keys(balances).filter(mint =>
+      mint !== SOL_MINT &&
+      (balances[mint].uiAmount || 0) > 0 &&
+      !tokenMap[mint] &&
+      !ownedMeta[mint]
+    );
+    if (missing.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      for (const mint of missing) {
+        try {
+          const r = await fetch('/api/dex/token/' + encodeURIComponent(mint));
+          if (!r.ok) continue;
+          const d = await r.json();
+          const tk = d && d.token;
+          if (cancelled || !tk) continue;
+          setOwnedMeta(prev => prev[mint] ? prev : ({
+            ...prev,
+            [mint]: {
+              sym: tk.sym || tk.symbol || '???',
+              name: tk.name || tk.sym || tk.symbol || 'Unknown',
+              price: Number(tk.price) || 0,
+              icon: tk.icon || null,
+              decimals: Number(tk.decimals != null ? tk.decimals : (balances[mint].decimals != null ? balances[mint].decimals : 6)),
+              change: Number(tk.priceChange24h || 0),
+            },
+          }));
+        } catch (e) {}
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [balances, tokenMap, ownedMeta]);
+
+  // Resolve a mint owned by the wallet into a renderable token object.
+  const resolveOwned = useCallback((mint) => {
+    const bal = balances[mint];
+    const fromFeed = tokenMap[mint];
+    if (fromFeed) return fromFeed;
+    const meta = ownedMeta[mint];
+    if (meta) return { mint, sym: meta.sym, name: meta.name, price: meta.price, icon: meta.icon, decimals: meta.decimals, change: meta.change || 0, dex: null };
+    return { mint, sym: '???', name: 'Unknown token', price: 0, icon: null, decimals: (bal && bal.decimals != null) ? bal.decimals : 6, change: 0, dex: null };
+  }, [balances, tokenMap, ownedMeta]);
+
   const filtered = useMemo(() => {
+    if (ownedOnly) {
+      return Object.keys(balances)
+        .filter(mint => mint !== SOL_MINT && (balances[mint].uiAmount || 0) > 0)
+        .map(resolveOwned)
+        .sort((a, b) => ((balances[b.mint].uiAmount || 0) * (b.price || 0)) - ((balances[a.mint].uiAmount || 0) * (a.price || 0)));
+    }
     let list = tokens;
     if (wildOnly) list = list.filter(t => riskRead(t).tier === 'high');
     if (minLiq > 0) list = list.filter(t => (t.liquidity || 0) >= minLiq);
     return list;
-  }, [tokens, wildOnly, minLiq]);
+  }, [ownedOnly, balances, resolveOwned, tokens, wildOnly, minLiq]);
 
   const stats = useMemo(() => {
     const live = filtered.length;
@@ -2675,6 +2795,7 @@ export default function Ape({ mainWalletPubkey } = {}) {
             <h1>Fresh launches, <span className="it">caught at first light.</span></h1>
             <div className="wr-hero-cta">
               <span className="wr-no-connect">● No wallet connect · burner ready</span>
+              <button className="wr-hero-ref" onClick={() => setShowStats(true)}><span className="gl">§</span> <span>Earn on <span className="it">referrals</span></span> <span className="pct">33%</span></button>
             </div>
           </div>
 
@@ -2715,6 +2836,7 @@ export default function Ape({ mainWalletPubkey } = {}) {
               <div className="wr-list-title"><span className="e">◉ Live feed</span><span className="t">The <span className="it">field log</span></span></div>
               <div className="wr-list-filters">
                 <button className={'wr-chip' + (wildOnly ? ' on' : '')} onClick={() => setWildOnly(!wildOnly)}>Wild only</button>
+                <button className={'wr-chip owned' + (ownedOnly ? ' on' : '')} onClick={() => setOwnedOnly(!ownedOnly)}>Owned</button>
                 <button className="wr-filter-btn" onClick={() => setShowFilters(true)}>Filters {(wildOnly || minLiq > 0) && <span className="ct">{(wildOnly ? 1 : 0) + (minLiq > 0 ? 1 : 0)}</span>}</button>
               </div>
             </div>
@@ -2724,13 +2846,13 @@ export default function Ape({ mainWalletPubkey } = {}) {
                 <span className="wr-col-liq">Liq</span><span className="wr-col-vol">Vol</span>
                 <span className="wr-col-holders">Read</span><span className="wr-col-curve">Curve</span><span style={{textAlign:'right'}}>Action</span>
               </div>
-              {feedError ? (
+              {feedError && !ownedOnly ? (
                 <div className="wr-empty"><span className="glyph">⊘</span><b>The feed went quiet</b><div className="sub">Couldn't reach the launch radar. Retrying automatically.</div><div className="err">{feedError}</div></div>
               ) : filtered.length === 0 ? (
-                <div className="wr-empty"><span className="glyph">∅</span><b>{tokens.length === 0 ? 'Scanning for launches…' : 'Nothing matches your filters'}</b><div className="sub">{tokens.length === 0 ? 'Fresh specimens will develop here as they appear.' : 'Loosen the filters to see more of the field.'}</div></div>
+                <div className="wr-empty"><span className="glyph">∅</span><b>{ownedOnly ? 'No tokens in this wallet yet' : (tokens.length === 0 ? 'Scanning for launches…' : 'Nothing matches your filters')}</b><div className="sub">{ownedOnly ? 'Buy something and it shows up here with its live value and a one-tap Sell.' : (tokens.length === 0 ? 'Fresh specimens will develop here as they appear.' : 'Loosen the filters to see more of the field.')}</div></div>
               ) : filtered.map((t, i) => {
                 const ageMs = t.pairCreatedAtMs ? Date.now() - t.pairCreatedAtMs : NaN;
-                const isFresh = Number.isFinite(ageMs) && ageMs < 15000;
+                const isFresh = !ownedOnly && Number.isFinite(ageMs) && ageMs < 15000;
                 return (
                   <SpecimenRow
                     key={t.mint}
@@ -2740,6 +2862,8 @@ export default function Ape({ mainWalletPubkey } = {}) {
                     quickAmount={quickAmt}
                     busy={busyMint === t.mint}
                     onApe={onApe}
+                    onSell={onSell}
+                    ownedMode={ownedOnly}
                     onOpen={(tok) => { setSheetMode('buy'); setSheetToken(tok); }}
                     isFresh={isFresh}
                     specimenNo={filtered.length - i}
@@ -2779,7 +2903,7 @@ export default function Ape({ mainWalletPubkey } = {}) {
         />
       )}
       {showWallet && (
-        <WalletDrawer wallet={wallet} solBalance={solBalance} solPrice={solPrice} onWithdraw={onWithdraw} onClose={() => setShowWallet(false)} busy={withdrawBusy} />
+        <WalletDrawer wallet={wallet} solBalance={solBalance} solPrice={solPrice} onWithdraw={onWithdraw} onClose={() => setShowWallet(false)} busy={withdrawBusy} balances={balances} resolveToken={resolveOwned} />
       )}
       {showPresets && (
         <PresetsModal buyPresets={buyPresets} setBuyPresets={setBuyPresets} sellPresets={sellPresets} setSellPresets={setSellPresets} onClose={() => setShowPresets(false)} />
