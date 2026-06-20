@@ -2831,7 +2831,7 @@ export default function Ape({ mainWalletPubkey } = {}) {
   const wallet = useLocalWallet();
     // Trade-path connection — used by executeSwap and onWithdraw. Background
   // reads (balances, token accounts) still go through balRpcRace → /api/solana-rpc.
-  const connection = useMemo(() => getTradeConn('confirmed'), []);
+  const connection = useMemo(() => getConn('confirmed'), []);
   const { buyPresets, setBuyPresets, sellPresets, setSellPresets } = usePresets();
   const [quickAmount, setQuickAmount] = useState(() => buyPresets[Math.min(2, buyPresets.length-1)] || 0.5);
   useEffect(() => { if (!buyPresets.includes(quickAmount)) setQuickAmount(buyPresets[Math.min(2, buyPresets.length-1)] || buyPresets[0]); }, [buyPresets]); // eslint-disable-line
