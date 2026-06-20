@@ -2,12 +2,15 @@
 //
 // MOUNT (one line in server.js, before the catch-all 404 handler):
 //
-//     require('./referrals')(app, { rpcUrl: DRPC_RPC_URL });
+//     require('./referrals')(app, { rpcUrl: PRIMARY_RPC_URL });
 //
-// The `rpcUrl` option is optional — without it, the honeypot-check endpoint
-// falls back to SOLANA_RPC_URL / ALCHEMY_SOLANA_URL / DRPC_RPC_URL env vars,
-// finally to public mainnet RPC (rate-limited and slow). Pass your existing
-// Alchemy URL for speed.
+// `rpcUrl` is required for the honeypot-check endpoint to work. server.js
+// already passes its resolved PRIMARY_RPC_URL (ALCHEMY_RPC_URL on mainnet,
+// DEVNET_RPC_URL on devnet). If for some reason it's not passed, this
+// module falls back to reading ALCHEMY_RPC_URL / DEVNET_RPC_URL from env
+// directly. There is NO public-node fallback by design — per the RPC
+// policy, Ankr is reserved for the buy/sell trade path only, and we don't
+// silently hit a rate-limited public node either.
 //
 // WHAT IT DOES:
 //   - Tracks the referrer for each trader wallet, locked on first visit.
@@ -497,16 +500,21 @@ function mount(app, options) {
   const SPL_TOKEN_PROGRAM  = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
   const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 
-  // RPC URL resolution: passed option wins, then env vars, then public fallback.
-  // server.js exposes its already-resolved URL as DRPC_RPC_URL — passing it as
-  // an option via `mount(app, { rpcUrl: DRPC_RPC_URL })` is the cleanest path.
+  // RPC URL resolution: passed option wins; otherwise read the mainnet or
+  // devnet URL directly from env. NO public-node fallback — honeypot check
+  // is not a buy/sell, so per policy it does NOT use Ankr either. If
+  // nothing is configured, the endpoint returns a clear error.
   const RPC_URL = opts.rpcUrl
-               || process.env.SOLANA_RPC_URL
-               || process.env.ALCHEMY_SOLANA_URL
-               || process.env.DRPC_RPC_URL
-               || 'https://api.mainnet-beta.solana.com';
+               || process.env.ALCHEMY_RPC_URL
+               || process.env.DEVNET_RPC_URL
+               || '';
+
+  if (!RPC_URL) {
+    console.warn('[referrals] no RPC URL available — honeypot check will fail until ALCHEMY_RPC_URL (or DEVNET_RPC_URL) is set');
+  }
 
   async function rpcGetAccountInfo(mint) {
+    if (!RPC_URL) throw new Error('No RPC URL configured');
     const r = await fetch(RPC_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -611,7 +619,7 @@ function mount(app, options) {
     + (SPLIT_DEFAULT_REF_BPS/100) + '% / boost '
     + (SPLIT_BOOST_REF_BPS/100) + '% to referrer · '
     + KOL_BOOST_CODES.size + ' KOL code(s) · data: ' + DB_PATH
-    + ' · honeypot check ready');
+    + ' · honeypot check ' + (RPC_URL ? 'ready' : 'DISABLED (no RPC URL)'));
 }
 
 module.exports = mount;
