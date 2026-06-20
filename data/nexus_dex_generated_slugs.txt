@@ -1562,6 +1562,7 @@ tesla-token-price
 tesla-token-swap
 token-analytics
 token-audit
+token-audit-checker
 token-credibility-checker
 token-discovery
 token-due-diligence
