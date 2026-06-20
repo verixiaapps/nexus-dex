@@ -2548,10 +2548,19 @@ export default function Ape({ mainWalletPubkey } = {}) {
   }, [wallet.publicKey]);
 
   /* ---- THE BUY/SELL HOT PATH ---- */
-  const executeSwap = useCallback(async ({ mode, swapParams, token }) => {
-    if (!swapParams) throw new Error('No trade params.');
-    const isBuy = mode === 'buy';
-    const userPk = wallet.publicKey;
+  const executeSwap = useCallback(
+  ({ mode, swapParams, token }) =>
+    apeExecuteSwap({
+      mode, swapParams, token,
+      keypair: wallet.keypair,
+      userPk: wallet.publicKey,
+      tradeConnection,
+      walletStr,
+      solPrice,
+    }),
+  [wallet.keypair, wallet.publicKey, tradeConnection, walletStr, solPrice]
+);
+
 
     // ALT lookup + route build run on the trade connection.
     const route = await getPumpRoute({
