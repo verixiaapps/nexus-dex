@@ -36,17 +36,17 @@ const CSP_DIRECTIVES = [
   ['connect-src',     [
     "'self'",
     'https://api.jup.ag', 'https://lite-api.jup.ag', 'https://quote-api.jup.ag', 'https://token.jup.ag',
-    // Solana RPC — Alchemy. Client only talks to /api/solana-rpc (same-origin),
-    // so the Alchemy host does NOT need to be in connect-src.
+    // Solana RPC — client only talks to /api/solana-rpc (same-origin),
+    // so the upstream RPC host does NOT need to be in connect-src.
     'https://explorer-api.walletconnect.com',
     'https://*.walletconnect.com', 'https://*.walletconnect.org',
     'wss://relay.walletconnect.com', 'wss://relay.walletconnect.org',
     'wss://*.walletconnect.com', 'wss://*.walletconnect.org',
     'wss://www.walletlink.org',
     'https://public.chainalysis.com',
-    'wss://pumpportal.fun',           // Launch Radar — pump.fun new-token stream
-    'https://pumpportal.fun',         // Launch Radar — pump.fun trade-local endpoint
-    'https://api.dexscreener.com',    // Launch Radar — DexScreener enrichment
+    'wss://pumpportal.fun',
+    'https://pumpportal.fun',
+    'https://api.dexscreener.com',
     ...EXTRA_CONNECT_SRC,
   ]],
   ['worker-src',      ["'self'", 'blob:']],
@@ -82,7 +82,9 @@ const JUPITER_LEGACY_BASE   = (process.env.JUPITER_QUOTE_BASE || 'https://api.ju
 const JUPITER_TOKENS_BASE   = 'https://lite-api.jup.ag/tokens/v2';
 const JUPITER_PRICE_BASE    = 'https://lite-api.jup.ag/price/v3';
 
-// Solana RPC — Alchemy primary, Solana public endpoint as fallback.
+// Solana RPC — Alchemy primary, configurable fallback via FALLBACK_RPC_URL
+// (set this to your Ankr endpoint in Railway). If unset, falls back to the
+// public Solana mainnet endpoint (rate-limited, last resort only).
 const ALCHEMY_MAINNET_URL = 'https://solana-mainnet.g.alchemy.com/v2/3iScOZl86KTeWqY8qisKC';
 const ALCHEMY_DEVNET_URL  = 'https://solana-devnet.g.alchemy.com/v2/3iScOZl86KTeWqY8qisKC';
 const PUBLIC_MAINNET_URL  = 'https://api.mainnet-beta.solana.com';
@@ -90,7 +92,8 @@ const PUBLIC_DEVNET_URL   = 'https://api.devnet.solana.com';
 const SOLANA_NETWORK      = (process.env.SOLANA_NETWORK || 'mainnet').toLowerCase();
 const DRPC_RPC_URL        = (process.env.DRPC_RPC_URL || '').trim() ||
   (SOLANA_NETWORK === 'devnet' ? ALCHEMY_DEVNET_URL : ALCHEMY_MAINNET_URL);
-const PUBLIC_FALLBACK_URL = SOLANA_NETWORK === 'devnet' ? PUBLIC_DEVNET_URL : PUBLIC_MAINNET_URL;
+const PUBLIC_FALLBACK_URL = (process.env.FALLBACK_RPC_URL || '').trim()
+  || (SOLANA_NETWORK === 'devnet' ? PUBLIC_DEVNET_URL : PUBLIC_MAINNET_URL);
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 
@@ -114,8 +117,7 @@ app.use(cors({
 app.use(express.json({ limit: '256kb' }));
 
 /* ========================================================================
- * Bot blocker — kills the easy ways free-tier RPC quota gets drained.
- * Applies to /api/ only. Allows /api/health for monitoring.
+ * Bot blocker
  * ===================================================================== */
 const BOT_UA_RE = /bot|crawl|spider|scrape|headless|curl|wget|python-requests|axios|httpclient|java\/|ruby|go-http|okhttp|libwww|phantomjs|puppeteer|playwright/i;
 app.use('/api/', (req, res, next) => {
@@ -145,10 +147,9 @@ function scrubSecrets(s) {
   if (s == null) return '';
   return String(s)
     .replace(/api-key=[^&\s"']+/gi,                       'api-key=***')
-    // dRPC URLs (legacy)
     .replace(/(lb\.drpc\.(?:live|org)\/)[^\s"'?]+/gi,     '$1***/***')
-    // Alchemy URLs — strip the API key segment after /v2/
     .replace(/(solana-(?:mainnet|devnet)\.g\.alchemy\.com\/v2\/)[^\s"'?]+/gi, '$1***')
+    .replace(/(rpc\.ankr\.com\/(?:premium-http\/)?solana\/)[^\s"'?]+/gi, '$1***')
     .replace(/x-api-key["':\s]+[^&\s"',}]+/gi,            'x-api-key=***')
     .replace(/Bearer\s+[A-Za-z0-9._-]+/gi,                'Bearer ***');
 }
@@ -157,6 +158,15 @@ function logError(tag, err) {
   const msg = scrubSecrets(err?.message ?? err);
   if (NODE_ENV === 'production') console.warn(`[${tag}]`, msg);
   else console.error(`[${tag}]`, msg, err?.stack ? '\n' + scrubSecrets(err.stack) : '');
+}
+
+const _warnSampleAt = new Map();
+function warnSampled(key, intervalMs, ...args) {
+  const now = Date.now();
+  const last = _warnSampleAt.get(key) || 0;
+  if (now - last < intervalMs) return;
+  _warnSampleAt.set(key, now);
+  console.warn(...args);
 }
 
 function queryStringOf(req) {
@@ -298,7 +308,7 @@ function _lrConnectWs() {
       const tx = m?.txType;
       if (!tx || tx === 'create')        _lrAddMint(m);
       else if (tx === 'buy' || tx === 'sell') _lrTrackTrade(m);
-    } catch { /* malformed frame — ignore */ }
+    } catch {}
   });
 
   ws.on('close', () => {
@@ -716,7 +726,7 @@ app.get('/api/sol-price', async (req, res) => {
 });
 
 /* ========================================================================
- * Whale events — real recent large trades via GeckoTerminal (no key)
+ * Whale events
  * ===================================================================== */
 const GECKOTERMINAL_BASE = 'https://api.geckoterminal.com/api/v2';
 const GT_HEADERS = { Accept: 'application/json;version=20230203' };
@@ -805,12 +815,12 @@ app.get('/api/whale-events', async (req, res) => {
 });
 
 /* ========================================================================
- * Solana RPC — Alchemy (single endpoint, no fallbacks)
+ * Solana RPC — Alchemy primary, Ankr (or other) fallback via FALLBACK_RPC_URL
  *
  * Solana RPC providers don't accept batched JSON-RPC arrays. The client
- * (GetStarted.jsx portfolio load) sends 3 calls per refresh as an array, so
- * we unroll batches into parallel single requests, then reassemble the
- * response as an array. Single requests pass through untouched.
+ * sends batched requests, so we unroll batches into parallel single
+ * requests then reassemble the response as an array. Single requests
+ * pass through untouched.
  * ===================================================================== */
 const RPC_TIMEOUT_MS = 10_000;
 
@@ -852,13 +862,11 @@ async function forwardRpc(body) {
     throw err;
   }
 
-  // Batched request → split into parallel singles, reassemble as array.
   if (Array.isArray(body)) {
     const results = await Promise.all(body.map(_drpcSingle));
     return { status: 200, parsed: results, raw: null };
   }
 
-  // Single request — try Alchemy primary, fall back to Solana public on failure.
   const urls = [DRPC_RPC_URL, PUBLIC_FALLBACK_URL].filter(Boolean);
   let lastErr;
   for (const url of urls) {
@@ -918,6 +926,18 @@ app.post('/api/solana-rpc', async (req, res) => {
 app.get('/health', (req, res) => res.status(200).send('ok'));
 
 app.get('/api/health', (req, res) => {
+  // Identify fallback provider by hostname for the health check (no key leaks).
+  let fallbackProvider = 'public-mainnet';
+  try {
+    const h = new URL(PUBLIC_FALLBACK_URL).hostname;
+    if (h.includes('ankr'))                            fallbackProvider = 'ankr';
+    else if (h.includes('helius'))                     fallbackProvider = 'helius';
+    else if (h.includes('quicknode'))                  fallbackProvider = 'quicknode';
+    else if (h.includes('alchemy'))                    fallbackProvider = 'alchemy';
+    else if (h.includes('mainnet-beta.solana.com'))    fallbackProvider = 'public-mainnet';
+    else                                               fallbackProvider = h;
+  } catch {}
+
   res.json({
     ok: true, env: NODE_ENV,
     has: {
@@ -937,11 +957,13 @@ app.get('/api/health', (req, res) => {
     },
     chainflip: { network: 'mainnet', brokerCommissionBps: 0 },
     solanaRpc: {
-      provider:  'alchemy',
-      network:   SOLANA_NETWORK,
-      urlSet:    Boolean(DRPC_RPC_URL),
-      timeoutMs: RPC_TIMEOUT_MS,
-      batching:  'server-side unroll',
+      provider:        'alchemy',
+      fallbackProvider,
+      fallbackCustom:  Boolean((process.env.FALLBACK_RPC_URL || '').trim()),
+      network:         SOLANA_NETWORK,
+      urlSet:          Boolean(DRPC_RPC_URL),
+      timeoutMs:       RPC_TIMEOUT_MS,
+      batching:        'server-side unroll',
     },
     time: new Date().toISOString(),
   });
@@ -1014,19 +1036,6 @@ app.get('/api/dex/token/:mint', async (req, res) => {
   }
 });
 
-/* ------------------------------------------------------------------------
- * Batch pump-token detection — used by Holdings.jsx to decide which mints
- * route to PumpfunDrawer. Given a comma-separated list of mints, asks
- * DexScreener which DEX each one trades on, and returns the subset whose
- * primary DEX is pumpfun or pumpswap.
- *
- * Why this exists: the old "mint ends in 'pump'" heuristic misses any
- * pump.fun token whose mint doesn't have the suffix (graduated tokens,
- * older mints, migrated PumpSwap tokens). DexScreener knows the real DEX.
- *
- * Server-side because CSP blocks api.dexscreener.com from the browser by
- * design — we want to be the single point of DexScreener load.
- * ---------------------------------------------------------------------- */
 app.get('/api/dex/pump-check', async (req, res) => {
   try {
     const mintsParam = String(req.query.mints || '');
@@ -1041,7 +1050,6 @@ app.get('/api/dex/pump-check', async (req, res) => {
     const cached = getCachedJson(cacheKey);
     if (cached) return res.status(cached.status).json(cached.payload);
 
-    // DexScreener accepts up to 30 mints per URL.
     const chunks = [];
     for (let i = 0; i < valid.length; i += 30) chunks.push(valid.slice(i, i + 30));
 
@@ -1115,24 +1123,6 @@ app.get('/api/dex/sol-price', async (req, res) => {
   }
 });
 
-/* ------------------------------------------------------------------------
- * Token chart — price history for the TokenChart in Ape.jsx TradeSheet.
- * Used by:  GET /api/dex/chart/:mint?tf=5m   (also 1H, 6H, 24H)
- *
- * Returns: { points: [{ ts: number(ms), price: number(USD) }, ...] }
- *
- * Two-hop lookup:
- *   1) DexScreener tokens/{mint} → highest-liquidity Solana pair address
- *   2) GeckoTerminal pool OHLCV  → candles for that pool
- *
- * Cached 5min per (mint, tf) on success, 1min on miss. Returns 404 with
- * empty points when no pair is found or candles are sparse — the frontend
- * handles that as the "too fresh to chart" empty state, so the chart
- * degrades gracefully on flaky upstream / brand-new tokens.
- *
- * GeckoTerminal is unauthenticated and rate-limits generously; the cache
- * keeps us well under their limits even at heavy traffic.
- * ---------------------------------------------------------------------- */
 const _chartTfs = {
   '5m':  { timeframe: 'minute', aggregate: 1,  limit: 5  },
   '1H':  { timeframe: 'minute', aggregate: 5,  limit: 12 },
@@ -1152,7 +1142,6 @@ app.get('/api/dex/chart/:mint', async (req, res) => {
     const cached = getCachedJson(cacheKey);
     if (cached) return res.status(cached.status).json(cached.payload);
 
-    // 1) Find the best Solana pair for this mint.
     const dexR = await fetchWithTimeout(
       DEX_BASE + '/latest/dex/tokens/' + mint,
       { headers: { Accept: 'application/json' } },
@@ -1176,7 +1165,6 @@ app.get('/api/dex/chart/:mint', async (req, res) => {
     );
     const pairAddress = best.pairAddress;
 
-    // 2) Pull OHLCV from GeckoTerminal for that pool.
     const gtUrl = GECKOTERMINAL_BASE
       + '/networks/solana/pools/' + pairAddress
       + '/ohlcv/' + tfDef.timeframe
@@ -1191,8 +1179,6 @@ app.get('/api/dex/chart/:mint', async (req, res) => {
     }
     const gtData = await gtR.json();
 
-    // GeckoTerminal: { data: { attributes: { ohlcv_list: [[ts_sec,o,h,l,c,vol], ...] } } }
-    // Returned most-recent-first → reverse so chart reads left-to-right.
     const raw = gtData?.data?.attributes?.ohlcv_list;
     if (!Array.isArray(raw) || raw.length === 0) {
       const payload = { points: [] };
@@ -1212,7 +1198,7 @@ app.get('/api/dex/chart/:mint', async (req, res) => {
     }
 
     const payload = { points };
-    setCachedJson(cacheKey, 200, payload, 5 * 60_000);  // 5min per spec
+    setCachedJson(cacheKey, 200, payload, 5 * 60_000);
     return res.json(payload);
   } catch (e) {
     if (e.name === 'AbortError') return res.status(504).json({ error: 'Chart timed out' });
@@ -1296,7 +1282,7 @@ app.post('/api/pumpfun/trade', async (req, res) => {
 });
 
 /* ========================================================================
- * Launch Radar — Jupiter Ultra V3 proxy (Iris router; pre-grad bonding curves)
+ * Launch Radar — Jupiter Ultra V3 proxy
  * ===================================================================== */
 const JUPITER_ULTRA_BASE = 'https://api.jup.ag/ultra/v1';
 
@@ -1556,28 +1542,17 @@ app.get('/api/cf/status', async (req, res) => {
 });
 
 /* ========================================================================
- * Debug — phone-friendly. Visit in Safari, read the JSON.
- * Remove before going to real users.
- *
- *   GET /api/debug/wallet/<base58_wallet>
- *
- * Returns:
- *   - solBalance         (native SOL via getBalance)
- *   - tokenCount         (SPL Token program accounts)
- *   - firstThreeTokens   (mint + uiAmountString, for sanity check)
- *   - token2022Count     (Token-2022 accounts — xStocks live here)
- *   - any error returned by Alchemy at any step
+ * Debug — phone-friendly
  * ===================================================================== */
 app.get('/api/debug/wallet/:wallet', async (req, res) => {
   const wallet = req.params.wallet;
   const out = {
     wallet,
     network:    SOLANA_NETWORK,
-    alchemyUrl: DRPC_RPC_URL.replace(/v2\/.+/, 'v2/***'),
+    primaryRpc: scrubSecrets(DRPC_RPC_URL),
     checks:     {},
   };
 
-  // 1) Native SOL balance
   try {
     const r = await forwardRpc({
       jsonrpc: '2.0', id: 1, method: 'getBalance', params: [wallet],
@@ -1585,7 +1560,6 @@ app.get('/api/debug/wallet/:wallet', async (req, res) => {
     out.checks.solBalance = r.parsed;
   } catch (e) { out.checks.solBalance = { error: e.message }; }
 
-  // 2) SPL token accounts (classic Token program)
   try {
     const r = await forwardRpc({
       jsonrpc: '2.0', id: 2, method: 'getTokenAccountsByOwner',
@@ -1604,7 +1578,6 @@ app.get('/api/debug/wallet/:wallet', async (req, res) => {
     if (r.parsed?.error) out.checks.tokenError = r.parsed.error;
   } catch (e) { out.checks.tokenError = e.message; }
 
-  // 3) Token-2022 accounts (xStocks live here)
   try {
     const r = await forwardRpc({
       jsonrpc: '2.0', id: 3, method: 'getTokenAccountsByOwner',
@@ -1623,13 +1596,6 @@ app.get('/api/debug/wallet/:wallet', async (req, res) => {
 
 /* ========================================================================
  * Referrals + P&L + leaderboard + honeypot check
- *
- * Mounts: /api/ref/register, /api/ref/lookup, /api/ref/log-trade,
- *         /api/ref/stats, /api/ref/leaderboard, /api/ref/pnl,
- *         /share/:wallet, /api/honeypot-check/:mint
- *
- * Persists to ./data/referrals.json. Edit KOL_BOOST_CODES inside referrals.js
- * to onboard new boosted referrers.
  * ===================================================================== */
 require('./referrals')(app, { rpcUrl: DRPC_RPC_URL });
 
@@ -1637,14 +1603,6 @@ app.all('/api/*', (req, res) => res.status(404).json({ error: 'API route not fou
 
 /* ========================================================================
  * Embed runtime config
- *
- * FIXED: emits an ABSOLUTE URL for `rpc`. Previously this was the relative
- * path '/api/solana-rpc', which fails when fed to `new Connection()` /
- * `<ConnectionProvider endpoint=...>` from @solana/web3.js — web3.js does
- * `new URL(endpoint)` internally and rejects anything that isn't http(s).
- *
- * The Alchemy API key still never leaves the server — the client just
- * hits the same-origin proxy at /api/solana-rpc.
  * ===================================================================== */
 app.get('/embed/config.js', (req, res) => {
   const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https')
@@ -1695,13 +1653,24 @@ app.use((err, req, res, next) => {
 process.on('uncaughtException',  err => logError('uncaughtException',  err));
 process.on('unhandledRejection', err => logError('unhandledRejection', err));
 
+// Identify fallback provider by hostname (no key leaks) for the startup log.
+let _bootFallbackLabel = 'public mainnet';
+try {
+  const h = new URL(PUBLIC_FALLBACK_URL).hostname;
+  if (h.includes('ankr'))                         _bootFallbackLabel = 'ankr';
+  else if (h.includes('helius'))                  _bootFallbackLabel = 'helius';
+  else if (h.includes('quicknode'))               _bootFallbackLabel = 'quicknode';
+  else if (h.includes('mainnet-beta.solana.com')) _bootFallbackLabel = 'public mainnet';
+  else                                            _bootFallbackLabel = h;
+} catch {}
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log('Nexus DEX server on port ' + PORT);
   console.log('  env: ' + NODE_ENV);
   console.log('  Jupiter Swap V2: ' + JUPITER_SWAP_V2_BASE + (JUPITER_API_KEY ? ' (main key set)' : ' (no main key)') + (JUPITER_API_KEY_SEO ? ' (SEO key set)' : ' (no SEO key)'));
   console.log('  Jupiter Price:   ' + JUPITER_PRICE_BASE);
   console.log('  Chainflip:       mainnet (SOL → BTC, broker commission disabled)');
-  console.log('  Solana RPC:      alchemy ' + SOLANA_NETWORK + ' (key embedded) + public fallback');
+  console.log('  Solana RPC:      alchemy ' + SOLANA_NETWORK + ' (primary) + ' + _bootFallbackLabel + ' (fallback)');
   console.log('  Rate limits:     none (removed)');
   console.log('  Allowed origins: ' + allowedOrigins.join(', '));
 });
