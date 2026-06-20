@@ -93,6 +93,7 @@ const ALCHEMY_DEVNET_URL  = 'https://solana-devnet.g.alchemy.com/v2/3iScOZl86KTe
 const SOLANA_NETWORK      = (process.env.SOLANA_NETWORK || 'mainnet').toLowerCase();
 const DRPC_RPC_URL        = (process.env.DRPC_RPC_URL || '').trim() ||
   (SOLANA_NETWORK === 'devnet' ? ALCHEMY_DEVNET_URL : ALCHEMY_MAINNET_URL);
+const CHAINSTACK_RPC_URL  = (process.env.CHAINSTACK_RPC_URL || '').trim();
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 
@@ -822,21 +823,29 @@ function getSolanaRpcUrl() {
 
 async function _drpcSingle(single) {
   const id = single?.id ?? null;
-  try {
-    const r = await fetchWithTimeout(
-      DRPC_RPC_URL,
-      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(single) },
-      RPC_TIMEOUT_MS,
-    );
-    const text = await r.text();
-    if (!r.ok) {
-      return { jsonrpc: '2.0', id, error: { code: r.status, message: 'RPC HTTP ' + r.status + ': ' + text.slice(0, 200) } };
+  const urls = [DRPC_RPC_URL, CHAINSTACK_RPC_URL].filter(Boolean);
+  let lastStatus = 0, lastText = '';
+  for (const url of urls) {
+    try {
+      const r = await fetchWithTimeout(
+        url,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(single) },
+        RPC_TIMEOUT_MS,
+      );
+      const text = await r.text();
+      if (r.ok) {
+        try { return JSON.parse(text); }
+        catch { return { jsonrpc: '2.0', id, error: { code: -32700, message: 'Non-JSON response from upstream' } }; }
+      }
+      lastStatus = r.status; lastText = text;
+    } catch (e) {
+      lastStatus = 0; lastText = String(e?.message || e);
     }
-    try { return JSON.parse(text); }
-    catch { return { jsonrpc: '2.0', id, error: { code: -32700, message: 'Non-JSON response from upstream' } }; }
-  } catch (e) {
-    return { jsonrpc: '2.0', id, error: { code: -32000, message: String(e?.message || e) } };
   }
+  if (lastStatus === 0) {
+    return { jsonrpc: '2.0', id, error: { code: -32000, message: lastText } };
+  }
+  return { jsonrpc: '2.0', id, error: { code: lastStatus, message: 'RPC HTTP ' + lastStatus + ': ' + lastText.slice(0, 200) } };
 }
 
 async function forwardRpc(body) {
@@ -852,22 +861,31 @@ async function forwardRpc(body) {
     return { status: 200, parsed: results, raw: null };
   }
 
-  // Single request — original path.
-  const r = await fetchWithTimeout(
-    DRPC_RPC_URL,
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) },
-    RPC_TIMEOUT_MS,
-  );
-  const text = await r.text();
-  if (!r.ok) {
-    const err = new Error('RPC HTTP ' + r.status + ': ' + text.slice(0, 200));
-    err.status = r.status;
-    throw err;
+  // Single request — try primary, fall back to Chainstack on any failure.
+  const urls = [DRPC_RPC_URL, CHAINSTACK_RPC_URL].filter(Boolean);
+  let lastErr;
+  for (const url of urls) {
+    try {
+      const r = await fetchWithTimeout(
+        url,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) },
+        RPC_TIMEOUT_MS,
+      );
+      const text = await r.text();
+      if (!r.ok) {
+        lastErr = new Error('RPC HTTP ' + r.status + ': ' + text.slice(0, 200));
+        lastErr.status = r.status;
+        continue;
+      }
+      let parsed;
+      try { parsed = JSON.parse(text); }
+      catch { return { status: r.status, parsed: null, raw: text }; }
+      return { status: r.status, parsed, raw: null };
+    } catch (e) {
+      lastErr = e;
+    }
   }
-  let parsed;
-  try { parsed = JSON.parse(text); }
-  catch { return { status: r.status, parsed: null, raw: text }; }
-  return { status: r.status, parsed, raw: null };
+  throw lastErr;
 }
 
 function sendForwardedRpc(res, result) {
@@ -1686,7 +1704,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('  Jupiter Swap V2: ' + JUPITER_SWAP_V2_BASE + (JUPITER_API_KEY ? ' (main key set)' : ' (no main key)') + (JUPITER_API_KEY_SEO ? ' (SEO key set)' : ' (no SEO key)'));
   console.log('  Jupiter Price:   ' + JUPITER_PRICE_BASE);
   console.log('  Chainflip:       mainnet (SOL → BTC, broker commission disabled)');
-  console.log('  Solana RPC:      alchemy ' + SOLANA_NETWORK + ' (key embedded, batches unrolled server-side)');
+  console.log('  Solana RPC:      alchemy ' + SOLANA_NETWORK + ' (key embedded, batches unrolled server-side)' + (CHAINSTACK_RPC_URL ? ' + chainstack fallback' : ''));
   console.log('  Rate limits:     none (removed)');
   console.log('  Allowed origins: ' + allowedOrigins.join(', '));
 });
