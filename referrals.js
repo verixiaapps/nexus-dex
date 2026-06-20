@@ -1,5 +1,5 @@
 // referrals.js — Wonderland Radar growth layer.
-//
+// 
 // MOUNT (one line in server.js, before the catch-all 404 handler):
 //
 //     require('./referrals')(app, { rpcUrl: PRIMARY_RPC_URL });
