@@ -1,5 +1,5 @@
 require('dotenv').config();
- 
+
 const express   = require('express');
 const cors      = require('cors');
 const path      = require('path');
@@ -36,8 +36,8 @@ const CSP_DIRECTIVES = [
   ['connect-src',     [
     "'self'",
     'https://api.jup.ag', 'https://lite-api.jup.ag', 'https://quote-api.jup.ag', 'https://token.jup.ag',
-    // Solana RPC — client only talks to /api/solana-rpc (same-origin),
-    // so the upstream RPC host does NOT need to be in connect-src.
+    // Solana RPC — client only talks to /api/solana-rpc and /api/trade-rpc
+    // (same-origin), so upstream RPC hosts do NOT need to be in connect-src.
     'https://explorer-api.walletconnect.com',
     'https://*.walletconnect.com', 'https://*.walletconnect.org',
     'wss://relay.walletconnect.com', 'wss://relay.walletconnect.org',
@@ -82,24 +82,22 @@ const JUPITER_LEGACY_BASE   = (process.env.JUPITER_QUOTE_BASE || 'https://api.ju
 const JUPITER_TOKENS_BASE   = 'https://lite-api.jup.ag/tokens/v2';
 const JUPITER_PRICE_BASE    = 'https://lite-api.jup.ag/price/v3';
 
-// Solana RPC — Alchemy primary, configurable fallback via FALLBACK_RPC_URL
-// (set this to your Ankr endpoint in Railway). If unset, falls back to the
-// public Solana mainnet endpoint (rate-limited, last resort only).
-const ALCHEMY_MAINNET_URL = 'https://solana-mainnet.g.alchemy.com/v2/3iScOZl86KTeWqY8qisKC';
-const ALCHEMY_DEVNET_URL  = 'https://solana-devnet.g.alchemy.com/v2/3iScOZl86KTeWqY8qisKC';
-const PUBLIC_MAINNET_URL  = 'https://api.mainnet-beta.solana.com';
-const PUBLIC_DEVNET_URL   = 'https://api.devnet.solana.com';
-const SOLANA_NETWORK      = (process.env.SOLANA_NETWORK || 'mainnet').toLowerCase();
-const DRPC_RPC_URL        = (process.env.DRPC_RPC_URL || '').trim() ||
-  (SOLANA_NETWORK === 'devnet' ? ALCHEMY_DEVNET_URL : ALCHEMY_MAINNET_URL);
-const PUBLIC_FALLBACK_URL = (process.env.FALLBACK_RPC_URL || '').trim()
-  || (SOLANA_NETWORK === 'devnet' ? PUBLIC_DEVNET_URL : PUBLIC_MAINNET_URL);
+/* ------------------------------------------------------------------------
+ * Solana RPC configuration — three env vars, full URL + key in each.
+ *
+ * ALCHEMY_RPC_URL — mainnet primary. Used for EVERYTHING on mainnet.
+ * ANKR_RPC_URL    — mainnet fallback. Used ONLY on the buy/sell trade
+ *                   path (/api/trade-rpc), after Alchemy fails.
+ * DEVNET_RPC_URL  — devnet RPC. Used for everything when
+ *                   SOLANA_NETWORK=devnet. No fallback on devnet.
+ * ---------------------------------------------------------------------- */
+const SOLANA_NETWORK   = (process.env.SOLANA_NETWORK || 'mainnet').toLowerCase();
+const ALCHEMY_RPC_URL  = (process.env.ALCHEMY_RPC_URL || '').trim();
+const ANKR_RPC_URL     = (process.env.ANKR_RPC_URL    || '').trim();
+const DEVNET_RPC_URL   = (process.env.DEVNET_RPC_URL  || '').trim();
 
-// Dedicated trade-path RPC. Used by /api/trade-rpc (Ape.jsx buy/sell) and
-// pumpfun-trade.js. Set to your Ankr endpoint in Railway. If unset, the
-// trade path falls back to DRPC_RPC_URL (Alchemy) — app still works but
-// you lose the rate-limit headroom the split is designed to give you.
-const TRADE_RPC_URL = (process.env.TRADE_RPC_URL || '').trim();
+// Active primary RPC for the current network.
+const PRIMARY_RPC_URL  = SOLANA_NETWORK === 'devnet' ? DEVNET_RPC_URL : ALCHEMY_RPC_URL;
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 
@@ -153,9 +151,8 @@ function scrubSecrets(s) {
   if (s == null) return '';
   return String(s)
     .replace(/api-key=[^&\s"']+/gi,                       'api-key=***')
-    .replace(/(lb\.drpc\.(?:live|org)\/)[^\s"'?]+/gi,     '$1***/***')
     .replace(/(solana-(?:mainnet|devnet)\.g\.alchemy\.com\/v2\/)[^\s"'?]+/gi, '$1***')
-    .replace(/(rpc\.ankr\.com\/(?:premium-http\/)?solana\/)[^\s"'?]+/gi, '$1***')
+    .replace(/(rpc\.ankr\.com\/(?:premium-http\/)?solana(?:_devnet)?\/)[^\s"'?]+/gi, '$1***')
     .replace(/x-api-key["':\s]+[^&\s"',}]+/gi,            'x-api-key=***')
     .replace(/Bearer\s+[A-Za-z0-9._-]+/gi,                'Bearer ***');
 }
@@ -821,7 +818,11 @@ app.get('/api/whale-events', async (req, res) => {
 });
 
 /* ========================================================================
- * Solana RPC — Alchemy primary, Ankr (or other) fallback via FALLBACK_RPC_URL
+ * Solana RPC — General path (everything except buy/sell trade execution)
+ *
+ * Used by /api/solana-rpc and /api/helius/das. Alchemy only. No fallback.
+ * Per spec: Ankr is reserved exclusively for the buy/sell trade path
+ * (/api/trade-rpc), nothing else.
  *
  * Solana RPC providers don't accept batched JSON-RPC arrays. The client
  * sends batched requests, so we unroll batches into parallel single
@@ -831,72 +832,57 @@ app.get('/api/whale-events', async (req, res) => {
 const RPC_TIMEOUT_MS = 10_000;
 
 function getSolanaRpcUrl() {
-  return DRPC_RPC_URL;
+  return PRIMARY_RPC_URL;
 }
 
-async function _drpcSingle(single) {
+async function _alchemySingle(single) {
   const id = single?.id ?? null;
-  const urls = [DRPC_RPC_URL, PUBLIC_FALLBACK_URL].filter(Boolean);
-  let lastStatus = 0, lastText = '';
-  for (const url of urls) {
-    try {
-      const r = await fetchWithTimeout(
-        url,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(single) },
-        RPC_TIMEOUT_MS,
-      );
-      const text = await r.text();
-      if (r.ok) {
-        try { return JSON.parse(text); }
-        catch { return { jsonrpc: '2.0', id, error: { code: -32700, message: 'Non-JSON response from upstream' } }; }
-      }
-      lastStatus = r.status; lastText = text;
-    } catch (e) {
-      lastStatus = 0; lastText = String(e?.message || e);
+  try {
+    const r = await fetchWithTimeout(
+      PRIMARY_RPC_URL,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(single) },
+      RPC_TIMEOUT_MS,
+    );
+    const text = await r.text();
+    if (r.ok) {
+      try { return JSON.parse(text); }
+      catch { return { jsonrpc: '2.0', id, error: { code: -32700, message: 'Non-JSON response from upstream' } }; }
     }
+    return { jsonrpc: '2.0', id, error: { code: r.status, message: 'RPC HTTP ' + r.status + ': ' + text.slice(0, 200) } };
+  } catch (e) {
+    return { jsonrpc: '2.0', id, error: { code: -32000, message: String(e?.message || e) } };
   }
-  if (lastStatus === 0) {
-    return { jsonrpc: '2.0', id, error: { code: -32000, message: lastText } };
-  }
-  return { jsonrpc: '2.0', id, error: { code: lastStatus, message: 'RPC HTTP ' + lastStatus + ': ' + lastText.slice(0, 200) } };
 }
 
 async function forwardRpc(body) {
-  if (!DRPC_RPC_URL) {
-    const err = new Error('Solana RPC URL is not configured');
+  if (!PRIMARY_RPC_URL) {
+    const err = new Error(SOLANA_NETWORK === 'devnet'
+      ? 'DEVNET_RPC_URL is not configured'
+      : 'ALCHEMY_RPC_URL is not configured');
     err.status = 500;
     throw err;
   }
 
   if (Array.isArray(body)) {
-    const results = await Promise.all(body.map(_drpcSingle));
+    const results = await Promise.all(body.map(_alchemySingle));
     return { status: 200, parsed: results, raw: null };
   }
 
-  const urls = [DRPC_RPC_URL, PUBLIC_FALLBACK_URL].filter(Boolean);
-  let lastErr;
-  for (const url of urls) {
-    try {
-      const r = await fetchWithTimeout(
-        url,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) },
-        RPC_TIMEOUT_MS,
-      );
-      const text = await r.text();
-      if (!r.ok) {
-        lastErr = new Error('RPC HTTP ' + r.status + ': ' + text.slice(0, 200));
-        lastErr.status = r.status;
-        continue;
-      }
-      let parsed;
-      try { parsed = JSON.parse(text); }
-      catch { return { status: r.status, parsed: null, raw: text }; }
-      return { status: r.status, parsed, raw: null };
-    } catch (e) {
-      lastErr = e;
-    }
+  const r = await fetchWithTimeout(
+    PRIMARY_RPC_URL,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) },
+    RPC_TIMEOUT_MS,
+  );
+  const text = await r.text();
+  if (!r.ok) {
+    const err = new Error('RPC HTTP ' + r.status + ': ' + text.slice(0, 200));
+    err.status = r.status;
+    throw err;
   }
-  throw lastErr;
+  let parsed;
+  try { parsed = JSON.parse(text); }
+  catch { return { status: r.status, parsed: null, raw: text }; }
+  return { status: r.status, parsed, raw: null };
 }
 
 function sendForwardedRpc(res, result) {
@@ -927,21 +913,21 @@ app.post('/api/solana-rpc', async (req, res) => {
 });
 
 /* ------------------------------------------------------------------------
- * /api/trade-rpc — dedicated trade-path proxy.
+ * /api/trade-rpc — dedicated buy/sell trade-path proxy.
  *
- * Hits TRADE_RPC_URL (Ankr) first, falls back to DRPC_RPC_URL (Alchemy)
- * on failure. Used by Ape.jsx for the buy/sell critical path:
+ * Alchemy primary, Ankr fallback. This is the ONLY route that uses Ankr,
+ * and Ankr is ONLY used as a fallback after Alchemy fails. Used by
+ * Ape.jsx and pumpfun-trade.js for the buy/sell critical path:
  * sendRawTransaction, getSignatureStatus, getLatestBlockhash,
  * getMultipleAccountsInfo (ALT lookup), simulateTransaction.
- *
- * Why this exists: trade traffic is bursty and concentrated in a 60s
- * window; routing it to a paid Ankr endpoint with 250 RPS keeps it off
- * the free Alchemy quota that the rest of the app reads from.
  * ---------------------------------------------------------------------- */
 function _tradeUrlChain() {
-  // Primary: Ankr if configured. Fallback: Alchemy (DRPC_RPC_URL).
-  // Dedup so a missing TRADE_RPC_URL doesn't try the same URL twice.
-  const chain = [TRADE_RPC_URL, DRPC_RPC_URL].filter(Boolean);
+  // Devnet: devnet RPC only, no Ankr fallback (Ankr URL is mainnet).
+  // Mainnet: Alchemy primary, Ankr fallback. Dedup defensively.
+  if (SOLANA_NETWORK === 'devnet') {
+    return [DEVNET_RPC_URL].filter(Boolean);
+  }
+  const chain = [ALCHEMY_RPC_URL, ANKR_RPC_URL].filter(Boolean);
   return [...new Set(chain)];
 }
 
@@ -975,7 +961,9 @@ async function _tradeSingle(single) {
 async function forwardTradeRpc(body) {
   const urls = _tradeUrlChain();
   if (urls.length === 0) {
-    const err = new Error('Trade RPC URL is not configured');
+    const err = new Error(SOLANA_NETWORK === 'devnet'
+      ? 'Trade RPC: DEVNET_RPC_URL is not configured'
+      : 'Trade RPC: neither ALCHEMY_RPC_URL nor ANKR_RPC_URL is configured');
     err.status = 500;
     throw err;
   }
@@ -1027,25 +1015,13 @@ app.post('/api/trade-rpc', async (req, res) => {
 app.get('/health', (req, res) => res.status(200).send('ok'));
 
 app.get('/api/health', (req, res) => {
-  // Identify fallback provider by hostname for the health check (no key leaks).
-  let fallbackProvider = 'public-mainnet';
-  try {
-    const h = new URL(PUBLIC_FALLBACK_URL).hostname;
-    if (h.includes('ankr'))                            fallbackProvider = 'ankr';
-    else if (h.includes('helius'))                     fallbackProvider = 'helius';
-    else if (h.includes('quicknode'))                  fallbackProvider = 'quicknode';
-    else if (h.includes('alchemy'))                    fallbackProvider = 'alchemy';
-    else if (h.includes('mainnet-beta.solana.com'))    fallbackProvider = 'public-mainnet';
-    else                                               fallbackProvider = h;
-  } catch {}
-
   res.json({
     ok: true, env: NODE_ENV,
     has: {
       jupiter:        Boolean(JUPITER_ENABLED),
       jupiterApiKey:  Boolean(JUPITER_API_KEY),
       jupiterSeoKey:  Boolean(JUPITER_API_KEY_SEO),
-      solanaRpc:      Boolean(DRPC_RPC_URL),
+      solanaRpc:      Boolean(PRIMARY_RPC_URL),
       chainflip:      true,
     },
     jupiter: {
@@ -1058,28 +1034,20 @@ app.get('/api/health', (req, res) => {
     },
     chainflip: { network: 'mainnet', brokerCommissionBps: 0 },
     solanaRpc: {
-      provider:        'alchemy',
-      fallbackProvider,
-      fallbackCustom:  Boolean((process.env.FALLBACK_RPC_URL || '').trim()),
-      network:         SOLANA_NETWORK,
-      urlSet:          Boolean(DRPC_RPC_URL),
-      timeoutMs:       RPC_TIMEOUT_MS,
-      batching:        'server-side unroll',
+      // General path: primary only, no fallback.
+      provider:   SOLANA_NETWORK === 'devnet' ? 'devnet' : 'alchemy',
+      network:    SOLANA_NETWORK,
+      urlSet:     Boolean(PRIMARY_RPC_URL),
+      alchemySet: Boolean(ALCHEMY_RPC_URL),
+      devnetSet:  Boolean(DEVNET_RPC_URL),
+      timeoutMs:  RPC_TIMEOUT_MS,
+      batching:   'server-side unroll',
     },
     tradeRpc: {
-      // Dedicated buy/sell path. Ankr primary, Alchemy fallback.
-      configured:      Boolean(TRADE_RPC_URL),
-      primaryProvider: (() => {
-        if (!TRADE_RPC_URL) return null;
-        try {
-          const h = new URL(TRADE_RPC_URL).hostname;
-          if (h.includes('ankr'))      return 'ankr';
-          if (h.includes('helius'))    return 'helius';
-          if (h.includes('quicknode')) return 'quicknode';
-          if (h.includes('alchemy'))   return 'alchemy';
-          return h;
-        } catch { return null; }
-      })(),
+      // Buy/sell path. Mainnet: alchemy + ankr fallback. Devnet: devnet only.
+      primaryProvider:  SOLANA_NETWORK === 'devnet' ? 'devnet' : 'alchemy',
+      fallbackProvider: SOLANA_NETWORK === 'devnet' ? null : 'ankr',
+      ankrSet:          Boolean(ANKR_RPC_URL),
     },
     time: new Date().toISOString(),
   });
@@ -1665,7 +1633,7 @@ app.get('/api/debug/wallet/:wallet', async (req, res) => {
   const out = {
     wallet,
     network:    SOLANA_NETWORK,
-    primaryRpc: scrubSecrets(DRPC_RPC_URL),
+    primaryRpc: scrubSecrets(PRIMARY_RPC_URL),
     checks:     {},
   };
 
@@ -1713,7 +1681,7 @@ app.get('/api/debug/wallet/:wallet', async (req, res) => {
 /* ========================================================================
  * Referrals + P&L + leaderboard + honeypot check
  * ===================================================================== */
-require('./referrals')(app, { rpcUrl: DRPC_RPC_URL });
+require('./referrals')(app, { rpcUrl: PRIMARY_RPC_URL });
 
 app.all('/api/*', (req, res) => res.status(404).json({ error: 'API route not found: ' + req.path }));
 
@@ -1769,36 +1737,18 @@ app.use((err, req, res, next) => {
 process.on('uncaughtException',  err => logError('uncaughtException',  err));
 process.on('unhandledRejection', err => logError('unhandledRejection', err));
 
-// Identify fallback provider by hostname (no key leaks) for the startup log.
-let _bootFallbackLabel = 'public mainnet';
-try {
-  const h = new URL(PUBLIC_FALLBACK_URL).hostname;
-  if (h.includes('ankr'))                         _bootFallbackLabel = 'ankr';
-  else if (h.includes('helius'))                  _bootFallbackLabel = 'helius';
-  else if (h.includes('quicknode'))               _bootFallbackLabel = 'quicknode';
-  else if (h.includes('mainnet-beta.solana.com')) _bootFallbackLabel = 'public mainnet';
-  else                                            _bootFallbackLabel = h;
-} catch {}
-
 app.listen(PORT, '0.0.0.0', () => {
   console.log('Nexus DEX server on port ' + PORT);
   console.log('  env: ' + NODE_ENV);
   console.log('  Jupiter Swap V2: ' + JUPITER_SWAP_V2_BASE + (JUPITER_API_KEY ? ' (main key set)' : ' (no main key)') + (JUPITER_API_KEY_SEO ? ' (SEO key set)' : ' (no SEO key)'));
   console.log('  Jupiter Price:   ' + JUPITER_PRICE_BASE);
   console.log('  Chainflip:       mainnet (SOL → BTC, broker commission disabled)');
-  console.log('  Solana RPC:      alchemy ' + SOLANA_NETWORK + ' (primary) + ' + _bootFallbackLabel + ' (fallback)');
-  if (TRADE_RPC_URL) {
-    let tradeLabel = 'configured';
-    try {
-      const h = new URL(TRADE_RPC_URL).hostname;
-      if (h.includes('ankr'))      tradeLabel = 'ankr';
-      else if (h.includes('helius'))    tradeLabel = 'helius';
-      else if (h.includes('quicknode')) tradeLabel = 'quicknode';
-      else tradeLabel = h;
-    } catch {}
-    console.log('  Trade RPC:       ' + tradeLabel + ' (primary) + alchemy (fallback) → /api/trade-rpc');
+  if (SOLANA_NETWORK === 'devnet') {
+    console.log('  Solana RPC:      devnet' + (DEVNET_RPC_URL ? ' (set)' : ' (NOT SET — set DEVNET_RPC_URL)') + ' — no fallback');
+    console.log('  Trade RPC:       devnet only → /api/trade-rpc');
   } else {
-    console.log('  Trade RPC:       NOT SET — /api/trade-rpc will use alchemy. Set TRADE_RPC_URL to your Ankr endpoint.');
+    console.log('  Solana RPC:      alchemy mainnet' + (ALCHEMY_RPC_URL ? ' (set)' : ' (NOT SET — set ALCHEMY_RPC_URL)') + ' — no fallback');
+    console.log('  Trade RPC:       alchemy primary' + (ANKR_RPC_URL ? ' + ankr fallback' : ' (ANKR_RPC_URL not set — no fallback)') + ' → /api/trade-rpc');
   }
   console.log('  Rate limits:     none (removed)');
   console.log('  Allowed origins: ' + allowedOrigins.join(', '));
