@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import * as anchor from '@coral-xyz/anchor';
 import { Connection, PublicKey, SystemProgram } from '@solana/web3.js';
- 
+
 // Flipsy program ID. Reads from env at build time. Falls back to the System
 // Program (all 1s — valid base58) so the import doesn't throw if the env var
 // is missing — the hook will then surface "No IDL on chain" through its
@@ -14,7 +14,11 @@ const PROGRAM_ID = new PublicKey(
 );
 
 // RPC — public Solana devnet endpoint (Flipsy is deployed on devnet).
-// Hardcoded, no env var, no build-time inlining required.
+// Hardcoded for now: the rest of the app runs on mainnet through
+// /api/solana-rpc, so Flipsy can't share that proxy. Public devnet has no key
+// to leak. No Ankr fallback — Ankr is the mainnet buy/sell fallback only.
+// TODO: when ready, swap to a dedicated /api/devnet-rpc route that forwards to
+// DEVNET_RPC_URL server-side (avoids public-endpoint rate limits).
 const FLIPSY_RPC = 'https://api.devnet.solana.com';
 
 const PRICE_URL = 'https://api.coinbase.com/v2/prices/SOL-USD/spot';
