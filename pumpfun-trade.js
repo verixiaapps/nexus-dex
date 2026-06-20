@@ -23,6 +23,14 @@
 //   to devnet: set SOLANA_NETWORK=devnet. Variable name retained as
 //   DRPC_RPC_URL throughout to avoid breaking other modules.
 //
+// CACHING
+//   fetchGlobal() and fetchFeeConfig() are cached process-wide for 60s.
+//   These are the heaviest calls in the trade flow (each does several
+//   getAccountInfo RPCs internally) and the underlying accounts almost
+//   never change between blocks. This cuts per-trade RPC pressure by
+//   roughly half and is the main reason a single trade no longer
+//   triggers 429s on the free Alchemy tier.
+//
 // DEPENDENCIES
 //     npm install @pump-fun/pump-sdk @coral-xyz/anchor bn.js @solana/web3.js
 //
@@ -95,6 +103,39 @@ function getOffline() {
     catch (e2) { _offline = null; }
   }
   return _offline;
+}
+
+// ── Cache for pump globals ────────────────────────────────────────────────
+// fetchGlobal() and fetchFeeConfig() each do several RPC calls internally
+// and return data that almost never changes between blocks. Caching them
+// for 60s drops per-trade RPC pressure significantly — the main lever
+// that gets a single trade under the free-tier rate ceiling.
+const PUMP_GLOBAL_TTL_MS = 60_000;
+let _globalCache    = { value: null, ts: 0 };
+let _feeConfigCache = { value: null, ts: 0 };
+
+async function getCachedGlobal(sdk) {
+  if (_globalCache.value && Date.now() - _globalCache.ts < PUMP_GLOBAL_TTL_MS) {
+    return _globalCache.value;
+  }
+  const v = await sdk.fetchGlobal();
+  _globalCache = { value: v, ts: Date.now() };
+  return v;
+}
+
+async function getCachedFeeConfig(sdk) {
+  if (_feeConfigCache.value && Date.now() - _feeConfigCache.ts < PUMP_GLOBAL_TTL_MS) {
+    return _feeConfigCache.value;
+  }
+  if (typeof sdk.fetchFeeConfig !== 'function') return null;
+  try {
+    const v = await sdk.fetchFeeConfig();
+    _feeConfigCache = { value: v, ts: Date.now() };
+    return v;
+  } catch (e) {
+    console.warn('[pumpfun-trade] fetchFeeConfig failed:', e?.message);
+    return null;
+  }
 }
 
 const methodsOf = (obj) => {
@@ -191,13 +232,9 @@ function mountRoutes(app) {
       const user = new PublicKey(userStr);
       const sdk  = getOnline();
 
-      // Shared global + (optional) fee config.
-      const global = await sdk.fetchGlobal();
-      let feeConfig = null;
-      if (typeof sdk.fetchFeeConfig === 'function') {
-        try { feeConfig = await sdk.fetchFeeConfig(); }
-        catch (e) { console.warn('[pumpfun-trade] fetchFeeConfig failed:', e?.message); }
-      }
+      // Shared global + (optional) fee config — cached 60s to cut RPC load.
+      const global    = await getCachedGlobal(sdk);
+      const feeConfig = await getCachedFeeConfig(sdk);
       if (!feeConfig) {
         console.warn('[pumpfun-trade] feeConfig is NULL — the buy/sell fee accounts will likely be '
           + 'wrong for current pump tokens (→ IncorrectProgramId). Almost always a server RPC problem.');
