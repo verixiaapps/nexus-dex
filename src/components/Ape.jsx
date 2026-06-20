@@ -13,7 +13,16 @@
 //   GET  /api/ref/leaderboard   standings (24h/7d/all)
 //   GET  /api/ref/pnl           personal field log
 //   GET  /share/:wallet         OG-unfurl + redirect with ?ref locked in
-//   GET  /api/dex/chart/:mint?tf=5m   NEW — pair price history (see TokenChart)
+//   GET  /api/dex/chart/:mint?tf=5m   pair price history (see TokenChart)
+//
+// RPC routing (this is the only place the client knows about it):
+//   /api/solana-rpc   — Alchemy only. Used for EVERYTHING except the buy/sell
+//                       critical path: balances, token accounts, prices,
+//                       positions, debug, withdrawals.
+//   /api/trade-rpc    — Alchemy primary, Ankr fallback. Used ONLY by the
+//                       buy/sell critical path inside executeSwap:
+//                       sendRawTransaction, getSignatureStatus,
+//                       getLatestBlockhash, getBlockHeight, ALT lookup.
 //
 // On-chain fee splitting: 70/30 default (50/50 boosted). The referrer's share
 // is a second SystemProgram.transfer instruction in the SAME signed tx as the
@@ -124,7 +133,6 @@ const WR_CSS = `
 .wr-no-connect{display:inline-flex;align-items:center;gap:7px;font-family:'JetBrains Mono';font-size:10.5px;font-weight:700;letter-spacing:.6px;color:var(--mint);padding:6px 11px;border-radius:999px;background:var(--mint-soft);border:1px solid rgba(61,255,194,.2)}
 @media(max-width:768px){.wr-hero h1{font-size:32px}.wr-hero{flex-direction:column;align-items:flex-start;gap:14px}}
 
-/* ── NEW: Returning-user lure (replaces hero+offers for repeat visits) ── */
 .wr-lure{display:flex;align-items:center;gap:14px;padding:14px 0 16px;border-bottom:1px solid var(--line);margin-bottom:18px;animation:wr-rise .35s cubic-bezier(.2,1,.3,1)}
 .wr-lure-text{flex:1;min-width:0}
 .wr-lure-h{font-family:'Fraunces';font-weight:500;font-size:24px;letter-spacing:-.015em;line-height:1.1;font-variation-settings:"opsz" 96}
@@ -137,7 +145,6 @@ const WR_CSS = `
 .wr-lure-close:hover{color:var(--ink);border-color:var(--line2)}
 @media(max-width:768px){.wr-lure-h{font-size:20px}.wr-lure-s{font-size:9.5px}}
 
-/* ── NEW: Open positions strip ── */
 .wr-positions{background:linear-gradient(135deg,rgba(155,123,255,.10),rgba(25,19,47,.7));border:1px solid rgba(155,123,255,.25);border-radius:16px;overflow:hidden;margin-bottom:22px;animation:wr-rise .4s cubic-bezier(.2,1,.3,1)}
 .wr-positions-head{padding:11px 16px 8px;display:flex;align-items:baseline;justify-content:space-between;gap:10px}
 .wr-positions-head .e{font-family:'JetBrains Mono';font-size:9.5px;font-weight:800;letter-spacing:1.3px;text-transform:uppercase;color:var(--lavender)}
@@ -186,7 +193,6 @@ const WR_CSS = `
 .wr-list-title .t{font-family:'Fraunces';font-weight:500;font-size:24px;letter-spacing:-.015em}
 .wr-list-title .t .it{font-style:italic;color:var(--ink2);font-weight:400}
 
-/* ── NEW: Sort bar (replaces wr-list-filters) ── */
 .wr-sortbar{padding:10px 22px;display:flex;align-items:center;gap:7px;border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none}
 .wr-sortbar::-webkit-scrollbar{display:none}
 .wr-sortbar .label{font-family:'JetBrains Mono';font-size:9px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:var(--ink3);margin-right:4px;flex-shrink:0}
@@ -217,7 +223,6 @@ const WR_CSS = `
 .wr-sym-row .chg.dn{color:var(--coral)}
 .wr-full{font-size:11.5px;color:var(--ink2);font-weight:400;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wr-full .dex{color:var(--ink3);font-family:'JetBrains Mono';font-size:10px;text-transform:uppercase;letter-spacing:.5px;margin-left:6px}
-/* NEW: Mobile-only second line (price · age · MC) */
 .wr-mob-meta{display:none;font-family:'JetBrains Mono';font-size:10.5px;font-weight:600;color:var(--ink2);margin-top:3px;letter-spacing:.15px;align-items:center;gap:6px;overflow:hidden;white-space:nowrap}
 .wr-mob-meta .price{color:var(--ink);font-weight:700}
 .wr-mob-meta .mob-age{color:var(--mint);font-weight:700}
@@ -251,7 +256,6 @@ const WR_CSS = `
 .wr-list-foot .live.warn{color:var(--butter)}
 .wr-list-foot .live.warn .d{background:var(--butter);box-shadow:0 0 10px var(--butter)}
 @media(max-width:1100px){.wr-row{grid-template-columns:40px 1fr 70px 80px 90px 100px 120px;gap:10px;padding:12px 16px}.wr-row.thead{padding:10px 16px}.wr-col-vol,.wr-col-holders{display:none}}
-/* ── NEW: Mobile row override — flex layout with 2-line stack ── */
 @media(max-width:720px){
   .wr-row{display:flex;grid-template-columns:none;align-items:center;gap:11px;padding:11px 14px}
   .wr-row.thead{display:none}
@@ -298,7 +302,6 @@ const WR_CSS = `
 .wr-tshead .sym{font-family:'Fraunces';font-weight:500;font-size:26px;letter-spacing:-.02em;line-height:1;font-variation-settings:"opsz" 96}
 .wr-tshead .sub{font-family:'JetBrains Mono';font-size:11px;color:var(--ink2);font-weight:600;margin-top:4px}
 
-/* ── NEW: Token chart (inside TradeSheet header) ── */
 .wr-chart-wrap{margin:14px 22px 0;padding:12px 0 6px;border-top:1px solid var(--line)}
 .wr-chart{position:relative;width:100%;height:84px;display:block}
 .wr-chart svg{display:block;width:100%;height:100%}
@@ -407,7 +410,6 @@ const WR_CSS = `
 .wr-sec-lbl{font-family:'JetBrains Mono';font-size:10px;letter-spacing:1.2px;text-transform:uppercase;font-weight:800;color:var(--ink3);margin:16px 0 9px}
 .wr-esave{width:100%;margin-top:18px;padding:14px 0;border:none;border-radius:13px;font-family:inherit;font-weight:600;font-size:14px;cursor:pointer;background:var(--magenta);color:#1B0410;box-shadow:0 6px 18px -6px var(--magenta-glow)}
 
-/* ── NEW: Filters modal rows ── */
 .wr-filter-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}
 .wr-filter-row:last-child{border-bottom:none}
 .wr-filter-row .lbl{font-family:'Fraunces';font-weight:500;font-size:15px;letter-spacing:-.005em}
@@ -436,7 +438,6 @@ const WR_CSS = `
 .wr-confetti{position:fixed;inset:0;pointer-events:none;z-index:1200;overflow:hidden}
 .wr-cpiece{position:absolute;top:50%;left:50%;width:8px;height:14px;border-radius:2px;animation:wr-confetti 1.6s cubic-bezier(.15,.9,.3,1) forwards}
 
-/* ── STATS PANEL (wp-) — committed field-log register ──────── */
 .wp-root{
   --ink2x:rgba(244,239,255,.66); --ink3x:rgba(244,239,255,.42);
   position:fixed;inset:0;z-index:2000;overflow-y:auto;overflow-x:hidden;
@@ -612,7 +613,6 @@ const WR_CSS = `
 .wp-toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:2100;display:flex;align-items:center;gap:10px;padding:13px 18px;border-radius:14px;background:rgba(25,19,47,.95);backdrop-filter:blur(20px);border:1px solid var(--line2);font-family:'JetBrains Mono';font-size:11.5px;font-weight:700;letter-spacing:.4px;color:var(--ink);box-shadow:0 14px 36px rgba(0,0,0,.5);animation:wr-rise .25s ease}
 .wp-toast .gl{font-size:14px;color:var(--mint)}
 
-/* ── AUTO-TRADE PANEL (wa-) ───────────────────────────────────── */
 .wa-root{position:fixed;inset:0;z-index:2000;overflow-y:auto;overflow-x:hidden;color:var(--ink);font-family:'Inter',-apple-system,system-ui,sans-serif;background:radial-gradient(900px 600px at 88% -10%,rgba(255,61,138,.10),transparent 55%),radial-gradient(700px 500px at -5% 8%,rgba(107,238,255,.08),transparent 55%),var(--iris);animation:wr-fade .25s ease}
 .wa-head{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:14px;padding:16px 28px;background:rgba(14,11,31,.84);backdrop-filter:blur(20px) saturate(140%);border-bottom:1px solid var(--line)}
 .wa-stat-pill{display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border-radius:999px;font-family:'JetBrains Mono';font-size:10.5px;font-weight:800;letter-spacing:1.1px;text-transform:uppercase;margin-left:auto}
@@ -778,16 +778,20 @@ const SOL_RESERVE = 0.01;
 const DEFAULT_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
 const DEFAULT_SELL_PRESETS = [25, 50, 100];
 
+// /api/solana-rpc — Alchemy only. Used for every background read: balances,
+// token accounts, prices, positions, debug, and withdraw tx submission.
 const RPC_URL = (typeof window !== 'undefined' && window.location)
   ? window.location.origin + '/api/solana-rpc'
   : 'http://localhost:3001/api/solana-rpc';
-// Dedicated trade-path RPC — Ankr primary, Alchemy fallback (configured in
-// server.js as /api/trade-rpc). Routes sendRawTransaction, getSignatureStatus,
-// getLatestBlockhash, and ALT lookups OFF the free Alchemy quota that the
-// background reads (balances, positions, prices) share.
+
+// /api/trade-rpc — Alchemy primary, Ankr fallback. Used ONLY by the buy/sell
+// critical path inside executeSwap: sendRawTransaction, getSignatureStatus,
+// getLatestBlockhash, getBlockHeight, and the ALT lookup that runs while
+// decoding the PumpPortal tx. Nothing else touches this connection.
 const TRADE_RPC_URL = (typeof window !== 'undefined' && window.location)
   ? window.location.origin + '/api/trade-rpc'
   : 'http://localhost:3001/api/trade-rpc';
+
 const BAL_COMMITMENT = 'processed';
 const _connCache = new Map();
 const getConn = (commitment) => {
@@ -807,10 +811,8 @@ const balRpcRace = (op) => op(getConn(BAL_COMMITMENT));
 const POLL_RECENT    = 2500;
 const POLL_SOL       = 30000;
 const POLL_BALANCE   = 30000;
-const POLL_POSITIONS = 30000;  // NEW — open positions strip refresh
+const POLL_POSITIONS = 30000;
 
-// NEW: flag set on first confirmed trade — used to detect returning users
-// and collapse the marketing hero+offers on subsequent visits.
 const HAS_TRADED_KEY = 'lr_has_traded_v1';
 
 /* ============================================================
@@ -843,7 +845,7 @@ function useLocalWallet() {
 }
 
 /* ============================================================
-   REFERRAL HELPERS — fire-and-forget; never block a trade.
+   REFERRAL HELPERS
    ============================================================ */
 async function refLookup(walletStr) {
   try {
@@ -942,7 +944,6 @@ function ageClass(ms) {
   if (ms < 180000) return 'wr-age med';
   return 'wr-age old';
 }
-// NEW: variant of ageClass for the mobile-meta line (uses `.mob-age` base)
 function mobAgeClass(ms) {
   if (!Number.isFinite(ms)) return 'mob-age old';
   if (ms < 30000) return 'mob-age';
@@ -1193,17 +1194,8 @@ function TokenChip({ token }) {
 const IconX = () => (<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>);
 const IconTg = () => (<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z"/></svg>);
 
-/* ════════════════════════════════════════════════════════════════
-   NEW — TOKEN CHART. Simple SVG line + soft gradient. PancakeSwap-style.
-   ════════════════════════════════════════════════════════════════
-   Fetches from GET /api/dex/chart/:mint?tf=5m
-   Expected response shape:  { points: [{ts: number, price: number}, ...] }
-   Server should cache 5 minutes per (mint, tf) and proxy Dexscreener
-   pair-candles. If endpoint 404s or returns fewer than 2 points, the
-   "too fresh" empty state shows — the chart degrades gracefully.
-   ════════════════════════════════════════════════════════════════ */
 const CHART_TFS = ['5m', '1H', '6H', '24H'];
-const FRESH_FLOOR_MS = 5 * 60 * 1000; // tokens younger than 5min → empty state
+const FRESH_FLOOR_MS = 5 * 60 * 1000;
 
 function TokenChart({ token }) {
   const [tf, setTf] = useState('5m');
@@ -1302,10 +1294,6 @@ function TokenChart({ token }) {
     </div>
   );
 }
-
-/* ════════════════════════════════════════════════════════════════
-   STATS PANEL — Referrals · Field log · Standings
-   ════════════════════════════════════════════════════════════════ */
 
 function ReferralsSection({ walletStr, stats, statsLoading, statsError, onBoostActivated }) {
   const link = inviteUrl(walletStr);
@@ -1676,297 +1664,144 @@ function StandingsSection({ walletStr, lb, lbLoading, lbError, win, setWin }) {
   );
 }
 
-/* ════════════════════════════════════════════════════════════════
-   AUTO-TRADE — Balanced & Custom modes
-   ════════════════════════════════════════════════════════════════ */
-
 const BALANCED_SETTINGS = {
-  perTradeSol:     0.2,
-  takeProfitPct:   150,
-  stopLossPct:     30,
-  minAgeMin:       3,
-  maxAgeMin:       30,
-  minLiqUsd:       10000,
-  minHolders:      30,
-  minVibe:         40,
-  maxOpen:         5,
-  maxPerHour:      10,
+  perTradeSol:0.2, takeProfitPct:150, stopLossPct:30, minAgeMin:3, maxAgeMin:30,
+  minLiqUsd:10000, minHolders:30, minVibe:40, maxOpen:5, maxPerHour:10,
 };
-
-const SAFETY_FLOOR = {
-  dailyLossCapSol:    1.0,
-  maxHoldMin:         30,
-  ageMinAbsolute:     3,
-  posPollMs:          7000,
-};
-
-const AT_SETTINGS_KEY   = 'lr_at_settings_v1';
-const AT_STATE_KEY      = 'lr_at_state_v1';
-const AT_POSITIONS_KEY  = 'lr_at_positions_v1';
+const SAFETY_FLOOR = { dailyLossCapSol:1.0, maxHoldMin:30, ageMinAbsolute:3, posPollMs:7000 };
+const AT_SETTINGS_KEY='lr_at_settings_v1', AT_STATE_KEY='lr_at_state_v1', AT_POSITIONS_KEY='lr_at_positions_v1';
 const AT_POS_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
 function loadCustomSettings() {
-  try {
-    const raw = localStorage.getItem(AT_SETTINGS_KEY);
-    if (!raw) return { ...BALANCED_SETTINGS };
-    const parsed = JSON.parse(raw);
-    return { ...BALANCED_SETTINGS, ...parsed };
-  } catch (e) { return { ...BALANCED_SETTINGS }; }
+  try { const raw = localStorage.getItem(AT_SETTINGS_KEY); if (!raw) return { ...BALANCED_SETTINGS }; return { ...BALANCED_SETTINGS, ...JSON.parse(raw) }; }
+  catch (e) { return { ...BALANCED_SETTINGS }; }
 }
 function saveCustomSettings(s) { try { localStorage.setItem(AT_SETTINGS_KEY, JSON.stringify(s)); } catch (e) {} }
-
 function loadDailyState() {
-  try {
-    const raw = localStorage.getItem(AT_STATE_KEY);
-    if (!raw) return null;
-    const d = JSON.parse(raw);
-    if (!d || d.day !== new Date().toDateString()) return null;
-    return d;
-  } catch (e) { return null; }
+  try { const raw = localStorage.getItem(AT_STATE_KEY); if (!raw) return null; const d = JSON.parse(raw); if (!d || d.day !== new Date().toDateString()) return null; return d; }
+  catch (e) { return null; }
 }
 function saveDailyState(d) { try { localStorage.setItem(AT_STATE_KEY, JSON.stringify({ ...d, day: new Date().toDateString() })); } catch (e) {} }
-
 function loadPositions() {
   try {
-    const raw = localStorage.getItem(AT_POSITIONS_KEY);
-    if (!raw) return [];
-    const arr = JSON.parse(raw);
-    if (!Array.isArray(arr)) return [];
+    const raw = localStorage.getItem(AT_POSITIONS_KEY); if (!raw) return [];
+    const arr = JSON.parse(raw); if (!Array.isArray(arr)) return [];
     const cutoff = Date.now() - AT_POS_MAX_AGE_MS;
-    return arr
-      .filter(p => p && p.mint && Number.isFinite(p.ts) && p.ts > cutoff && Number.isFinite(p.entryPriceUsd))
-      .map(p => ({ ...p, exiting: false }));
+    return arr.filter(p => p && p.mint && Number.isFinite(p.ts) && p.ts > cutoff && Number.isFinite(p.entryPriceUsd)).map(p => ({ ...p, exiting: false }));
   } catch (e) { return []; }
 }
 function savePositions(arr) { try { localStorage.setItem(AT_POSITIONS_KEY, JSON.stringify(arr || [])); } catch (e) {} }
 
 function useAutoTrade(deps) {
   const { wallet, recentTokens, solBalance, solPrice, balances, executeSwap, refreshSol, refreshOneToken, pushToast } = deps;
-
   const initialDaily = useMemo(() => loadDailyState() || {}, []);
-
-  const [enabled, setEnabled]   = useState(false);
-  const [mode, setMode]         = useState('balanced');
-  const [custom, setCustom]     = useState(() => loadCustomSettings());
+  const [enabled, setEnabled] = useState(false);
+  const [mode, setMode] = useState('balanced');
+  const [custom, setCustom] = useState(() => loadCustomSettings());
   const [positions, setPositions] = useState(() => loadPositions());
-  const [log, setLog]           = useState([]);
-  const [stats, setStats]       = useState(() => ({
-    scanned:  initialDaily.scanned  || 0,
-    passed:   initialDaily.passed   || 0,
-    traded:   initialDaily.traded   || 0,
-    realized: initialDaily.realized || 0,
-  }));
-  const [paused, setPaused]     = useState(false);
-  const recentTradesRef         = useRef(initialDaily.recentTradeTs || []);
-
+  const [log, setLog] = useState([]);
+  const [stats, setStats] = useState(() => ({ scanned: initialDaily.scanned||0, passed: initialDaily.passed||0, traded: initialDaily.traded||0, realized: initialDaily.realized||0 }));
+  const [paused, setPaused] = useState(false);
+  const recentTradesRef = useRef(initialDaily.recentTradeTs || []);
   const config = mode === 'balanced' ? BALANCED_SETTINGS : custom;
-
   const evaluatedRef = useRef(new Set());
-  const firingRef    = useRef(new Set());
+  const firingRef = useRef(new Set());
   const positionsRef = useRef([]);
-  useEffect(() => {
-    positionsRef.current = positions;
-    for (const p of positions) firingRef.current.delete(p.mint);
-  }, [positions]);
-
-  const appendLog = useCallback((tag, msg) => {
-    setLog(prev => [{ ts: Date.now(), tag, msg }, ...prev].slice(0, 120));
-  }, []);
-
+  useEffect(() => { positionsRef.current = positions; for (const p of positions) firingRef.current.delete(p.mint); }, [positions]);
+  const appendLog = useCallback((tag, msg) => { setLog(prev => [{ ts: Date.now(), tag, msg }, ...prev].slice(0, 120)); }, []);
   useEffect(() => { savePositions(positions); }, [positions]);
-
-  useEffect(() => {
-    saveDailyState({
-      scanned: stats.scanned, passed: stats.passed, traded: stats.traded, realized: stats.realized,
-      recentTradeTs: recentTradesRef.current,
-    });
-  }, [stats]);
-
+  useEffect(() => { saveDailyState({ scanned: stats.scanned, passed: stats.passed, traded: stats.traded, realized: stats.realized, recentTradeTs: recentTradesRef.current }); }, [stats]);
   useEffect(() => { if (mode === 'custom') saveCustomSettings(custom); }, [custom, mode]);
-
   useEffect(() => {
     if (!paused && stats.realized <= -SAFETY_FLOOR.dailyLossCapSol) {
-      setPaused(true);
-      appendLog('info', '· daily loss cap reached — auto paused for the day');
+      setPaused(true); appendLog('info', '· daily loss cap reached — auto paused for the day');
       if (pushToast) pushToast({ kind: 'info', emoji: '⏸', body: <><b>Auto paused</b><br/>Daily loss cap reached. Resumes tomorrow.</>, duration: 9000 });
     }
   }, [stats.realized, paused, appendLog, pushToast]);
-
   useEffect(() => {
-    if (positions.length > 0 && log.length === 0) {
-      appendLog('info', '· restored ' + positions.length + ' position(s) from previous session');
-    }
+    if (positions.length > 0 && log.length === 0) appendLog('info', '· restored ' + positions.length + ' position(s) from previous session');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
   useEffect(() => {
     if (!enabled || paused) return;
     if (!recentTokens || recentTokens.length === 0) return;
     let cancelled = false;
-
     (async () => {
       let runSpentSol = 0;
-
       for (const token of recentTokens) {
         if (cancelled) return;
         if (evaluatedRef.current.has(token.mint)) continue;
         evaluatedRef.current.add(token.mint);
         setStats(s => ({ ...s, scanned: s.scanned + 1 }));
-
         if (positionsRef.current.some(p => p.mint === token.mint)) continue;
         if (firingRef.current.has(token.mint)) continue;
-
-        if (positionsRef.current.length + firingRef.current.size >= config.maxOpen) {
-          appendLog('skip', '· ' + token.sym + ' — at max positions (' + config.maxOpen + ')');
-          continue;
-        }
-
+        if (positionsRef.current.length + firingRef.current.size >= config.maxOpen) { appendLog('skip', '· ' + token.sym + ' — at max positions (' + config.maxOpen + ')'); continue; }
         const hourAgo = Date.now() - 3600000;
         recentTradesRef.current = recentTradesRef.current.filter(ts => ts > hourAgo);
-        if (recentTradesRef.current.length >= config.maxPerHour) {
-          appendLog('skip', '· ' + token.sym + ' — hourly cap (' + config.maxPerHour + '/hr)');
-          continue;
-        }
-
-        if (Math.abs(Math.min(0, stats.realized)) >= SAFETY_FLOOR.dailyLossCapSol) {
-          appendLog('skip', '· daily loss cap hit, pausing for the day');
-          setPaused(true);
-          return;
-        }
-
+        if (recentTradesRef.current.length >= config.maxPerHour) { appendLog('skip', '· ' + token.sym + ' — hourly cap (' + config.maxPerHour + '/hr)'); continue; }
+        if (Math.abs(Math.min(0, stats.realized)) >= SAFETY_FLOOR.dailyLossCapSol) { appendLog('skip', '· daily loss cap hit, pausing for the day'); setPaused(true); return; }
         const ageMs = token.pairCreatedAtMs ? Date.now() - token.pairCreatedAtMs : 0;
         const minAgeMs = Math.max(SAFETY_FLOOR.ageMinAbsolute, config.minAgeMin) * 60000;
-        if (ageMs < minAgeMs) {
-          appendLog('skip', '· ' + token.sym + ' — too fresh (' + Math.floor(ageMs/1000) + 's)');
-          continue;
-        }
-        if (ageMs > config.maxAgeMin * 60000) {
-          appendLog('skip', '· ' + token.sym + ' — too old (' + Math.floor(ageMs/60000) + 'm)');
-          continue;
-        }
-
-        if ((token.liquidity || 0) < config.minLiqUsd) {
-          appendLog('skip', '· ' + token.sym + ' — thin liq ' + formatMoney(token.liquidity || 0));
-          continue;
-        }
-        if ((token.holders || 0) < config.minHolders) {
-          appendLog('skip', '· ' + token.sym + ' — low holders (' + (token.holders || 0) + ')');
-          continue;
-        }
+        if (ageMs < minAgeMs) { appendLog('skip', '· ' + token.sym + ' — too fresh (' + Math.floor(ageMs/1000) + 's)'); continue; }
+        if (ageMs > config.maxAgeMin * 60000) { appendLog('skip', '· ' + token.sym + ' — too old (' + Math.floor(ageMs/60000) + 'm)'); continue; }
+        if ((token.liquidity || 0) < config.minLiqUsd) { appendLog('skip', '· ' + token.sym + ' — thin liq ' + formatMoney(token.liquidity || 0)); continue; }
+        if ((token.holders || 0) < config.minHolders) { appendLog('skip', '· ' + token.sym + ' — low holders (' + (token.holders || 0) + ')'); continue; }
         const vibe = riskRead(token);
-        if (vibe.score < config.minVibe) {
-          appendLog('skip', '· ' + token.sym + ' — vibe ' + vibe.score + ' below floor');
-          continue;
-        }
-
+        if (vibe.score < config.minVibe) { appendLog('skip', '· ' + token.sym + ' — vibe ' + vibe.score + ' below floor'); continue; }
         const walletSol = (solBalance && solBalance.uiAmount) || 0;
         const availSol = Math.max(0, walletSol - SOL_RESERVE - runSpentSol);
-        if (config.perTradeSol > availSol) {
-          appendLog('error', '· ' + token.sym + ' — need ' + config.perTradeSol + ' SOL, have ' + formatSol(availSol));
-          continue;
-        }
-
+        if (config.perTradeSol > availSol) { appendLog('error', '· ' + token.sym + ' — need ' + config.perTradeSol + ' SOL, have ' + formatSol(availSol)); continue; }
         try {
           const r = await fetch('/api/honeypot-check/' + encodeURIComponent(token.mint));
           const d = await r.json();
-          if (!d.safe) {
-            appendLog('skip', '· ' + token.sym + ' — failed honeypot: ' + (d.reasons?.[0] || 'unsafe'));
-            continue;
-          }
-        } catch (e) {
-          appendLog('skip', '· ' + token.sym + ' — honeypot check unavailable');
-          continue;
-        }
-
+          if (!d.safe) { appendLog('skip', '· ' + token.sym + ' — failed honeypot: ' + (d.reasons?.[0] || 'unsafe')); continue; }
+        } catch (e) { appendLog('skip', '· ' + token.sym + ' — honeypot check unavailable'); continue; }
         setStats(s => ({ ...s, passed: s.passed + 1 }));
         if (firingRef.current.has(token.mint)) continue;
         firingRef.current.add(token.mint);
-
         try {
           const params = buildBuyParams(config.perTradeSol);
-          if (!params) {
-            appendLog('error', '· ' + token.sym + ' — could not build trade');
-            firingRef.current.delete(token.mint);
-            continue;
-          }
-
+          if (!params) { appendLog('error', '· ' + token.sym + ' — could not build trade'); firingRef.current.delete(token.mint); continue; }
           appendLog('buy', '· ' + token.sym + ' (vibe ' + vibe.score + ', ' + Math.floor(ageMs/60000) + 'm old, ' + formatMoney(token.liquidity) + ' liq)');
           const res = await executeSwap({ mode: 'buy', swapParams: params, token });
-
           if (res && res.confirmed) {
             runSpentSol += config.perTradeSol;
             recentTradesRef.current.push(Date.now());
-            const tokensReceived = (token.price > 0 && solPrice > 0)
-              ? (Number(params.tradeLamports)/1e9 * solPrice) / token.price : 0;
-            setPositions(p => [...p, {
-              mint: token.mint, sym: token.sym, name: token.name, icon: token.icon,
-              entrySol: config.perTradeSol,
-              entryTokens: tokensReceived,
-              entryPriceUsd: token.price,
-              peakPriceUsd: token.price,
-              currentPriceUsd: token.price,
-              ts: Date.now(),
-              exiting: false,
-            }]);
+            const tokensReceived = (token.price > 0 && solPrice > 0) ? (Number(params.tradeLamports)/1e9 * solPrice) / token.price : 0;
+            setPositions(p => [...p, { mint: token.mint, sym: token.sym, name: token.name, icon: token.icon, entrySol: config.perTradeSol, entryTokens: tokensReceived, entryPriceUsd: token.price, peakPriceUsd: token.price, currentPriceUsd: token.price, ts: Date.now(), exiting: false }]);
             setStats(s => ({ ...s, traded: s.traded + 1 }));
             appendLog('buy', '✓ ' + token.sym + ' filled at ' + formatPrice(token.price));
             refreshSol();
             setTimeout(() => refreshOneToken(token.mint), 3000);
-          } else {
-            firingRef.current.delete(token.mint);
-            appendLog('error', '· ' + token.sym + ' — not confirmed');
-          }
-        } catch (e) {
-          firingRef.current.delete(token.mint);
-          appendLog('error', '· ' + token.sym + ' — ' + friendlyError(e));
-        }
+          } else { firingRef.current.delete(token.mint); appendLog('error', '· ' + token.sym + ' — not confirmed'); }
+        } catch (e) { firingRef.current.delete(token.mint); appendLog('error', '· ' + token.sym + ' — ' + friendlyError(e)); }
       }
     })();
-
     return () => { cancelled = true; };
   }, [enabled, paused, recentTokens, config, solBalance, solPrice, executeSwap, refreshSol, refreshOneToken, appendLog, stats.realized]);
 
   const sellPositionRef = useRef(null);
-
   useEffect(() => {
     if (positions.length === 0) return;
     let cancelled = false;
-
     const tick = async () => {
       const snapshot = positionsRef.current.slice();
       for (const pos of snapshot) {
         if (cancelled) return;
         if (pos.exiting) continue;
-
         let priceUsd = pos.currentPriceUsd;
-        try {
-          const r = await fetch('/api/dex/token/' + encodeURIComponent(pos.mint));
-          if (r.ok) {
-            const d = await r.json();
-            const p = Number(d?.token?.price);
-            if (Number.isFinite(p) && p > 0) priceUsd = p;
-          }
-        } catch (e) {}
-
+        try { const r = await fetch('/api/dex/token/' + encodeURIComponent(pos.mint)); if (r.ok) { const d = await r.json(); const p = Number(d?.token?.price); if (Number.isFinite(p) && p > 0) priceUsd = p; } } catch (e) {}
         const peakPriceUsd = Math.max(pos.peakPriceUsd, priceUsd);
         const pnlPct = pos.entryPriceUsd > 0 ? ((priceUsd / pos.entryPriceUsd) - 1) * 100 : 0;
         const ageMin = (Date.now() - pos.ts) / 60000;
-
         let exitReason = null;
-        if (pnlPct >= config.takeProfitPct)         exitReason = 'TP +' + Math.round(pnlPct) + '%';
-        else if (pnlPct <= -config.stopLossPct)     exitReason = 'SL ' + Math.round(pnlPct) + '%';
+        if (pnlPct >= config.takeProfitPct) exitReason = 'TP +' + Math.round(pnlPct) + '%';
+        else if (pnlPct <= -config.stopLossPct) exitReason = 'SL ' + Math.round(pnlPct) + '%';
         else if (ageMin >= SAFETY_FLOOR.maxHoldMin) exitReason = 'max hold ' + SAFETY_FLOOR.maxHoldMin + 'm';
-
         setPositions(prev => prev.map(p => p.mint === pos.mint ? { ...p, currentPriceUsd: priceUsd, peakPriceUsd } : p));
-
-        if (exitReason) {
-          if (sellPositionRef.current) {
-            await sellPositionRef.current(pos, exitReason);
-          }
-        }
+        if (exitReason) { if (sellPositionRef.current) { await sellPositionRef.current(pos, exitReason); } }
       }
     };
-
     const id = setInterval(tick, SAFETY_FLOOR.posPollMs);
     tick();
     return () => { cancelled = true; clearInterval(id); };
@@ -1977,23 +1812,14 @@ function useAutoTrade(deps) {
     if (!live || live.exiting) return;
     setPositions(prev => prev.map(p => p.mint === pos.mint ? { ...p, exiting: true } : p));
     appendLog('sell', '· ' + pos.sym + ' — ' + reason);
-
     let success = false;
     try {
       const bal = balances[pos.mint];
-      if (!bal || !bal.amount || BigInt(bal.amount) <= 0n) {
-        appendLog('info', '· ' + pos.sym + ' — no balance to sell, removing');
-        success = true;
-        return;
-      }
+      if (!bal || !bal.amount || BigInt(bal.amount) <= 0n) { appendLog('info', '· ' + pos.sym + ' — no balance to sell, removing'); success = true; return; }
       const params = buildSellParams({ price: pos.currentPriceUsd, decimals: bal.decimals }, 100, bal, solPrice);
-      if (!params) {
-        appendLog('error', '· ' + pos.sym + ' — could not build sell, will retry');
-        return;
-      }
+      if (!params) { appendLog('error', '· ' + pos.sym + ' — could not build sell, will retry'); return; }
       const token = { mint: pos.mint, sym: pos.sym, name: pos.name, price: pos.currentPriceUsd, decimals: bal.decimals };
       const res = await executeSwap({ mode: 'sell', swapParams: params, token });
-
       if (res && res.confirmed) {
         success = true;
         const grossSol = (params.tradeTokensUi * pos.currentPriceUsd) / solPrice;
@@ -2001,56 +1827,30 @@ function useAutoTrade(deps) {
         const realizedDelta = netSol - pos.entrySol;
         const sign = realizedDelta >= 0 ? '+' : '';
         appendLog('sell', '✓ ' + pos.sym + ' closed · ' + sign + formatSol(realizedDelta) + ' SOL');
-
         setStats(s => ({ ...s, realized: s.realized + realizedDelta }));
-      } else {
-        appendLog('error', '· ' + pos.sym + ' — exit not confirmed, will retry');
-      }
-    } catch (e) {
-      appendLog('error', '· ' + pos.sym + ' exit — ' + friendlyError(e));
-    } finally {
-      if (success) {
-        setPositions(prev => prev.filter(p => p.mint !== pos.mint));
-      } else {
-        setPositions(prev => prev.map(p => p.mint === pos.mint ? { ...p, exiting: false } : p));
-      }
+      } else { appendLog('error', '· ' + pos.sym + ' — exit not confirmed, will retry'); }
+    } catch (e) { appendLog('error', '· ' + pos.sym + ' exit — ' + friendlyError(e)); }
+    finally {
+      if (success) setPositions(prev => prev.filter(p => p.mint !== pos.mint));
+      else setPositions(prev => prev.map(p => p.mint === pos.mint ? { ...p, exiting: false } : p));
       refreshSol();
       setTimeout(() => refreshOneToken(pos.mint), 3000);
     }
   }, [balances, solPrice, executeSwap, refreshSol, refreshOneToken, appendLog, pushToast]);
-
   useEffect(() => { sellPositionRef.current = sellPosition; }, [sellPosition]);
 
   const closeManual = useCallback((pos) => { sellPosition(pos, 'manual close'); }, [sellPosition]);
-
-  const killSwitch = useCallback(() => {
-    setEnabled(false);
-    appendLog('info', '· auto-trade stopped by user');
-  }, [appendLog]);
-
+  const killSwitch = useCallback(() => { setEnabled(false); appendLog('info', '· auto-trade stopped by user'); }, [appendLog]);
   const flattenAll = useCallback(async () => {
     setEnabled(false);
     const snapshot = positionsRef.current.slice();
     appendLog('info', '· flattening ' + snapshot.length + ' position(s)');
-    for (const pos of snapshot) {
-      await sellPosition(pos, 'flatten all');
-    }
+    for (const pos of snapshot) { await sellPosition(pos, 'flatten all'); }
   }, [sellPosition, appendLog]);
+  const resumeFromPause = useCallback(() => { setPaused(false); setStats(s => ({ ...s, realized: 0 })); appendLog('info', '· resumed — daily counter reset, you have another ' + SAFETY_FLOOR.dailyLossCapSol + ' SOL of rope'); }, [appendLog]);
 
-  const resumeFromPause = useCallback(() => {
-    setPaused(false);
-    setStats(s => ({ ...s, realized: 0 }));
-    appendLog('info', '· resumed — daily counter reset, you have another ' + SAFETY_FLOOR.dailyLossCapSol + ' SOL of rope');
-  }, [appendLog]);
-
-  return {
-    enabled, setEnabled, mode, setMode, custom, setCustom,
-    positions, log, stats, paused,
-    config, killSwitch, flattenAll, closeManual, resumeFromPause,
-  };
+  return { enabled, setEnabled, mode, setMode, custom, setCustom, positions, log, stats, paused, config, killSwitch, flattenAll, closeManual, resumeFromPause };
 }
-
-/* ── Auto-trade panel UI ──────────────────────────────────────── */
 
 function AutoSlider({ label, labelIt, value, unit, min, max, step, onChange, desc }) {
   return (
@@ -2067,83 +1867,44 @@ function AutoSlider({ label, labelIt, value, unit, min, max, step, onChange, des
 
 function AutoPanel({ open, onClose, autoState }) {
   const a = autoState;
-
-  useEffect(() => {
-    if (!open) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = prev; };
-  }, [open]);
-  useEffect(() => {
-    if (!open) return;
-    const h = (e) => { if (e.key === 'Escape') onClose && onClose(); };
-    window.addEventListener('keydown', h);
-    return () => window.removeEventListener('keydown', h);
-  }, [open, onClose]);
-
+  useEffect(() => { if (!open) return; const prev = document.body.style.overflow; document.body.style.overflow = 'hidden'; return () => { document.body.style.overflow = prev; }; }, [open]);
+  useEffect(() => { if (!open) return; const h = (e) => { if (e.key === 'Escape') onClose && onClose(); }; window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h); }, [open, onClose]);
   if (!open) return null;
-
-  const statusPill = a.paused
-    ? <span className="wa-stat-pill paused">⏸ paused</span>
-    : a.enabled
-      ? <span className="wa-stat-pill on"><span className="d" />watching</span>
-      : <span className="wa-stat-pill off">○ off</span>;
-
+  const statusPill = a.paused ? <span className="wa-stat-pill paused">⏸ paused</span> : a.enabled ? <span className="wa-stat-pill on"><span className="d" />watching</span> : <span className="wa-stat-pill off">○ off</span>;
   const _feeMul = (1 - FEE_BPS/10000);
-  const positionPnlSol = (p) => {
-    if (!(p.entryPriceUsd > 0) || !(p.currentPriceUsd > 0)) return 0;
-    const ratio = p.currentPriceUsd / p.entryPriceUsd;
-    return p.entrySol * _feeMul * ratio * _feeMul - p.entrySol;
-  };
+  const positionPnlSol = (p) => { if (!(p.entryPriceUsd > 0) || !(p.currentPriceUsd > 0)) return 0; const ratio = p.currentPriceUsd / p.entryPriceUsd; return p.entrySol * _feeMul * ratio * _feeMul - p.entrySol; };
   const openPnl = a.positions.reduce((sum, p) => sum + positionPnlSol(p), 0);
 
   return (
     <div className="wa-root">
       <div className="wa-head">
-        <div className="wr-brand">
-          <div className="wr-radar-icon" />
-          <span className="wr-bname">wonderland<span className="sep">//</span><span className="it">radar</span></span>
-        </div>
+        <div className="wr-brand"><div className="wr-radar-icon" /><span className="wr-bname">wonderland<span className="sep">//</span><span className="it">radar</span></span></div>
         {statusPill}
         <button className="wa-close" onClick={onClose} aria-label="Close">×</button>
       </div>
-
       <div className="wa-page">
         <div className="wa-eye"><span className="gl">◉</span><span>Section § Auto-trade</span><span className="rule" /></div>
         <h1 className="wa-h1">The radar <span className="it">works for you.</span></h1>
         <p className="wa-sub">We wait three minutes for the dust to settle, screen every token for honeypots and red flags, then buy the survivors that match your preset. Exits are managed for you. You can stop it any time.</p>
-
         {a.paused && (
           <div className="wa-pause-banner">
             <span className="gl">⏸</span>
-            <div className="t">
-              <div className="h">Auto paused for the day</div>
-              <div className="b">Daily loss cap reached. Resumes automatically tomorrow, or resume now.</div>
-            </div>
+            <div className="t"><div className="h">Auto paused for the day</div><div className="b">Daily loss cap reached. Resumes automatically tomorrow, or resume now.</div></div>
             <button onClick={a.resumeFromPause}>RESUME</button>
           </div>
         )}
-
         <div className={'wa-master' + (a.enabled && !a.paused ? ' on' : '') + (a.paused ? ' paused' : '')}>
           <div className="wa-master-l">
-            <div className={'wa-master-h' + (a.enabled && !a.paused ? ' on' : '')}>
-              Auto-trade is <span className="it">{a.paused ? 'paused' : a.enabled ? 'on' : 'off'}.</span>
-            </div>
-            <div className="wa-master-s">
-              {a.enabled && !a.paused
-                ? 'Scanning the feed. New entries that pass your filters will be bought automatically.'
-                : 'Toggle on when you\'re ready. Settings stay locked while running.'}
-            </div>
+            <div className={'wa-master-h' + (a.enabled && !a.paused ? ' on' : '')}>Auto-trade is <span className="it">{a.paused ? 'paused' : a.enabled ? 'on' : 'off'}.</span></div>
+            <div className="wa-master-s">{a.enabled && !a.paused ? 'Scanning the feed. New entries that pass your filters will be bought automatically.' : 'Toggle on when you\'re ready. Settings stay locked while running.'}</div>
           </div>
           <div className={'wa-tog' + (a.enabled ? ' on' : '')} onClick={() => !a.paused && a.setEnabled(!a.enabled)} role="switch" aria-checked={a.enabled} />
         </div>
-
         <div className={'wa-modes' + (a.mode === 'custom' ? ' custom' : '')}>
           <div className="wa-mode-ind" />
           <button className={'wa-mode-t' + (a.mode === 'balanced' ? ' active' : '')} onClick={() => a.setMode('balanced')}>Balanced</button>
-          <button className={'wa-mode-t' + (a.mode === 'custom'   ? ' active' : '')} onClick={() => a.setMode('custom')}>Custom</button>
+          <button className={'wa-mode-t' + (a.mode === 'custom' ? ' active' : '')} onClick={() => a.setMode('custom')}>Custom</button>
         </div>
-
         {a.mode === 'balanced' && (
           <div className="wa-locked-card">
             <div className="wa-locked-eye"><span>◌</span><span>What's locked in</span></div>
@@ -2159,77 +1920,33 @@ function AutoPanel({ open, onClose, autoState }) {
               <div className="wa-locked-row"><span className="wa-locked-k">Trades / hour</span><span className="wa-locked-v">max {BALANCED_SETTINGS.maxPerHour}</span></div>
               <div className="wa-locked-row"><span className="wa-locked-k">Daily loss cap</span><span className="wa-locked-v rd">−{SAFETY_FLOOR.dailyLossCapSol}<span className="u">SOL</span></span></div>
             </div>
-            <div className="wa-floor">
-              <b>Always on, both modes:</b> honeypot scan · daily loss cap · 3-minute age floor · max-hold timer ({SAFETY_FLOOR.maxHoldMin}m). These aren't features. They're the floor.
-            </div>
+            <div className="wa-floor"><b>Always on, both modes:</b> honeypot scan · daily loss cap · 3-minute age floor · max-hold timer ({SAFETY_FLOOR.maxHoldMin}m). These aren't features. They're the floor.</div>
           </div>
         )}
-
         {a.mode === 'custom' && (
           <div className="wa-sliders">
-            <AutoSlider label="Per trade" value={a.custom.perTradeSol} unit=" SOL" min={0.05} max={2} step={0.05}
-              onChange={(v) => a.setCustom({ ...a.custom, perTradeSol: v })}
-              desc={<>How much SOL on each buy. <b>Bigger = bigger wins and bigger losses.</b> We cap every trade at this; nothing more.</>} />
-            <AutoSlider label="Take profit" labelIt="(+)" value={a.custom.takeProfitPct} unit="%" min={50} max={1000} step={10}
-              onChange={(v) => a.setCustom({ ...a.custom, takeProfitPct: v })}
-              desc={<>Sell automatically when up this much. <b>Lower = more frequent small wins.</b> Higher = waiting for runners and watching some round-trip.</>} />
-            <AutoSlider label="Stop loss" labelIt="(−)" value={a.custom.stopLossPct} unit="%" min={10} max={50} step={5}
-              onChange={(v) => a.setCustom({ ...a.custom, stopLossPct: v })}
-              desc={<>Sell automatically when down this much. <b>Tighter protects more but gets whipped by normal swings.</b> Looser survives volatility but costs more when wrong.</>} />
-            <AutoSlider label="Token age" labelIt="(min)" value={a.custom.minAgeMin} unit=" min" min={3} max={20} step={1}
-              onChange={(v) => a.setCustom({ ...a.custom, minAgeMin: v })}
-              desc={<>Skip anything younger. <b>3-minute floor is hardcoded</b> — most rugs die before then. Above 5 adds more safety; above 15 you're chasing.</>} />
-            <AutoSlider label="Min liquidity" value={(a.custom.minLiqUsd/1000).toFixed(0)} unit="K USD" min={1} max={100} step={1}
-              onChange={(v) => a.setCustom({ ...a.custom, minLiqUsd: v * 1000 })}
-              desc={<>Skip tokens with less liquidity. <b>Low = price swings wildly</b> on every trade. Too high = miss small launches that might run.</>} />
-            <AutoSlider label="Min holders" value={a.custom.minHolders} unit="" min={0} max={200} step={5}
-              onChange={(v) => a.setCustom({ ...a.custom, minHolders: v })}
-              desc={<>Skip tokens with fewer holders. <b>More holders = more organic interest.</b> Below 20 you're often the only retail buyer in the room.</>} />
-            <AutoSlider label="Vibe score" labelIt="floor" value={a.custom.minVibe} unit="/ 85" min={0} max={85} step={1}
-              onChange={(v) => a.setCustom({ ...a.custom, minVibe: v })}
-              desc={<>Our combined risk read. <b>Higher = fewer trades, safer picks.</b> Below 30 you've effectively turned the filter off.</>} />
-            <AutoSlider label="Open positions" labelIt="max" value={a.custom.maxOpen} unit="" min={1} max={10} step={1}
-              onChange={(v) => a.setCustom({ ...a.custom, maxOpen: v })}
-              desc={<>How many trades held at once. <b>More = more shots on goal but bigger total exposure</b> if several rug together.</>} />
-            <AutoSlider label="Trades / hour" labelIt="max" value={a.custom.maxPerHour} unit="" min={1} max={30} step={1}
-              onChange={(v) => a.setCustom({ ...a.custom, maxPerHour: v })}
-              desc={<>Caps firing rate. <b>Prevents revenge-trading after losses</b> and over-exposure during hot streaks.</>} />
-            <div className="wa-floor">
-              <b>Always on, can't be changed:</b> honeypot scan · daily loss cap (−{SAFETY_FLOOR.dailyLossCapSol} SOL) · 3-min age floor · {SAFETY_FLOOR.maxHoldMin}-min max-hold timer. These aren't features. They're the floor.
-            </div>
+            <AutoSlider label="Per trade" value={a.custom.perTradeSol} unit=" SOL" min={0.05} max={2} step={0.05} onChange={(v) => a.setCustom({ ...a.custom, perTradeSol: v })} desc={<>How much SOL on each buy. <b>Bigger = bigger wins and bigger losses.</b> We cap every trade at this; nothing more.</>} />
+            <AutoSlider label="Take profit" labelIt="(+)" value={a.custom.takeProfitPct} unit="%" min={50} max={1000} step={10} onChange={(v) => a.setCustom({ ...a.custom, takeProfitPct: v })} desc={<>Sell automatically when up this much. <b>Lower = more frequent small wins.</b> Higher = waiting for runners and watching some round-trip.</>} />
+            <AutoSlider label="Stop loss" labelIt="(−)" value={a.custom.stopLossPct} unit="%" min={10} max={50} step={5} onChange={(v) => a.setCustom({ ...a.custom, stopLossPct: v })} desc={<>Sell automatically when down this much. <b>Tighter protects more but gets whipped by normal swings.</b> Looser survives volatility but costs more when wrong.</>} />
+            <AutoSlider label="Token age" labelIt="(min)" value={a.custom.minAgeMin} unit=" min" min={3} max={20} step={1} onChange={(v) => a.setCustom({ ...a.custom, minAgeMin: v })} desc={<>Skip anything younger. <b>3-minute floor is hardcoded</b> — most rugs die before then. Above 5 adds more safety; above 15 you're chasing.</>} />
+            <AutoSlider label="Min liquidity" value={(a.custom.minLiqUsd/1000).toFixed(0)} unit="K USD" min={1} max={100} step={1} onChange={(v) => a.setCustom({ ...a.custom, minLiqUsd: v * 1000 })} desc={<>Skip tokens with less liquidity. <b>Low = price swings wildly</b> on every trade. Too high = miss small launches that might run.</>} />
+            <AutoSlider label="Min holders" value={a.custom.minHolders} unit="" min={0} max={200} step={5} onChange={(v) => a.setCustom({ ...a.custom, minHolders: v })} desc={<>Skip tokens with fewer holders. <b>More holders = more organic interest.</b> Below 20 you're often the only retail buyer in the room.</>} />
+            <AutoSlider label="Vibe score" labelIt="floor" value={a.custom.minVibe} unit="/ 85" min={0} max={85} step={1} onChange={(v) => a.setCustom({ ...a.custom, minVibe: v })} desc={<>Our combined risk read. <b>Higher = fewer trades, safer picks.</b> Below 30 you've effectively turned the filter off.</>} />
+            <AutoSlider label="Open positions" labelIt="max" value={a.custom.maxOpen} unit="" min={1} max={10} step={1} onChange={(v) => a.setCustom({ ...a.custom, maxOpen: v })} desc={<>How many trades held at once. <b>More = more shots on goal but bigger total exposure</b> if several rug together.</>} />
+            <AutoSlider label="Trades / hour" labelIt="max" value={a.custom.maxPerHour} unit="" min={1} max={30} step={1} onChange={(v) => a.setCustom({ ...a.custom, maxPerHour: v })} desc={<>Caps firing rate. <b>Prevents revenge-trading after losses</b> and over-exposure during hot streaks.</>} />
+            <div className="wa-floor"><b>Always on, can't be changed:</b> honeypot scan · daily loss cap (−{SAFETY_FLOOR.dailyLossCapSol} SOL) · 3-min age floor · {SAFETY_FLOOR.maxHoldMin}-min max-hold timer. These aren't features. They're the floor.</div>
           </div>
         )}
-
         <div className="wa-stats">
-          <div className="wa-statc">
-            <div className="wa-statc-l">Scanned today</div>
-            <div className="wa-statc-v">{a.stats.scanned.toLocaleString()}</div>
-          </div>
-          <div className="wa-statc">
-            <div className="wa-statc-l">Passed filters</div>
-            <div className="wa-statc-v">{a.stats.passed}</div>
-          </div>
-          <div className="wa-statc">
-            <div className="wa-statc-l">Trades fired</div>
-            <div className="wa-statc-v">{a.stats.traded}</div>
-          </div>
-          <div className="wa-statc">
-            <div className="wa-statc-l">Realized P&L</div>
-            <div className={'wa-statc-v ' + (a.stats.realized > 0.0001 ? 'gn' : a.stats.realized < -0.0001 ? 'rd' : 'dim')}>
-              {Math.abs(a.stats.realized) > 0.0001 ? formatSolSigned(a.stats.realized) : '—'}
-              {Math.abs(a.stats.realized) > 0.0001 ? <span className="u">SOL</span> : null}
-            </div>
-          </div>
+          <div className="wa-statc"><div className="wa-statc-l">Scanned today</div><div className="wa-statc-v">{a.stats.scanned.toLocaleString()}</div></div>
+          <div className="wa-statc"><div className="wa-statc-l">Passed filters</div><div className="wa-statc-v">{a.stats.passed}</div></div>
+          <div className="wa-statc"><div className="wa-statc-l">Trades fired</div><div className="wa-statc-v">{a.stats.traded}</div></div>
+          <div className="wa-statc"><div className="wa-statc-l">Realized P&L</div><div className={'wa-statc-v ' + (a.stats.realized > 0.0001 ? 'gn' : a.stats.realized < -0.0001 ? 'rd' : 'dim')}>{Math.abs(a.stats.realized) > 0.0001 ? formatSolSigned(a.stats.realized) : '—'}{Math.abs(a.stats.realized) > 0.0001 ? <span className="u">SOL</span> : null}</div></div>
         </div>
-
         <div className="wa-pos-frame">
           <div className="wa-section-head"><span>◉ Open positions</span><span className="count">{a.positions.length} · open {openPnl >= 0 ? '+' : ''}{formatSol(openPnl)} SOL</span></div>
           {a.positions.length === 0 ? (
-            <div className="wa-empty">
-              <span className="gl">∅</span>
-              <div className="h">No open <span className="it">marks.</span></div>
-              <div className="s">{a.enabled ? 'Watching the feed. Buys will show up here.' : 'Toggle auto-trade on to start.'}</div>
-            </div>
+            <div className="wa-empty"><span className="gl">∅</span><div className="h">No open <span className="it">marks.</span></div><div className="s">{a.enabled ? 'Watching the feed. Buys will show up here.' : 'Toggle auto-trade on to start.'}</div></div>
           ) : a.positions.map(pos => {
             const c = colorFor(pos.mint);
             const pnlPct = pos.entryPriceUsd > 0 ? ((pos.currentPriceUsd / pos.entryPriceUsd) - 1) * 100 : 0;
@@ -2239,59 +1956,31 @@ function AutoPanel({ open, onClose, autoState }) {
             return (
               <div className="wa-pos-row" key={pos.mint}>
                 <div className="wa-pos-av" style={{background:'linear-gradient(135deg,'+c+','+shade(c,-30)+')'}}>{(pos.sym || '?').charAt(0)}</div>
-                <div className="wa-pos-nm">
-                  <div className="wa-pos-sym">${pos.sym || '???'}</div>
-                  <div className="wa-pos-time">held {ageMin < 1 ? '<1m' : Math.floor(ageMin) + 'm'} · {formatSol(pos.entrySol)} in</div>
-                </div>
-                <div className="wa-pos-pnl">
-                  <div className={'wa-pos-pnl-v ' + (pos_ ? 'gn' : neg_ ? 'rd' : '')}>{formatSolSigned(pnlSol)}</div>
-                  <div className={'wa-pos-pnl-p ' + (pos_ ? 'gn' : neg_ ? 'rd' : '')}>{pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%</div>
-                </div>
-                <button className="wa-pos-close" disabled={pos.exiting} onClick={() => a.closeManual(pos)}>
-                  {pos.exiting ? '...' : 'CLOSE'}
-                </button>
+                <div className="wa-pos-nm"><div className="wa-pos-sym">${pos.sym || '???'}</div><div className="wa-pos-time">held {ageMin < 1 ? '<1m' : Math.floor(ageMin) + 'm'} · {formatSol(pos.entrySol)} in</div></div>
+                <div className="wa-pos-pnl"><div className={'wa-pos-pnl-v ' + (pos_ ? 'gn' : neg_ ? 'rd' : '')}>{formatSolSigned(pnlSol)}</div><div className={'wa-pos-pnl-p ' + (pos_ ? 'gn' : neg_ ? 'rd' : '')}>{pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%</div></div>
+                <button className="wa-pos-close" disabled={pos.exiting} onClick={() => a.closeManual(pos)}>{pos.exiting ? '...' : 'CLOSE'}</button>
               </div>
             );
           })}
         </div>
-
         <div className="wa-log-frame">
           <div className="wa-section-head"><span>§ Today's log</span><span className="count">{a.log.length} entries</span></div>
           <div className="wa-log-list">
             {a.log.length === 0 ? (
-              <div className="wa-empty">
-                <span className="gl">∅</span>
-                <div className="h">Nothing logged <span className="it">yet.</span></div>
-                <div className="s">Every action — buys, sells, skips, errors — shows up here in real time.</div>
-              </div>
+              <div className="wa-empty"><span className="gl">∅</span><div className="h">Nothing logged <span className="it">yet.</span></div><div className="s">Every action — buys, sells, skips, errors — shows up here in real time.</div></div>
             ) : a.log.map((e, i) => {
               const t = new Date(e.ts);
               const hh = t.getHours().toString().padStart(2,'0');
               const mm = t.getMinutes().toString().padStart(2,'0');
-              return (
-                <div className="wa-log-row" key={i}>
-                  <span className="wa-log-ts">{hh}:{mm}</span>
-                  <span className={'wa-log-tag ' + e.tag}>{e.tag}</span>
-                  <span className="wa-log-msg">{e.msg}</span>
-                </div>
-              );
+              return (<div className="wa-log-row" key={i}><span className="wa-log-ts">{hh}:{mm}</span><span className={'wa-log-tag ' + e.tag}>{e.tag}</span><span className="wa-log-msg">{e.msg}</span></div>);
             })}
           </div>
         </div>
       </div>
-
       {(a.enabled || a.positions.length > 0) && (
         <div className="wa-kill">
-          {a.enabled && (
-            <button className="wa-kill-btn stop" onClick={a.killSwitch}>
-              STOP AUTO-TRADE
-            </button>
-          )}
-          {a.positions.length > 0 && (
-            <button className="wa-kill-btn flat" onClick={() => { if (window.confirm('Flatten all ' + a.positions.length + ' position(s) at market?')) a.flattenAll(); }}>
-              FLATTEN ALL ({a.positions.length})
-            </button>
-          )}
+          {a.enabled && (<button className="wa-kill-btn stop" onClick={a.killSwitch}>STOP AUTO-TRADE</button>)}
+          {a.positions.length > 0 && (<button className="wa-kill-btn flat" onClick={() => { if (window.confirm('Flatten all ' + a.positions.length + ' position(s) at market?')) a.flattenAll(); }}>FLATTEN ALL ({a.positions.length})</button>)}
         </div>
       )}
     </div>
@@ -2302,7 +1991,6 @@ function StatsPanel({ open, onClose, wallet, mainWalletPubkey, solPrice }) {
   const [tab, setTab] = useState('referrals');
   const burnerWalletStr = wallet?.publicKey?.toBase58 ? wallet.publicKey.toBase58() : '';
   const refWalletStr = mainWalletPubkey || '';
-
   const [stats, setStats] = useState(null);
   const [statsLoading, setStatsLoading] = useState(false);
   const [statsError, setStatsError] = useState(null);
@@ -2337,7 +2025,6 @@ function StatsPanel({ open, onClose, wallet, mainWalletPubkey, solPrice }) {
     else if (tab === 'fieldlog') { if (burnerWalletStr) fetchPnl(); }
     else if (tab === 'standings') { fetchLb(lbWin); }
   }, [open, tab, refWalletStr, burnerWalletStr, lbWin, fetchStats, fetchPnl, fetchLb]);
-
   useEffect(() => {
     if (!open) return;
     const id = setInterval(() => {
@@ -2347,54 +2034,34 @@ function StatsPanel({ open, onClose, wallet, mainWalletPubkey, solPrice }) {
     }, 30000);
     return () => clearInterval(id);
   }, [open, tab, refWalletStr, burnerWalletStr, lbWin, fetchStats, fetchPnl, fetchLb]);
-
-  useEffect(() => {
-    if (!open) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = prev; };
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const h = (e) => { if (e.key === 'Escape') onClose && onClose(); };
-    window.addEventListener('keydown', h);
-    return () => window.removeEventListener('keydown', h);
-  }, [open, onClose]);
+  useEffect(() => { if (!open) return; const prev = document.body.style.overflow; document.body.style.overflow = 'hidden'; return () => { document.body.style.overflow = prev; }; }, [open]);
+  useEffect(() => { if (!open) return; const h = (e) => { if (e.key === 'Escape') onClose && onClose(); }; window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h); }, [open, onClose]);
 
   const onBoostActivated = useCallback(() => { fetchStats(); setToast('✓ Boost active'); setTimeout(() => setToast(null), 2200); }, [fetchStats]);
-
   if (!open) return null;
 
   return (
     <div className="wp-root">
       <div className="wp-head">
-        <div className="wr-brand">
-          <div className="wr-radar-icon" />
-          <span className="wr-bname">wonderland<span className="sep">//</span><span className="it">radar</span></span>
-        </div>
+        <div className="wr-brand"><div className="wr-radar-icon" /><span className="wr-bname">wonderland<span className="sep">//</span><span className="it">radar</span></span></div>
         <div className="wp-headlbl"><span className="d" /><span>FIELD LOG · PERSONAL</span></div>
         <button className="wp-close" onClick={onClose} aria-label="Close">×</button>
       </div>
-
       <div className="wp-tabs">
         <button className={'wp-tab' + (tab === 'referrals' ? ' on' : '')} onClick={() => setTab('referrals')}><span className="glyph">§ 01</span><span>Referrals</span></button>
         <button className={'wp-tab' + (tab === 'fieldlog' ? ' on' : '')} onClick={() => setTab('fieldlog')}><span className="glyph">§ 02</span><span>Field log</span></button>
         <button className={'wp-tab' + (tab === 'standings' ? ' on' : '')} onClick={() => setTab('standings')}><span className="glyph">§ 03</span><span>Standings</span></button>
       </div>
-
       <div className="wp-page" key={tab}>
         {tab === 'referrals' && <ReferralsSection walletStr={refWalletStr} stats={stats} statsLoading={statsLoading} statsError={statsError} onBoostActivated={onBoostActivated} />}
         {tab === 'fieldlog' && <FieldLogSection walletStr={burnerWalletStr} pnl={pnl} pnlLoading={pnlLoading} pnlError={pnlError} solPrice={solPrice} />}
         {tab === 'standings' && <StandingsSection walletStr={burnerWalletStr} lb={lb} lbLoading={lbLoading} lbError={lbError} win={lbWin} setWin={setLbWin} />}
       </div>
-
       {toast && <div className="wp-toast"><span className="gl">✓</span><span>{toast}</span></div>}
     </div>
   );
 }
 
-/* ============================ PRESETS ============================ */
 function usePresets() {
   const readStored = (key, fallback) => {
     try {
@@ -2452,32 +2119,22 @@ function WalletDrawer({ wallet, solBalance, solPrice, onWithdraw, onClose, busy 
   const qrRef = useRef(null);
   const addr = wallet.publicKey.toBase58();
   const sol = (solBalance && solBalance.uiAmount) || 0;
-
   useEffect(() => {
     if (tab !== 'deposit' || !qrRef.current) return;
     let alive = true;
     (async () => {
-      try {
-        const QR = await import('qrcode');
-        if (!alive || !qrRef.current) return;
-        const toCanvas = QR.toCanvas || (QR.default && QR.default.toCanvas);
-        if (typeof toCanvas === 'function') await toCanvas(qrRef.current, addr, { width: 160, margin: 1, color: { dark: '#0E0B1F', light: '#ffffff' } });
-      } catch (e) {}
+      try { const QR = await import('qrcode'); if (!alive || !qrRef.current) return; const toCanvas = QR.toCanvas || (QR.default && QR.default.toCanvas); if (typeof toCanvas === 'function') await toCanvas(qrRef.current, addr, { width: 160, margin: 1, color: { dark: '#0E0B1F', light: '#ffffff' } }); } catch (e) {}
     })();
     return () => { alive = false; };
   }, [tab, addr]);
-
   const copy = () => { try { navigator.clipboard.writeText(addr); setCopied(true); setTimeout(()=>setCopied(false), 1500); } catch (e) {} };
   const maxOut = Math.max(0, sol - 0.001);
-
   return (
     <div className="wr-overlay" onClick={onClose}>
       <div className="wr-sheet" onClick={e=>e.stopPropagation()}>
         <div className="wr-tshead">
           <button className="wr-x" onClick={onClose}>×</button>
-          <h3 style={{fontFamily:"'Fraunces'",fontWeight:500,fontSize:24,margin:0,letterSpacing:'-.015em',display:'flex',alignItems:'center',gap:10}}>
-            <span style={{width:8,height:8,borderRadius:'50%',background:'var(--mint)',boxShadow:'0 0 8px var(--mint)'}} />Your wallet
-          </h3>
+          <h3 style={{fontFamily:"'Fraunces'",fontWeight:500,fontSize:24,margin:0,letterSpacing:'-.015em',display:'flex',alignItems:'center',gap:10}}><span style={{width:8,height:8,borderRadius:'50%',background:'var(--mint)',boxShadow:'0 0 8px var(--mint)'}} />Your wallet</h3>
           <div style={{fontFamily:"'JetBrains Mono'",fontSize:10.5,color:'var(--ink2)',marginTop:5,fontWeight:600,letterSpacing:'.3px'}}>lives on this device · signs instantly · your keys</div>
         </div>
         <div style={{padding:'14px 22px 22px'}}>
@@ -2528,10 +2185,6 @@ function WalletDrawer({ wallet, solBalance, solPrice, onWithdraw, onClose, busy 
   );
 }
 
-/* ════════════════════════════════════════════════════════════════
-   NEW — FILTERS MODAL.  Wild-only + min-liq.
-   Called from the .wr-filter-btn in the new sortbar.
-   ════════════════════════════════════════════════════════════════ */
 function FiltersModal({ wildOnly, setWildOnly, minLiq, setMinLiq, onClose }) {
   const liqOptions = [0, 5000, 20000, 50000];
   return (
@@ -2544,10 +2197,7 @@ function FiltersModal({ wildOnly, setWildOnly, minLiq, setMinLiq, onClose }) {
         </div>
         <div style={{padding:'8px 22px 22px'}}>
           <div className="wr-filter-row">
-            <div>
-              <div className="lbl">Wild only</div>
-              <div className="lbl-sub">Show only high-risk · high-reward specimens</div>
-            </div>
+            <div><div className="lbl">Wild only</div><div className="lbl-sub">Show only high-risk · high-reward specimens</div></div>
             <div className={'wr-toggle' + (wildOnly ? ' on' : '')} onClick={() => setWildOnly(!wildOnly)} role="switch" aria-checked={wildOnly} />
           </div>
           <div className="wr-filter-row" style={{flexDirection:'column',alignItems:'stretch'}}>
@@ -2557,11 +2207,7 @@ function FiltersModal({ wildOnly, setWildOnly, minLiq, setMinLiq, onClose }) {
             </div>
             <div className="lbl-sub" style={{marginBottom:6}}>Filter out thin pools</div>
             <div className="wr-liq-chips">
-              {liqOptions.map(v => (
-                <button key={v} className={'wr-liq-chip' + (minLiq === v ? ' on' : '')} onClick={() => setMinLiq(v)}>
-                  {v === 0 ? 'Any' : '$' + (v >= 1000 ? (v/1000) + 'K' : v)}
-                </button>
-              ))}
+              {liqOptions.map(v => (<button key={v} className={'wr-liq-chip' + (minLiq === v ? ' on' : '')} onClick={() => setMinLiq(v)}>{v === 0 ? 'Any' : '$' + (v >= 1000 ? (v/1000) + 'K' : v)}</button>))}
             </div>
           </div>
           <button className="wr-esave" onClick={onClose}>Done</button>
@@ -2571,18 +2217,9 @@ function FiltersModal({ wildOnly, setWildOnly, minLiq, setMinLiq, onClose }) {
   );
 }
 
-/* ════════════════════════════════════════════════════════════════
-   NEW — OPEN POSITIONS STRIP.  Live P&L for held positions.
-   ════════════════════════════════════════════════════════════════
-   Polls /api/ref/pnl every 30s for the wallet's open positions, then
-   per-mint /api/dex/token/:mint for current prices. Computes unrealized
-   P&L = currentValueSol − costBasisSol. Shows top 3 by absolute size,
-   plus a rollup. Only renders when there's at least one open position.
-   ════════════════════════════════════════════════════════════════ */
 function OpenPositionsStrip({ walletStr, solPrice, onOpenStats }) {
   const [positions, setPositions] = useState([]);
   const [prices, setPrices] = useState({});
-
   useEffect(() => {
     if (!walletStr) return;
     let cancelled = false;
@@ -2594,16 +2231,9 @@ function OpenPositionsStrip({ walletStr, solPrice, onOpenStats }) {
         if (cancelled) return;
         const open = (d.positions || []).filter(p => p.open && p.open_tokens > 0);
         setPositions(open);
-
         const next = {};
         await Promise.all(open.map(async p => {
-          try {
-            const pr = await fetch('/api/dex/token/' + encodeURIComponent(p.mint));
-            if (!pr.ok) return;
-            const pd = await pr.json();
-            const px = Number(pd?.token?.price);
-            if (Number.isFinite(px) && px > 0) next[p.mint] = px;
-          } catch (e) {}
+          try { const pr = await fetch('/api/dex/token/' + encodeURIComponent(p.mint)); if (!pr.ok) return; const pd = await pr.json(); const px = Number(pd?.token?.price); if (Number.isFinite(px) && px > 0) next[p.mint] = px; } catch (e) {}
         }));
         if (!cancelled) setPrices(prev => ({ ...prev, ...next }));
       } catch (e) {}
@@ -2612,33 +2242,24 @@ function OpenPositionsStrip({ walletStr, solPrice, onOpenStats }) {
     const id = setInterval(load, POLL_POSITIONS);
     return () => { cancelled = true; clearInterval(id); };
   }, [walletStr]);
-
-  // Compute unrealized P&L per position.
   const enriched = useMemo(() => {
     if (!solPrice) return [];
     return positions.map(p => {
       const px = prices[p.mint] || 0;
       const currentValueUsd = p.open_tokens * px;
       const currentValueSol = currentValueUsd / solPrice;
-      // cost basis: sol_in minus sol already received from partial sells
       const costBasisSol = Math.max(0, (p.sol_in || 0) - (p.sol_out || 0));
       const unrealizedSol = currentValueSol - costBasisSol;
       const unrealizedPct = costBasisSol > 0 ? (unrealizedSol / costBasisSol) * 100 : 0;
       return { ...p, currentValueSol, costBasisSol, unrealizedSol, unrealizedPct, hasPrice: px > 0 };
     }).sort((a, b) => Math.abs(b.unrealizedSol) - Math.abs(a.unrealizedSol));
   }, [positions, prices, solPrice]);
-
   if (enriched.length === 0) return null;
-
   const total = enriched.reduce((s, p) => s + p.unrealizedSol, 0);
   const top = enriched.slice(0, 3);
-
   return (
     <div className="wr-positions">
-      <div className="wr-positions-head">
-        <span className="e">◉ Your open marks · {enriched.length}</span>
-        <span className="roll">Unrealized <b className={total < 0 ? 'dn' : ''}>{formatSolSigned(total)} SOL</b></span>
-      </div>
+      <div className="wr-positions-head"><span className="e">◉ Your open marks · {enriched.length}</span><span className="roll">Unrealized <b className={total < 0 ? 'dn' : ''}>{formatSolSigned(total)} SOL</b></span></div>
       {top.map(p => {
         const c = colorFor(p.mint);
         const up = p.unrealizedSol > 0.0001, dn = p.unrealizedSol < -0.0001;
@@ -2646,18 +2267,12 @@ function OpenPositionsStrip({ walletStr, solPrice, onOpenStats }) {
           <div className="wr-pos-strip-row" key={p.mint}>
             <div className="wr-pos-strip-av" style={{background:'linear-gradient(135deg,'+c+','+shade(c,-30)+')'}}>{(p.sym || '?').charAt(0)}</div>
             <div className="wr-pos-strip-sym">${p.sym || '???'}</div>
-            <div className={'wr-pos-strip-pnl' + (up ? '' : dn ? ' dn' : ' dim')}>
-              {p.hasPrice ? formatSolSigned(p.unrealizedSol) : '—'}
-            </div>
-            <div className={'wr-pos-strip-pct ' + (up ? 'up' : dn ? 'dn' : '')}>
-              {p.hasPrice ? (p.unrealizedPct >= 0 ? '+' : '') + p.unrealizedPct.toFixed(1) + '%' : '…'}
-            </div>
+            <div className={'wr-pos-strip-pnl' + (up ? '' : dn ? ' dn' : ' dim')}>{p.hasPrice ? formatSolSigned(p.unrealizedSol) : '—'}</div>
+            <div className={'wr-pos-strip-pct ' + (up ? 'up' : dn ? 'dn' : '')}>{p.hasPrice ? (p.unrealizedPct >= 0 ? '+' : '') + p.unrealizedPct.toFixed(1) + '%' : '…'}</div>
           </div>
         );
       })}
-      <button className="wr-positions-foot" onClick={onOpenStats}>
-        See full field log →
-      </button>
+      <button className="wr-positions-foot" onClick={onOpenStats}>See full field log →</button>
     </div>
   );
 }
@@ -2669,42 +2284,35 @@ function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPr
   const [error, setError] = useState(null);
   useEffect(() => { setAmount(''); setError(null); }, [mode]);
   useEffect(() => { setError(null); }, [amount]);
-
   const isBuy = mode === 'buy';
   const presets = isBuy ? buyPresets : sellPresets;
   const ownedUi = (tokenBalance && tokenBalance.uiAmount) || 0;
   const availSol = Math.max(0, ((solBalance && solBalance.uiAmount) || 0) - SOL_RESERVE);
-
   const swapParams = useMemo(() => {
     if (!amount) return null;
     const n = Number(amount); if (!Number.isFinite(n) || n <= 0) return null;
     return isBuy ? buildBuyParams(n) : buildSellParams(token, n, tokenBalance, solPrice);
   }, [amount, isBuy, token, tokenBalance, solPrice]);
-
   const est = useMemo(() => {
     if (!swapParams || !(token && token.price > 0) || !(solPrice > 0)) return null;
     if (swapParams.mode === 'buy') { const tradeSol = Number(swapParams.tradeLamports)/1e9; const tokens = (tradeSol*solPrice)/token.price; return tokens>0?{tokens}:null; }
     const grossSol = (swapParams.tradeTokensUi * token.price)/solPrice; const netSol = grossSol*(1-FEE_BPS/10000); return netSol>0?{sol:netSol}:null;
   }, [swapParams, token && token.price, solPrice]);
-
   const hasFunds = (() => {
     if (!amount || Number(amount) <= 0) return false;
     if (isBuy) return Number(amount) <= availSol;
     return ownedUi > 0 && ((solBalance && solBalance.uiAmount) || 0) >= 0.003;
   })();
   const disabled = confirming || !swapParams || !hasFunds || !!error;
-
   const go = async () => {
     if (!swapParams || confirming) return;
     setConfirming(true); setError(null);
     try { await onConfirm({ mode, swapParams, token }); }
     catch (e) { setError(friendlyError(e)); setConfirming(false); }
   };
-
   const read = riskRead(token);
   const tierClass = read.tier === 'low' ? '' : read.tier === 'med' ? 'amber' : 'red';
   const tierColor = read.tier === 'low' ? 'var(--mint)' : read.tier === 'med' ? 'var(--butter)' : 'var(--coral)';
-
   return (
     <div className="wr-overlay" onClick={onClose}>
       <div className="wr-sheet" onClick={e=>e.stopPropagation()}>
@@ -2718,7 +2326,6 @@ function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPr
             </div>
           </div>
         </div>
-        {/* NEW: Token chart — pulls /api/dex/chart/:mint?tf= */}
         <TokenChart token={token} />
         <div className={'wr-vibe ' + tierClass}>
           <div className="wr-vibe-top"><span className="wr-vibe-l">Vibe check</span><span className="wr-vibe-s" style={{color:tierColor}}>{read.score}<span className="of">/{RISK_CEIL}</span></span></div>
@@ -2740,11 +2347,8 @@ function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPr
             </span>
           </div>
           <div className="wr-field-row2">
-            <div className="wr-field-chip">
-              {isBuy ? <><span className="lg">◎</span><span>SOL</span></> : <><span className="lg"><TokenChip token={token} /></span><span>{token.sym}</span></>}
-            </div>
-            <input className="wr-field-amt" type="text" inputMode="decimal" placeholder={isBuy?'0.00':'0'} value={amount}
-              onChange={e=>{ const val=e.target.value.replace(/[^\d.]/g,''); if(val.split('.').length>2)return; if(!isBuy&&Number(val)>100){setAmount('100');return;} setAmount(val); }} />
+            <div className="wr-field-chip">{isBuy ? <><span className="lg">◎</span><span>SOL</span></> : <><span className="lg"><TokenChip token={token} /></span><span>{token.sym}</span></>}</div>
+            <input className="wr-field-amt" type="text" inputMode="decimal" placeholder={isBuy?'0.00':'0'} value={amount} onChange={e=>{ const val=e.target.value.replace(/[^\d.]/g,''); if(val.split('.').length>2)return; if(!isBuy&&Number(val)>100){setAmount('100');return;} setAmount(val); }} />
           </div>
         </div>
         <div className="wr-presets">
@@ -2766,10 +2370,7 @@ function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPr
         )}
         {error && <div className="wr-banner">{error}</div>}
         <button className={'wr-confirm'+(isBuy?'':' sell')} disabled={disabled} onClick={go}>
-          {confirming ? (isBuy?'Buying…':'Selling…')
-            : !amount||Number(amount)<=0 ? (isBuy?'Enter SOL amount':'Enter percentage')
-            : !hasFunds ? (isBuy?'Not enough SOL':(ownedUi<=0?('No '+token.sym+' to sell'):'Need ~0.003 SOL for fees'))
-            : (isBuy?('Buy '+amount+' SOL → '+token.sym):('Sell '+Math.min(100,Number(amount))+'% of '+token.sym))}
+          {confirming ? (isBuy?'Buying…':'Selling…') : !amount||Number(amount)<=0 ? (isBuy?'Enter SOL amount':'Enter percentage') : !hasFunds ? (isBuy?'Not enough SOL':(ownedUi<=0?('No '+token.sym+' to sell'):'Need ~0.003 SOL for fees')) : (isBuy?('Buy '+amount+' SOL → '+token.sym):('Sell '+Math.min(100,Number(amount))+'% of '+token.sym))}
         </button>
         <p className="wr-tfoot">{token.dex || 'pump.fun'} · 3% fee · settles in seconds</p>
       </div>
@@ -2793,12 +2394,9 @@ const SpecimenRow = React.memo(function SpecimenRow({ token, ageMsLive, owned, q
             {ownedUi > 0 ? <span className="wr-owned-mark">owned</span> : null}
           </div>
           <div className="wr-full">{token.name}{token.dex ? <span className="dex">· {token.dex}</span> : null}</div>
-          {/* NEW: Mobile-only second line — price · age · MC. Hidden on desktop via CSS. */}
           <div className="wr-mob-meta">
-            <span className="price">{formatPrice(token.price)}</span>
-            <span className="dot">·</span>
-            <span className={mobAgeClass(ageMsLive)}>{fmtAgeShort(ageMsLive)}</span>
-            <span className="dot">·</span>
+            <span className="price">{formatPrice(token.price)}</span><span className="dot">·</span>
+            <span className={mobAgeClass(ageMsLive)}>{fmtAgeShort(ageMsLive)}</span><span className="dot">·</span>
             <span>{formatMoney(token.mcap)}</span>
           </div>
         </div>
@@ -2818,570 +2416,455 @@ const SpecimenRow = React.memo(function SpecimenRow({ token, ageMsLive, owned, q
   );
 });
 
-/* ════════════════════════════════════════════════════════════════
-   MAIN
-   ════════════════════════════════════════════════════════════════ */
-// mainWalletPubkey: base58 of the user's CONNECTED main wallet (e.g. Phantom),
-// passed in from the parent layout. Used only for the Referrals tab so that
-// referral fees route to a persistent wallet instead of the disposable burner.
-// If not provided, the Referrals tab shows a "connect a main wallet" gate.
-// Field log + standings still use the burner because the burner is the trader.
+/* ============================================================
+   MAIN — Ape
+   ============================================================ */
 export default function Ape({ mainWalletPubkey } = {}) {
   useWrCSS();
   const wallet = useLocalWallet();
-    // Trade-path connection — used by executeSwap and onWithdraw. Background
-  // reads (balances, token accounts) still go through balRpcRace → /api/solana-rpc.
+  // General-purpose connection — used by background reads (balances, token
+  // accounts) and by onWithdraw. Goes through /api/solana-rpc (Alchemy only).
   const connection = useMemo(() => getConn('confirmed'), []);
+  // Trade-path connection — used ONLY by executeSwap for the buy/sell critical
+  // path. Goes through /api/trade-rpc (Alchemy primary, Ankr fallback). This is
+  // the only place in the client that exercises the Ankr fallback.
+  const tradeConnection = useMemo(() => getTradeConn('confirmed'), []);
+  const walletStr = wallet.publicKey.toBase58();
+
   const { buyPresets, setBuyPresets, sellPresets, setSellPresets } = usePresets();
-  const [quickAmount, setQuickAmount] = useState(() => buyPresets[Math.min(2, buyPresets.length-1)] || 0.5);
-  useEffect(() => { if (!buyPresets.includes(quickAmount)) setQuickAmount(buyPresets[Math.min(2, buyPresets.length-1)] || buyPresets[0]); }, [buyPresets]); // eslint-disable-line
 
-  const [presetsOpen, setPresetsOpen] = useState(false);
-  const [walletOpen, setWalletOpen] = useState(false);
-  const [statsOpen, setStatsOpen] = useState(false);
-  const [autoOpen, setAutoOpen] = useState(false);
-  const [tradeOpen, setTradeOpen] = useState(null);
-  const [sortBy, setSortBy] = useState('newest');
-  const [busyMint, setBusyMint] = useState(null);
-  const [withdrawing, setWithdrawing] = useState(false);
-  const [filterWild, setFilterWild] = useState(false);
+  const [tokens, setTokens] = useState([]);
+  const [feedError, setFeedError] = useState(null);
+  const [solPrice, setSolPrice] = useState(0);
+  const [solBalance, setSolBalance] = useState({ uiAmount: 0, lamports: 0 });
+  const [balances, setBalances] = useState({});
+  const [quickIndex, setQuickIndex] = useState(1);
+  const [sheetToken, setSheetToken] = useState(null);
+  const [sheetMode, setSheetMode] = useState('buy');
+  const [showWallet, setShowWallet] = useState(false);
+  const [showPresets, setShowPresets] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+  const [showStats, setShowStats] = useState(false);
+  const [showAuto, setShowAuto] = useState(false);
+  const [wildOnly, setWildOnly] = useState(false);
   const [minLiq, setMinLiq] = useState(0);
+  const [busyMint, setBusyMint] = useState(null);
+  const [withdrawBusy, setWithdrawBusy] = useState(false);
+  const [toasts, setToasts] = useState([]);
+  const [confetti, setConfetti] = useState(false);
+  const [showLure, setShowLure] = useState(() => { try { return localStorage.getItem(HAS_TRADED_KEY) !== '1'; } catch (e) { return true; } });
+  const [tick, setTick] = useState(0);
 
-  // NEW: filters modal
-  const [filtersOpen, setFiltersOpen] = useState(false);
+  const pushToast = useCallback((t) => {
+    const id = Math.random().toString(36).slice(2);
+    setToasts(prev => [...prev, { ...t, id }]);
+    const dur = t.duration || 6000;
+    setTimeout(() => setToasts(prev => prev.filter(x => x.id !== id)), dur);
+  }, []);
+  const dismissToast = useCallback((id) => setToasts(prev => prev.filter(x => x.id !== id)), []);
 
-  // NEW: returning-user state. Anyone whose wallet has SOL OR who's traded
-  // before is treated as "returning" and gets the compact .wr-lure strip
-  // instead of the marketing hero + 3 offer cards. The trade-once flag is
-  // set inside runTrade on the confirmed branch.
-  const [hasTraded, setHasTraded] = useState(() => {
-    try { return localStorage.getItem(HAS_TRADED_KEY) === '1'; } catch (e) { return false; }
-  });
-  const [showIntro, setShowIntro] = useState(false);
+  useEffect(() => { const id = setInterval(() => setTick(t => t + 1), 1000); return () => clearInterval(id); }, []);
 
+  // referral register on first load
   const refRegisteredRef = useRef(false);
   useEffect(() => {
     if (refRegisteredRef.current) return;
     refRegisteredRef.current = true;
-    let ref = null, boost = null;
-    try {
-      const params = new URLSearchParams(window.location.search);
-      ref = params.get('ref'); boost = params.get('boost');
-    } catch (e) {}
-    refRegister(wallet.publicKey.toBase58(), ref, boost);
-  }, [wallet.publicKey]);
+    let referrer = null, boost = null;
+    try { const p = new URLSearchParams(window.location.search); referrer = p.get('ref'); boost = p.get('boost'); } catch (e) {}
+    refRegister(walletStr, referrer, boost);
+  }, [walletStr]);
 
-  const [recentTokens, setRecentTokens] = useState([]);
-  const [recentLoading, setRecentLoading] = useState(true);
-  const [recentError, setRecentError] = useState(null);
-  const seenMintsRef = useRef(new Map());
-  const specimenCounterRef = useRef(1247);
-  const [newlyArrived, setNewlyArrived] = useState(new Set());
-
+  // recent-tokens feed
   useEffect(() => {
     let cancelled = false;
-    async function load() {
+    const load = async () => {
       try {
         const r = await fetch('/api/dex/launches');
-        if (!r.ok) { if (!cancelled) { setRecentError('Feed unreachable (HTTP '+r.status+')'); setRecentLoading(false); } return; }
+        if (!r.ok) throw new Error('feed HTTP ' + r.status);
         const d = await r.json();
-        const list = Array.isArray(d && d.tokens) ? d.tokens : [];
-        const normalized = list.map(normalize).filter(Boolean);
-        const justArrived = new Set();
-        for (const t of normalized) {
-          if (!seenMintsRef.current.has(t.mint)) {
-            specimenCounterRef.current += 1;
-            seenMintsRef.current.set(t.mint, { specimenNo: specimenCounterRef.current, firstSeenAt: Date.now() });
-            justArrived.add(t.mint);
-          }
-        }
-        if (!cancelled) {
-          setRecentTokens(normalized); setRecentLoading(false); setRecentError(null);
-          if (justArrived.size > 0) { setNewlyArrived(justArrived); setTimeout(() => setNewlyArrived(new Set()), 1000); }
-        }
-      } catch (e) { if (!cancelled) { setRecentError(String((e && e.message)||'Feed unreachable').slice(0,120)); setRecentLoading(false); } }
-    }
+        if (cancelled) return;
+        const list = (Array.isArray(d) ? d : (d.tokens || d.pairs || [])).map(normalize).filter(Boolean);
+        const seen = new Set(); const deduped = [];
+        for (const t of list) { if (seen.has(t.mint)) continue; seen.add(t.mint); deduped.push(t); }
+        setTokens(deduped);
+        setFeedError(null);
+      } catch (e) { if (!cancelled) setFeedError(String(e.message || 'feed unavailable').slice(0, 120)); }
+    };
     load();
     const id = setInterval(load, POLL_RECENT);
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  const [, setAgeTick] = useState(0);
-  useEffect(() => { const id = setInterval(() => setAgeTick(t => (t + 1) | 0), 1000); return () => clearInterval(id); }, []);
-
-  const [solPrice, setSolPrice] = useState(0);
+  // SOL price
   useEffect(() => {
     let cancelled = false;
-    async function load() { try { const r = await fetch('/api/dex/sol-price'); if (!r.ok) return; const d = await r.json(); if (!cancelled && d && d.price) setSolPrice(d.price); } catch (e) {} }
-    load(); const id = setInterval(load, POLL_SOL); return () => { cancelled = true; clearInterval(id); };
+    const load = async () => {
+      try { const r = await fetch('/api/sol-price'); if (!r.ok) return; const d = await r.json(); const p = Number(d.price || d.solPrice || d.usd); if (!cancelled && Number.isFinite(p) && p > 0) setSolPrice(p); } catch (e) {}
+    };
+    load();
+    const id = setInterval(load, POLL_SOL);
+    return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  const [balances, setBalances] = useState({});
+  // balances (SOL + token accounts) — stays on `connection` (general RPC)
   const refreshBalances = useCallback(async () => {
-    const owner = wallet.publicKey;
-    const mergeAccs = (into, accs) => {
-      if (!accs || !accs.value) return;
-      for (const acc of accs.value) {
-        const info = acc.account && acc.account.data && acc.account.data.parsed && acc.account.data.parsed.info; if (!info) continue;
-        const mint = info.mint, amt = info.tokenAmount && info.tokenAmount.amount; if (!mint || amt == null) continue;
-        into[mint] = { amount: String(amt), decimals: Number((info.tokenAmount && info.tokenAmount.decimals) != null ? info.tokenAmount.decimals : 6), uiAmount: Number((info.tokenAmount && info.tokenAmount.uiAmount) || 0) };
+    try {
+      const lamports = await balRpcRace(c => c.getBalance(wallet.publicKey, BAL_COMMITMENT));
+      setSolBalance({ uiAmount: lamports / 1e9, lamports });
+    } catch (e) {}
+    try {
+      const owner = wallet.publicKey;
+      const fetchProgram = (pid) => balRpcRace(c => c.getParsedTokenAccountsByOwner(owner, { programId: pid }, BAL_COMMITMENT));
+      const [std, t22] = await Promise.all([fetchProgram(TOKEN_PROGRAM_ID), fetchProgram(TOKEN_2022_PROGRAM_ID).catch(() => ({ value: [] }))]);
+      const map = {};
+      for (const acc of [...(std.value || []), ...(t22.value || [])]) {
+        const info = acc.account.data.parsed.info;
+        const mint = info.mint;
+        const ta = info.tokenAmount;
+        if (!ta || !ta.amount || ta.amount === '0') continue;
+        map[mint] = { amount: ta.amount, decimals: ta.decimals, uiAmount: ta.uiAmount || (Number(ta.amount) / Math.pow(10, ta.decimals)) };
       }
-    };
-    const solP = balRpcRace(c => c.getBalance(owner, BAL_COMMITMENT)).then(l => setBalances(prev => ({ ...prev, [SOL_MINT]: { amount: String(l), decimals: 9, uiAmount: l/1e9 } }))).catch(e => console.warn('[wr-bal] SOL', e && e.message));
-    const tokP = balRpcRace(c => c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, BAL_COMMITMENT)).then(a => setBalances(prev => { const n={...prev}; mergeAccs(n,a); return n; })).catch(e => console.warn('[wr-bal] SPL', e && e.message));
-    const t22P = balRpcRace(c => c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, BAL_COMMITMENT)).then(a => setBalances(prev => { const n={...prev}; mergeAccs(n,a); return n; })).catch(e => console.warn('[wr-bal] T22', e && e.message));
-    await Promise.allSettled([solP, tokP, t22P]);
+      setBalances(map);
+    } catch (e) {}
   }, [wallet.publicKey]);
-  useEffect(() => { refreshBalances(); }, [refreshBalances]);
-  useEffect(() => { const id = setInterval(refreshBalances, POLL_BALANCE); return () => clearInterval(id); }, [refreshBalances]);
-  const aggressiveRefresh = useCallback(() => { [1500, 4000, 8000].forEach(ms => setTimeout(refreshBalances, ms)); }, [refreshBalances]);
+  useEffect(() => { refreshBalances(); const id = setInterval(refreshBalances, POLL_BALANCE); return () => clearInterval(id); }, [refreshBalances]);
 
   const refreshSol = useCallback(async () => {
-    try { const l = await balRpcRace(c => c.getBalance(wallet.publicKey, BAL_COMMITMENT)); setBalances(prev => ({ ...prev, [SOL_MINT]: { amount: String(l), decimals: 9, uiAmount: l/1e9 } })); } catch (e) { console.warn('[wr-bal] SOL', e && e.message); }
+    try { const lamports = await balRpcRace(c => c.getBalance(wallet.publicKey, BAL_COMMITMENT)); setSolBalance({ uiAmount: lamports / 1e9, lamports }); } catch (e) {}
   }, [wallet.publicKey]);
-  const refreshOneToken = useCallback(async (mintStr) => {
-    if (!mintStr || mintStr === SOL_MINT) return;
-    let mintPk; try { mintPk = new PublicKey(mintStr); } catch (e) { return; }
+  const refreshOneToken = useCallback(async (mint) => {
     try {
-      const accs = await balRpcRace(c => c.getParsedTokenAccountsByOwner(wallet.publicKey, { mint: mintPk }, BAL_COMMITMENT));
-      let best = null;
-      for (const acc of ((accs && accs.value) || [])) {
-        const info = acc.account && acc.account.data && acc.account.data.parsed && acc.account.data.parsed.info;
-        const amt = info && info.tokenAmount && info.tokenAmount.amount; if (amt == null) continue;
-        const ui = Number((info.tokenAmount && info.tokenAmount.uiAmount)||0);
-        if (!best || ui > best.uiAmount) best = { amount: String(amt), decimals: Number((info.tokenAmount && info.tokenAmount.decimals)!=null?info.tokenAmount.decimals:6), uiAmount: ui };
+      const owner = wallet.publicKey;
+      const mintPk = new PublicKey(mint);
+      const res = await balRpcRace(c => c.getParsedTokenAccountsByOwner(owner, { mint: mintPk }, BAL_COMMITMENT));
+      let next = null;
+      for (const acc of (res.value || [])) {
+        const ta = acc.account.data.parsed.info.tokenAmount;
+        if (ta && ta.amount && ta.amount !== '0') { next = { amount: ta.amount, decimals: ta.decimals, uiAmount: ta.uiAmount || (Number(ta.amount) / Math.pow(10, ta.decimals)) }; break; }
       }
-      setBalances(prev => ({ ...prev, [mintStr]: best || { amount:'0', decimals:6, uiAmount:0 } }));
-    } catch (e) { console.warn('[wr-bal] one-token', e && e.message); }
+      setBalances(prev => { const copy = { ...prev }; if (next) copy[mint] = next; else delete copy[mint]; return copy; });
+    } catch (e) {}
   }, [wallet.publicKey]);
 
-  const solBalance = balances[SOL_MINT];
-
-  const [toasts, setToasts] = useState([]);
-  const pushToast = useCallback((t) => { const id = Math.random().toString(36).slice(2); setToasts(p => [...p, { ...t, id }]); setTimeout(() => setToasts(p => p.filter(x => x.id !== id)), t.duration || 8000); }, []);
-
-  const [confettiKey, setConfettiKey] = useState(0);
-  const confettiPieces = useMemo(() => {
-    if (!confettiKey) return [];
-    const colors = ['#FF3D8A','#3DFFC2','#C9B8FF','#FFD86B','#6BEEFF','#FF7A6E'];
-    return Array.from({ length: 56 }, (_, i) => { const angle=(Math.random()-.5)*Math.PI; const dist=220+Math.random()*200; return { i, dx: Math.sin(angle)*dist, dy: -Math.abs(Math.cos(angle)*dist)+420*Math.random(), dr:(Math.random()-.5)*1440, color: colors[i%colors.length], delay: Math.random()*0.15 }; });
-  }, [confettiKey]);
-  useEffect(() => { if (!confettiKey) return; const id = setTimeout(() => setConfettiKey(0), 1800); return () => clearTimeout(id); }, [confettiKey]);
-  const fireConfetti = useCallback(() => setConfettiKey(k => k + 1), []);
-
-  /* ====== executeSwap — with on-chain referral split ====== */
-  const executeSwap = useCallback(async (args) => {
-    const { mode, swapParams, token } = args;
-    if (!swapParams) throw new Error('Nothing to trade.');
+  /* ---- THE BUY/SELL HOT PATH ---- */
+  const executeSwap = useCallback(async ({ mode, swapParams, token }) => {
+    if (!swapParams) throw new Error('No trade params.');
     const isBuy = mode === 'buy';
     const userPk = wallet.publicKey;
 
+    // ALT lookup + route build run on the trade connection.
     const route = await getPumpRoute({
       action: isBuy ? 'buy' : 'sell', mint: token.mint, user: userPk,
       amount: isBuy ? swapParams.tradeLamports : swapParams.tradeTokens,
-      decimals: isBuy ? undefined : swapParams.decimals, connection,
+      decimals: isBuy ? undefined : swapParams.decimals, connection: tradeConnection,
     });
 
-    const feeLamports = BigInt(swapParams.feeLamports || '0');
-    if (feeLamports <= 0n) throw new Error(isBuy ? 'Fee rounds to zero — amount too small.' : 'Could not estimate sell fee — price unavailable.');
+    const ixs = [...route.instructions];
 
-    const refInfo = await refLookup(userPk.toBase58());
-    let refWalletPk = null;
-    let refLamports = 0n;
-    let platformLamports = feeLamports;
-    if (refInfo.referrer && refInfo.refSplitBps > 0) {
+    // Append the platform fee transfer to the same atomic tx.
+    const feeLamports = BigInt(swapParams.feeLamports || '0');
+    if (feeLamports > 0n) {
+      ixs.push(SystemProgram.transfer({ fromPubkey: userPk, toPubkey: FEE_WALLET, lamports: feeLamports }));
+      // Referral split: a second transfer to the referrer, carved from the fee.
       try {
-        const candidate = new PublicKey(refInfo.referrer);
-        if (!candidate.equals(userPk)) {
-          refWalletPk = candidate;
-          refLamports = (feeLamports * BigInt(refInfo.refSplitBps)) / 10000n;
-          if (refLamports > feeLamports) refLamports = feeLamports;
-          platformLamports = feeLamports - refLamports;
+        const { referrer, refSplitBps } = await refLookup(walletStr);
+        if (referrer && refSplitBps > 0) {
+          const refLamports = (feeLamports * BigInt(refSplitBps)) / 10000n;
+          if (refLamports > 0n) ixs.push(SystemProgram.transfer({ fromPubkey: userPk, toPubkey: new PublicKey(referrer), lamports: refLamports }));
         }
       } catch (e) {}
     }
 
-    const feeIxs = [];
-    if (platformLamports > 0n) feeIxs.push(SystemProgram.transfer({ fromPubkey: userPk, toPubkey: FEE_WALLET, lamports: Number(platformLamports) }));
-    if (refLamports > 0n && refWalletPk) feeIxs.push(SystemProgram.transfer({ fromPubkey: userPk, toPubkey: refWalletPk, lamports: Number(refLamports) }));
-
-    const CB_PROGRAM = 'ComputeBudget111111111111111111111111111111';
-    const ixs = route.instructions.slice();
-    if (isBuy) {
-      let at = 0;
-      while (at < ixs.length && ixs[at].programId.toBase58() === CB_PROGRAM) at++;
-      ixs.splice(at, 0, ...feeIxs);
-    } else {
-      ixs.push(...feeIxs);
-    }
-
-    const latest = await connection.getLatestBlockhash('confirmed');
+    const latest = await tradeConnection.getLatestBlockhash('confirmed');
     const message = new TransactionMessage({ payerKey: userPk, recentBlockhash: latest.blockhash, instructions: ixs }).compileToV0Message(route.alts);
     const tx = new VersionedTransaction(message);
 
     // [wr-sim] removed — PumpPortal tx is pre-validated; sim was doubling RPC cost
     // per trade. Send-error path below still uses describeSimLogs() on returned logs.
 
-
     tx.sign([wallet.keypair]);
     const raw = tx.serialize();
 
     let sig;
-    try { sig = await connection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 5 }); }
-    catch (sendErr) { let logs = (sendErr && sendErr.logs) || null; if (!logs && sendErr && typeof sendErr.getLogs === 'function') { try { logs = await sendErr.getLogs(connection); } catch (e2) {} } throw new Error(describeSimLogs(logs, sendErr && sendErr.message)); }
+    try { sig = await tradeConnection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 5 }); }
+    catch (sendErr) { let logs = (sendErr && sendErr.logs) || null; if (!logs && sendErr && typeof sendErr.getLogs === 'function') { try { logs = await sendErr.getLogs(tradeConnection); } catch (e2) {} } throw new Error(describeSimLogs(logs, sendErr && sendErr.message)); }
 
     let confirmed = false, onchainErr = null; const startedAt = Date.now(); const HARD_CAP_MS = 60000;
     while (Date.now() - startedAt < HARD_CAP_MS) {
-      try { const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true }); if (st && st.value && st.value.err) { onchainErr = st.value.err; break; } const cs = st && st.value && st.value.confirmationStatus; if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; } } catch (e) {}
-      try { const h = await connection.getBlockHeight('confirmed'); if (h > latest.lastValidBlockHeight) break; } catch (e) {}
-      try { await connection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }); } catch (e) {}
+      try { const st = await tradeConnection.getSignatureStatus(sig, { searchTransactionHistory: true }); if (st && st.value && st.value.err) { onchainErr = st.value.err; break; } const cs = st && st.value && st.value.confirmationStatus; if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; } } catch (e) {}
+      try { const h = await tradeConnection.getBlockHeight('confirmed'); if (h > latest.lastValidBlockHeight) break; } catch (e) {}
+      try { await tradeConnection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }); } catch (e) {}
       await new Promise(r => setTimeout(r, 5000));
     }
-    if (onchainErr) throw new Error('Trade failed on-chain — price likely moved past slippage.');
 
-    return {
-      sig, confirmed, mode, token, route: route.route,
-      refWallet: refWalletPk ? refWalletPk.toBase58() : null,
-      refLamports: Number(refLamports),
-      platformLamports: Number(platformLamports),
-    };
-  }, [wallet.keypair, wallet.publicKey, connection]);
+    if (onchainErr) throw new Error('On-chain error: ' + JSON.stringify(onchainErr).slice(0, 120));
+    if (!confirmed) throw new Error("Sent but didn't confirm in time — check Solscan before retrying.");
 
-  const runTrade = useCallback(async (args) => {
-    const { mode, swapParams, token } = args;
-    const res = await executeSwap({ mode, swapParams, token });
-    const sig = res.sig, confirmed = res.confirmed;
-    let outAmount = 0;
-    if (mode === 'buy' && token && token.price > 0 && solPrice > 0) outAmount = ((Number(swapParams.tradeLamports)/1e9)*solPrice)/token.price;
-    else if (mode === 'sell' && token && token.price > 0 && solPrice > 0) outAmount = Math.max(0, ((swapParams.tradeTokensUi*token.price)/solPrice)*(1-FEE_BPS/10000));
+    // log to referral / pnl ledger (fire and forget)
+    try {
+      const volSol = isBuy ? Number(swapParams.tradeLamports) / 1e9 : (swapParams.tradeTokensUi * (token.price || 0)) / (solPrice || 1);
+      refLogTrade({ wallet: walletStr, mint: token.mint, sym: token.sym, side: mode, sol: volSol, sig, ts: Date.now() });
+    } catch (e) {}
 
-    if (sig) {
-      refLogTrade({
-        wallet: wallet.publicKey.toBase58(),
-        mint: token.mint, sym: token.sym, name: token.name,
-        side: mode,
-        sol_amount:   mode === 'buy' ? swapParams.solAmount : (outAmount || 0),
-        token_amount: mode === 'buy' ? (outAmount || 0) : swapParams.tradeTokensUi,
-        price_usd:     token.price || 0,
-        sol_price_usd: solPrice || 0,
-        sig,
-        ref_wallet: res.refWallet,
-        ref_lamports: res.refLamports || 0,
-        platform_lamports: res.platformLamports || 0,
-      });
-    }
+    return { confirmed: true, sig };
+  }, [wallet.keypair, wallet.publicKey, connection, tradeConnection]);
 
-    if (confirmed) {
-      // NEW: mark this user as "has traded" so the marketing hero collapses
-      // on their next visit. Persistent, opt-out via WHAT'S THIS? in the lure.
-      try { localStorage.setItem(HAS_TRADED_KEY, '1'); } catch (e) {}
-      setHasTraded(true);
-
-      fireConfetti();
-      const tweetText = buildTweetText({ mode, token, solAmount: swapParams.solAmount, outAmount, percentage: swapParams.percentage });
-      pushToast({
-        kind: 'success', emoji: '✓',
-        body: mode === 'buy'
-          ? <><b>Caught ${token.sym}</b><br/>{swapParams.solAmount} SOL{outAmount>0?<> → ~{formatTokens(outAmount)} {token.sym}</>:null}</>
-          : <><b>Sold {Math.round(swapParams.percentage)}% of ${token.sym}</b>{outAmount>0?<><br/>~{formatSol(outAmount)} SOL</>:null}</>,
-        solscan: 'https://solscan.io/tx/' + sig, tweetText, shareUrl: buildShareUrl(),
-      });
-    } else {
-      pushToast({ kind: 'error', emoji: '⏳', body: <><b>Not confirmed</b><br/>Sent but didn't confirm. Check Solscan before retrying.</>, solscan: 'https://solscan.io/tx/' + sig, duration: 13000 });
-    }
-    refreshSol();
-    [1200, 3000, 6000].forEach(ms => setTimeout(() => { refreshSol(); refreshOneToken(token.mint); }, ms));
-    aggressiveRefresh();
-    return { confirmed };
-  }, [executeSwap, fireConfetti, pushToast, refreshSol, refreshOneToken, aggressiveRefresh, solPrice, wallet.publicKey]);
-
-  const onApe = useCallback(async (token) => {
-    if (busyMint) return;
-    const availSol = Math.max(0, ((solBalance && solBalance.uiAmount) || 0) - SOL_RESERVE);
-    if (quickAmount > availSol) { pushToast({ kind: 'error', emoji: '◌', body: <><b>Need more SOL</b><br/>Deposit to your wallet to trade {quickAmount} SOL.</> }); setWalletOpen(true); return; }
-    const params = buildBuyParams(quickAmount);
-    if (!params) { pushToast({ kind: 'error', emoji: '⚠', body: 'Amount too small.' }); return; }
+  const runTrade = useCallback(async ({ mode, swapParams, token }) => {
     setBusyMint(token.mint);
-    try { await runTrade({ mode: 'buy', swapParams: params, token }); }
-    catch (e) { pushToast({ kind: 'error', emoji: '⊘', body: friendlyError(e) }); }
-    finally { setBusyMint(null); }
-  }, [busyMint, quickAmount, solBalance, runTrade, pushToast]);
+    try {
+      const res = await executeSwap({ mode, swapParams, token });
+      if (res && res.confirmed) {
+        try { localStorage.setItem(HAS_TRADED_KEY, '1'); } catch (e) {}
+        setShowLure(false);
+        setConfetti(true); setTimeout(() => setConfetti(false), 1800);
+        const isBuy = mode === 'buy';
+        const outAmount = isBuy
+          ? ((token.price > 0 && solPrice > 0) ? (Number(swapParams.tradeLamports)/1e9 * solPrice) / token.price : 0)
+          : ((swapParams.tradeTokensUi * token.price) / solPrice) * (1 - FEE_BPS/10000);
+        const tweet = buildTweetText({ mode, token, solAmount: isBuy ? Number(swapParams.solAmount) : 0, outAmount, percentage: isBuy ? 0 : swapParams.percentage });
+        const shareUrl = buildShareUrl();
+        pushToast({
+          kind: 'success', emoji: isBuy ? '◉' : '✓',
+          body: <><b>{isBuy ? 'Bought' : 'Sold'} {token.sym}</b><br/>{isBuy ? (formatTokens(outAmount) + ' ' + token.sym) : ('≈ ' + formatSol(outAmount) + ' SOL back')}</>,
+          actions: [{ label: 'Share', tw: true, onClick: () => openTwitterShare(tweet, shareUrl) }, { label: 'Solscan', href: 'https://solscan.io/tx/' + res.sig }],
+          duration: 9000,
+        });
+        refreshSol();
+        setTimeout(() => refreshOneToken(token.mint), 2500);
+      }
+      return res;
+    } catch (e) {
+      pushToast({ kind: 'error', emoji: '⊘', body: <><b>Trade failed</b><br/>{friendlyError(e)}</>, duration: 8000 });
+      throw e;
+    } finally { setBusyMint(null); }
+  }, [executeSwap, solPrice, pushToast, refreshSol, refreshOneToken]);
 
-  const onSheetConfirm = useCallback(async (args) => {
-    await runTrade(args);
-    setTradeOpen(null);
-    return { closed: true };
+  const onApe = useCallback((token) => {
+    const amt = buyPresets[quickIndex] != null ? buyPresets[quickIndex] : buyPresets[0];
+    const params = buildBuyParams(amt);
+    if (!params) { pushToast({ kind: 'error', emoji: '⊘', body: 'Invalid amount.' }); return; }
+    runTrade({ mode: 'buy', swapParams: params, token });
+  }, [buyPresets, quickIndex, runTrade, pushToast]);
+
+  const onSheetConfirm = useCallback(async ({ mode, swapParams, token }) => {
+    const res = await runTrade({ mode, swapParams, token });
+    if (res && res.confirmed) setSheetToken(null);
+    return res;
   }, [runTrade]);
 
-  const onWithdraw = useCallback(async (destStr, solAmt) => {
-    setWithdrawing(true);
+  // withdraw — stays on `connection` (not a buy/sell)
+  const onWithdraw = useCallback(async (dest, amt) => {
+    setWithdrawBusy(true);
     try {
-      const dest = new PublicKey(destStr);
-      const lamports = Math.floor(solAmt * 1e9);
+      const destPk = new PublicKey(dest);
+      const lamports = Math.floor(amt * 1e9);
       const latest = await connection.getLatestBlockhash('confirmed');
-      const msg = new TransactionMessage({ payerKey: wallet.publicKey, recentBlockhash: latest.blockhash, instructions: [SystemProgram.transfer({ fromPubkey: wallet.publicKey, toPubkey: dest, lamports })] }).compileToV0Message();
-      const tx = new VersionedTransaction(msg); tx.sign([wallet.keypair]);
+      const msg = new TransactionMessage({ payerKey: wallet.publicKey, recentBlockhash: latest.blockhash, instructions: [SystemProgram.transfer({ fromPubkey: wallet.publicKey, toPubkey: destPk, lamports })] }).compileToV0Message();
+      const tx = new VersionedTransaction(msg);
+      tx.sign([wallet.keypair]);
       const sig = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false, maxRetries: 5 });
-      pushToast({ kind: 'success', emoji: '✓', body: <><b>Sent {solAmt} SOL</b></>, solscan: 'https://solscan.io/tx/' + sig });
-      refreshSol(); [1500, 4000].forEach(ms => setTimeout(refreshSol, ms)); aggressiveRefresh();
-    } catch (e) { pushToast({ kind: 'error', emoji: '⊘', body: friendlyError(e) }); }
-    finally { setWithdrawing(false); }
-  }, [connection, wallet.keypair, wallet.publicKey, pushToast, refreshSol, aggressiveRefresh]);
+      await connection.confirmTransaction({ signature: sig, blockhash: latest.blockhash, lastValidBlockHeight: latest.lastValidBlockHeight }, 'confirmed');
+      pushToast({ kind: 'success', emoji: '↑', body: <><b>Withdrew {amt} SOL</b></>, actions: [{ label: 'Solscan', href: 'https://solscan.io/tx/' + sig }], duration: 8000 });
+      setShowWallet(false);
+      refreshSol();
+    } catch (e) { pushToast({ kind: 'error', emoji: '⊘', body: <><b>Withdraw failed</b><br/>{friendlyError(e)}</> }); }
+    finally { setWithdrawBusy(false); }
+  }, [connection, wallet.keypair, wallet.publicKey, pushToast, refreshSol]);
 
-  const auto = useAutoTrade({
-    wallet, recentTokens, solBalance, solPrice, balances,
-    executeSwap, refreshSol, refreshOneToken, pushToast,
-  });
+  const autoState = useAutoTrade({ wallet, recentTokens: tokens, solBalance, solPrice, balances, executeSwap, refreshSol, refreshOneToken, pushToast });
 
   const filtered = useMemo(() => {
-    let l = recentTokens.slice();
-    const seenMint = new Set(), seenName = new Set(), seenSym = new Set();
-    l = l.filter(t => {
-      if (!t || !t.mint) return false;
-      if (seenMint.has(t.mint)) return false;
-      const nm = String(t.name || '').trim().toLowerCase();
-      const sm = String(t.sym  || '').trim().toLowerCase();
-      if (nm && seenName.has(nm)) return false;
-      if (sm && sm !== '???' && seenSym.has(sm)) return false;
-      seenMint.add(t.mint); if (nm) seenName.add(nm); if (sm && sm !== '???') seenSym.add(sm);
-      return true;
-    });
-    if (filterWild) l = l.filter(t => riskRead(t).tier === 'high');
-    if (minLiq > 0) l = l.filter(t => (t.liquidity || 0) >= minLiq);
-    const ageNow = (t) => t.pairCreatedAtMs ? Date.now() - t.pairCreatedAtMs : Infinity;
-    if (sortBy === 'newest')      l = l.sort((a,b) => ageNow(a) - ageNow(b));
-    else if (sortBy === 'volume') l = l.sort((a,b) => (b.volume24h||0) - (a.volume24h||0));
-    else if (sortBy === 'vibe')   l = l.sort((a,b) => riskRead(b).score - riskRead(a).score);
-    return l.slice(0, 40);
-  }, [recentTokens, sortBy, filterWild, minLiq]);
+    let list = tokens;
+    if (wildOnly) list = list.filter(t => riskRead(t).tier === 'high');
+    if (minLiq > 0) list = list.filter(t => (t.liquidity || 0) >= minLiq);
+    return list;
+  }, [tokens, wildOnly, minLiq]);
 
   const stats = useMemo(() => {
-    const now = Date.now();
-    const fresh = filtered.filter(t => t.pairCreatedAtMs && (now - t.pairCreatedAtMs) < 60000).length;
-    const trending = filtered.filter(t => (t.volume24h || 0) > 40000).length;
-    const totalVol = filtered.reduce((s, t) => s + (t.volume24h || 0), 0);
-    const topMover = filtered.filter(t => Number.isFinite(t.change)).sort((a, b) => Math.abs(b.change) - Math.abs(a.change))[0] || null;
-    return { fresh, trending, totalVol, topMover };
+    const live = filtered.length;
+    const avgLiq = live ? filtered.reduce((s, t) => s + (t.liquidity || 0), 0) / live : 0;
+    const freshest = filtered.reduce((m, t) => { const a = t.pairCreatedAtMs ? Date.now() - t.pairCreatedAtMs : Infinity; return a < m ? a : m; }, Infinity);
+    return { live, avgLiq, freshest };
   }, [filtered]);
 
-  const fieldLogNo = specimenCounterRef.current;
-
-  // NEW: returning-user check. Either has SOL OR has logged a trade before.
-  // Honour showIntro override so users can re-expand the marketing block.
-  const isReturning = ((solBalance && solBalance.uiAmount > 0) || hasTraded) && !showIntro;
-
-  // NEW: count of active filters (for the magenta badge on the filter button)
-  const filterCount = (filterWild ? 1 : 0) + (minLiq > 0 ? 1 : 0);
-
-  // NEW: fresh-count for the lure microcopy
-  const freshCount = stats.fresh;
-
-  // Burner wallet str for positions strip (positions tracked under the
-  // wallet that did the trading — the burner).
-  const burnerStr = wallet.publicKey.toBase58();
+  const quickAmt = buyPresets[quickIndex] != null ? buyPresets[quickIndex] : buyPresets[0];
+  const sheetTokenBalance = sheetToken ? balances[sheetToken.mint] : null;
 
   return (
     <div className="wr-root">
-      <nav className="wr-nav">
-        <div className="wr-brand" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
-          <div className="wr-radar-icon" />
-          <span className="wr-bname">wonderland<span className="sep">//</span><span className="it">radar</span></span>
-        </div>
-        <div className="wr-nav-eyebrow"><span className="live" /><span>FIELD LOG · ENTRY № {fieldLogNo.toLocaleString()}</span></div>
-        <button className="wr-nav-stats" onClick={() => setStatsOpen(true)}>
-          <span className="gl">§</span><span>STATS</span>
-        </button>
-        <button className="wr-nav-stats" onClick={() => setAutoOpen(true)} style={auto.enabled && !auto.paused ? {borderColor:'rgba(61,255,194,.4)',background:'rgba(61,255,194,.08)'} : auto.paused ? {borderColor:'rgba(255,216,107,.4)',background:'rgba(255,216,107,.08)'} : null}>
-          <span className="gl" style={{color: auto.enabled && !auto.paused ? 'var(--mint)' : auto.paused ? 'var(--butter)' : 'var(--cyan)'}}>⚡</span>
-          <span>AUTO{auto.enabled && !auto.paused ? ' · ON' : auto.paused ? ' · PAUSED' : ''}</span>
-        </button>
-        <div className="wr-nav-wallet" onClick={() => setWalletOpen(true)}>
-          <span className="dot" /><span className="glyph">◎</span>
-          <b>{formatSol((solBalance && solBalance.uiAmount) || 0)}</b>
-          {!wallet.backedUp ? <span className="nudge" title="Back up your wallet" /> : null}
-        </div>
-      </nav>
-
-      <div className="wr-qbar">
-        <span className="wr-qlabel"><span className="b">⚡</span>Quick buy</span>
-        {buyPresets.map(v => (
-          <button key={v} className={'wr-qamt' + (v === quickAmount ? ' active' : '')} onClick={() => setQuickAmount(v)}>
-            <span>{v}</span><span className="s">◎</span>
-          </button>
-        ))}
-        <button className="wr-qedit" onClick={() => setPresetsOpen(true)}>✎</button>
-        <span className="wr-qfast"><span className="d" />INSTANT</span>
-      </div>
-
       <div className="wr-app">
-        <div className="wr-page">
-          <div className="wr-field-log">
+        <nav className="wr-nav">
+          <div className="wr-brand" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
+            <div className="wr-radar-icon" />
+            <span className="wr-bname">wonderland<span className="sep">//</span><span className="it">radar</span></span>
+          </div>
+          <div className="wr-nav-eyebrow"><span className="live" /><span>Scanning live</span></div>
+          <button className="wr-nav-stats" onClick={() => setShowAuto(true)}><span className="gl">◉</span><span>Auto</span></button>
+          <button className="wr-nav-stats" onClick={() => setShowStats(true)}><span className="gl">§</span><span>Stats</span></button>
+          <div className="wr-nav-wallet" onClick={() => setShowWallet(true)}>
+            <span className="dot" />
             <span className="glyph">◎</span>
-            <span>FIELD LOG · {new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).toUpperCase()}</span>
-            <span className="rule" />
-            <span>SOLANA · PUMP.FUN + RAYDIUM</span>
+            <span>{formatSol(solBalance.uiAmount)}</span>
+            {!wallet.backedUp && <span className="nudge" />}
+          </div>
+        </nav>
+
+        <div className="wr-qbar">
+          <span className="wr-qlabel"><span className="b">⚡</span> Quick buy</span>
+          {buyPresets.map((p, i) => (
+            <button key={p} className={'wr-qamt' + (i === quickIndex ? ' active' : '')} onClick={() => setQuickIndex(i)}>{p}<span className="s">SOL</span></button>
+          ))}
+          <button className="wr-qedit" onClick={() => setShowPresets(true)}>✎</button>
+          <span className="wr-qfast"><span className="d" /> 1-tap trading on</span>
+        </div>
+
+        <div className="wr-page">
+          <div className="wr-hero">
+            <h1>Fresh launches, <span className="it">caught at first light.</span></h1>
+            <div className="wr-hero-cta">
+              <span className="wr-no-connect">● No wallet connect · burner ready</span>
+            </div>
           </div>
 
-          {/* NEW: hero/offers collapse on return visits. Lure strip + WHAT'S THIS? */}
-          {isReturning ? (
+          {showLure && (
             <div className="wr-lure">
               <div className="wr-lure-text">
-                <div className="wr-lure-h">Welcome <span className="it">back.</span></div>
-                <div className="wr-lure-s">
-                  ENTRY № {fieldLogNo.toLocaleString()} ·{' '}
-                  {freshCount > 0 ? <><b>{freshCount}</b> launches in &lt;60s</> : 'feed loaded'}
-                </div>
+                <div className="wr-lure-h">Your wallet's <span className="it">already live.</span></div>
+                <div className="wr-lure-s">Deposit SOL · tap <b>Buy</b> on anything · trade settles in <b>~2 seconds</b></div>
               </div>
-              <button className="wr-lure-intro" onClick={() => setShowIntro(true)} title="Re-show the intro">
-                WHAT'S THIS?
-              </button>
+              <button className="wr-lure-intro" onClick={() => setShowWallet(true)}>↓ Deposit SOL</button>
+              <button className="wr-lure-close" onClick={() => { setShowLure(false); try { localStorage.setItem(HAS_TRADED_KEY, '1'); } catch (e) {} }}>×</button>
             </div>
-          ) : (
-            <>
-              <section className="wr-hero" style={{position:'relative'}}>
-                {hasTraded && showIntro && (
-                  <button className="wr-lure-close" style={{position:'absolute',top:6,right:0}} onClick={() => setShowIntro(false)} title="Collapse">×</button>
-                )}
-                <h1>Fresh launches, <span className="it">caught at first light.</span></h1>
-                <div className="wr-hero-cta">
-                  <button className="wr-btn-ape" onClick={() => { const el = document.getElementById('wr-feed'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>
-                    Start trading <span className="arrow">→</span>
-                  </button>
-                  <span className="wr-no-connect">◌ No wallet connect needed</span>
-                </div>
-              </section>
-
-              <section className="wr-offer-strip">
-                <div className="wr-offer o1">
-                  <div className="wr-offer-num"><span className="glyph">⚡</span><span>① The hook</span></div>
-                  <h3>Two-second <span className="it">trade.</span></h3>
-                  <p>No wallet popup. No signup. We generate a burner the moment you land — <b>your keys, your trades</b>, ready before your phone wakes.</p>
-                </div>
-                <div className="wr-offer o2">
-                  <div className="wr-offer-num"><span className="glyph">◉</span><span>② The honesty</span></div>
-                  <h3>Vibe-checked, <span className="it">openly.</span></h3>
-                  <p>Every specimen gets a real read on liquidity, holders, curve health. We also tell you <b>what can't be checked</b>. No fake green badges.</p>
-                </div>
-                <div className="wr-offer o3">
-                  <div className="wr-offer-num"><span className="glyph">◌</span><span>③ The timing</span></div>
-                  <h3>The <span className="it">moment</span> they hatch.</h3>
-                  <p>We watch pump.fun and Raydium so you don't refresh. New specimens land in the feed <b>within seconds</b> of going live.</p>
-                  <div className="mini-radar"><div className="b b1" /><div className="b b2" /></div>
-                </div>
-              </section>
-            </>
           )}
 
-          {/* NEW: Open positions strip — renders only when there's something held */}
-          <OpenPositionsStrip walletStr={burnerStr} solPrice={solPrice} onOpenStats={() => setStatsOpen(true)} />
+          <OpenPositionsStrip walletStr={walletStr} solPrice={solPrice} onOpenStats={() => setShowStats(true)} />
 
-          <div className="wr-list-frame" id="wr-feed">
+          <div className="wr-offer-strip">
+            <div className="wr-offer o1">
+              <div className="wr-offer-num"><span className="glyph">◉</span>01 · Speed</div>
+              <h3>Two-second <span className="it">entries.</span></h3>
+              <p>Burner wallet signs locally. No popups, no extension, no confirm-and-wait. <b>Tap and you're in.</b></p>
+              <div className="mini-radar"><span className="b b1" /><span className="b b2" /></div>
+            </div>
+            <div className="wr-offer o2">
+              <div className="wr-offer-num"><span className="glyph">§</span>02 · Honesty</div>
+              <h3>Reads that <span className="it">don't lie.</span></h3>
+              <p>Every specimen gets a vibe check — liquidity, holders, age. <b>We show what we can't verify too.</b></p>
+            </div>
+            <div className="wr-offer o3">
+              <div className="wr-offer-num"><span className="glyph">⚡</span>03 · Control</div>
+              <h3>Or let it <span className="it">run itself.</span></h3>
+              <p>Auto-trade screens, buys, and exits on your rules. <b>Hard loss cap. Stop any time.</b></p>
+            </div>
+          </div>
+
+          <div className="wr-list-frame">
             <div className="wr-list-head">
-              <div className="wr-list-title">
-                <span className="e">◉ Live feed</span>
-                <span className="t">Recently <span className="it">emerged</span></span>
+              <div className="wr-list-title"><span className="e">◉ Live feed</span><span className="t">The <span className="it">field log</span></span></div>
+              <div className="wr-list-filters">
+                <button className={'wr-chip' + (wildOnly ? ' on' : '')} onClick={() => setWildOnly(!wildOnly)}>Wild only</button>
+                <button className="wr-filter-btn" onClick={() => setShowFilters(true)}>Filters {(wildOnly || minLiq > 0) && <span className="ct">{(wildOnly ? 1 : 0) + (minLiq > 0 ? 1 : 0)}</span>}</button>
               </div>
             </div>
-
-            {/* NEW: Simplified sort bar replaces the 5-chip row. Filters live in modal. */}
-            <div className="wr-sortbar">
-              <span className="label">SORT</span>
-              <button className={'wr-chip' + (sortBy === 'newest' ? ' on' : '')} onClick={() => setSortBy('newest')}>Freshest</button>
-              <button className={'wr-chip' + (sortBy === 'vibe'   ? ' on' : '')} onClick={() => setSortBy('vibe')}>Steadiest</button>
-              <button className={'wr-chip' + (sortBy === 'volume' ? ' on' : '')} onClick={() => setSortBy('volume')}>Active</button>
-              <button className={'wr-filter-btn' + (filterCount > 0 ? ' on' : '')} onClick={() => setFiltersOpen(true)}>
-                ⌖ Filter
-                {filterCount > 0 ? <span className="ct">{filterCount}</span> : null}
-              </button>
-            </div>
-
             <div className="wr-list">
               <div className="wr-row thead">
-                <span className="wr-col-num">№</span>
-                <span>Specimen</span>
-                <span>Age</span>
-                <span>MC</span>
-                <span className="wr-col-liq">Liq</span>
-                <span className="wr-col-vol">Vol</span>
-                <span className="wr-col-holders">Vibe</span>
-                <span className="wr-col-curve">Curve</span>
-                <span style={{textAlign:'right'}}>Action</span>
+                <span className="wr-col-num">№</span><span>Specimen</span><span>Age</span><span>Mcap</span>
+                <span className="wr-col-liq">Liq</span><span className="wr-col-vol">Vol</span>
+                <span className="wr-col-holders">Read</span><span className="wr-col-curve">Curve</span><span style={{textAlign:'right'}}>Action</span>
               </div>
-              {filtered.length === 0 ? (
-                <div className="wr-empty">
-                  <span className="glyph">∅</span>
-                  {recentLoading ? <><b>Checking the lens.</b><div className="sub">New entries arrive every few seconds.</div></>
-                    : recentError ? <><b>The radar is dark.</b><div className="sub">Retrying automatically.</div><div className="err">{recentError}</div></>
-                    : <><b>Nothing in view at these settings.</b><div className="sub">Loosen min liquidity or turn off Wild only.</div></>}
-                </div>
-              ) : filtered.map((t) => {
-                const seen = seenMintsRef.current.get(t.mint);
-                const ageMsLive = t.pairCreatedAtMs ? Date.now() - t.pairCreatedAtMs : 0;
+              {feedError ? (
+                <div className="wr-empty"><span className="glyph">⊘</span><b>The feed went quiet</b><div className="sub">Couldn't reach the launch radar. Retrying automatically.</div><div className="err">{feedError}</div></div>
+              ) : filtered.length === 0 ? (
+                <div className="wr-empty"><span className="glyph">∅</span><b>{tokens.length === 0 ? 'Scanning for launches…' : 'Nothing matches your filters'}</b><div className="sub">{tokens.length === 0 ? 'Fresh specimens will develop here as they appear.' : 'Loosen the filters to see more of the field.'}</div></div>
+              ) : filtered.map((t, i) => {
+                const ageMs = t.pairCreatedAtMs ? Date.now() - t.pairCreatedAtMs : NaN;
+                const isFresh = Number.isFinite(ageMs) && ageMs < 15000;
                 return (
                   <SpecimenRow
                     key={t.mint}
                     token={t}
-                    ageMsLive={ageMsLive}
+                    ageMsLive={ageMs}
                     owned={balances[t.mint]}
-                    quickAmount={quickAmount}
+                    quickAmount={quickAmt}
                     busy={busyMint === t.mint}
                     onApe={onApe}
-                    onOpen={(tok) => setTradeOpen({ token: tok, mode: 'buy' })}
-                    isFresh={newlyArrived.has(t.mint)}
-                    specimenNo={seen ? seen.specimenNo : 0}
+                    onOpen={(tok) => { setSheetMode('buy'); setSheetToken(tok); }}
+                    isFresh={isFresh}
+                    specimenNo={filtered.length - i}
                   />
                 );
               })}
             </div>
-
             <div className="wr-list-foot">
-              <span className={'live' + (recentError ? ' warn' : '')}>
-                <span className="d" />{recentLoading ? 'Syncing…' : recentError ? 'Feed offline' : 'Updating · top to bottom'}
-              </span>
-              <span>{filtered.length} specimens · refreshing every 2.5s</span>
+              <span className={'live' + (feedError ? ' warn' : '')}><span className="d" />{feedError ? 'Reconnecting' : 'Live · updates every 2.5s'}</span>
+              <span>{filtered.length} specimens tracked</span>
             </div>
           </div>
 
           <div className="wr-proof">
-            <span className="e"><span className="d" />Activity right now</span>
-            <span className="wr-proof-div" />
-            <span className="wr-proof-stat"><span className="v">{stats.fresh}<span className="it"> fresh</span></span><span className="k">in &lt;60s</span></span>
-            <span className="wr-proof-div" />
-            <span className="wr-proof-stat"><span className="v">{stats.trending}</span><span className="k">trending</span></span>
-            <span className="wr-proof-div" />
-            <span className="wr-proof-stat"><span className="v">{formatMoney(stats.totalVol)}</span><span className="k">volume tracked</span></span>
-            {stats.topMover && (<><span className="wr-proof-div" /><span className="wr-proof-stat"><span className="v">{stats.topMover.sym}</span><span className="k">top mover</span><span className={'m' + (stats.topMover.change < 0 ? ' dn' : '')}>{formatPct(stats.topMover.change)}</span></span></>)}
+            <span className="e"><span className="d" /> Field readout</span>
+            <div className="wr-proof-div" />
+            <div className="wr-proof-stat"><span className="v">{stats.live}</span><span className="k">live now</span></div>
+            <div className="wr-proof-div" />
+            <div className="wr-proof-stat"><span className="v">{formatMoney(stats.avgLiq)}</span><span className="k">avg liquidity</span></div>
+            <div className="wr-proof-div" />
+            <div className="wr-proof-stat"><span className="v">{Number.isFinite(stats.freshest) ? fmtAgeShort(stats.freshest) : '—'}</span><span className="k">freshest catch</span></div>
           </div>
         </div>
       </div>
 
-      {presetsOpen ? <PresetsModal buyPresets={buyPresets} setBuyPresets={setBuyPresets} sellPresets={sellPresets} setSellPresets={setSellPresets} onClose={()=>setPresetsOpen(false)} /> : null}
-      {walletOpen ? <WalletDrawer wallet={wallet} solBalance={solBalance} solPrice={solPrice} onWithdraw={onWithdraw} busy={withdrawing} onClose={()=>setWalletOpen(false)} /> : null}
-      {tradeOpen ? <TradeSheet token={tradeOpen.token} initialMode={tradeOpen.mode} onClose={()=>setTradeOpen(null)} onConfirm={onSheetConfirm}
-        buyPresets={buyPresets} sellPresets={sellPresets} solBalance={solBalance} tokenBalance={balances[tradeOpen.token.mint]} solPrice={solPrice} /> : null}
-      {filtersOpen ? <FiltersModal wildOnly={filterWild} setWildOnly={setFilterWild} minLiq={minLiq} setMinLiq={setMinLiq} onClose={() => setFiltersOpen(false)} /> : null}
-
-      <StatsPanel open={statsOpen} onClose={() => setStatsOpen(false)} wallet={wallet} mainWalletPubkey={mainWalletPubkey} solPrice={solPrice} />
-      <AutoPanel open={autoOpen} onClose={() => setAutoOpen(false)} autoState={auto} />
+      {sheetToken && (
+        <TradeSheet
+          token={sheetToken}
+          initialMode={sheetMode}
+          onClose={() => setSheetToken(null)}
+          onConfirm={onSheetConfirm}
+          buyPresets={buyPresets}
+          sellPresets={sellPresets}
+          solBalance={solBalance}
+          tokenBalance={sheetTokenBalance}
+          solPrice={solPrice}
+        />
+      )}
+      {showWallet && (
+        <WalletDrawer wallet={wallet} solBalance={solBalance} solPrice={solPrice} onWithdraw={onWithdraw} onClose={() => setShowWallet(false)} busy={withdrawBusy} />
+      )}
+      {showPresets && (
+        <PresetsModal buyPresets={buyPresets} setBuyPresets={setBuyPresets} sellPresets={sellPresets} setSellPresets={setSellPresets} onClose={() => setShowPresets(false)} />
+      )}
+      {showFilters && (
+        <FiltersModal wildOnly={wildOnly} setWildOnly={setWildOnly} minLiq={minLiq} setMinLiq={setMinLiq} onClose={() => setShowFilters(false)} />
+      )}
+      <StatsPanel open={showStats} onClose={() => setShowStats(false)} wallet={wallet} mainWalletPubkey={mainWalletPubkey} solPrice={solPrice} />
+      <AutoPanel open={showAuto} onClose={() => setShowAuto(false)} autoState={autoState} />
 
       <div className="wr-toasts">
         {toasts.map(t => (
           <div key={t.id} className={'wr-toast ' + t.kind}>
             <span className="em">{t.emoji}</span>
             <div className="tb">{t.body}</div>
-            <div className="ta">
-              {t.solscan ? <a className="wr-taction" href={t.solscan} target="_blank" rel="noreferrer">VIEW</a> : null}
-              {t.tweetText ? <button className="wr-taction tw" onClick={()=>openTwitterShare(t.tweetText, t.shareUrl)}>
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>SHARE
-              </button> : null}
-            </div>
+            {t.actions && (
+              <div className="ta">
+                {t.actions.map((a, i) => a.href
+                  ? <a key={i} className="wr-taction" href={a.href} target="_blank" rel="noopener noreferrer">{a.label}</a>
+                  : <button key={i} className={'wr-taction' + (a.tw ? ' tw' : '')} onClick={() => { a.onClick && a.onClick(); dismissToast(t.id); }}>{a.tw ? <IconX /> : null}{a.label}</button>
+                )}
+              </div>
+            )}
           </div>
         ))}
       </div>
 
-      {confettiKey > 0 && (
-        <div className="wr-confetti" key={confettiKey}>
-          {confettiPieces.map(p => <div key={p.i} className="wr-cpiece" style={{ background: p.color, animationDelay: p.delay+'s', '--dx': p.dx+'px', '--dy': p.dy+'px', '--dr': p.dr+'deg' }} />)}
+      {confetti && (
+        <div className="wr-confetti">
+          {Array.from({ length: 40 }).map((_, i) => {
+            const colors = ['#FF3D8A', '#3DFFC2', '#6BEEFF', '#FFD86B', '#C9B8FF'];
+            const dx = (Math.random() - 0.5) * 600;
+            const dr = (Math.random() * 2 - 1) * 1080;
+            const delay = Math.random() * 0.15;
+            return <span key={i} className="wr-cpiece" style={{ background: colors[i % colors.length], '--dx': dx + 'px', '--dr': dr + 'deg', left: (40 + Math.random() * 20) + '%', animationDelay: delay + 's' }} />;
+          })}
         </div>
       )}
     </div>
