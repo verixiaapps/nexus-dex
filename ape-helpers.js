@@ -1,7 +1,7 @@
 // ape-helpers.js — React-free logic extracted from Ape.jsx to thin out the
 // big component. Pure functions, formatters, the vibe-check, trade-param
 // builders, share intents, RPC connection layer, and the pump route fetch.
-// 
+//  
 // Place this next to Ape.jsx and import what you need:
 //
 //   import {
