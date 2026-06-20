@@ -1183,27 +1183,6 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
       </div>
 
       <div className="mw-phone">
-        <div className="mw-topbar">
-          <div className="mw-brand" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
-            <div className="mw-brand-dot" />
-            <span className="mw-brand-text">wonderland<span className="mw-slash">//</span><span style={{ background: 'linear-gradient(90deg,#FF8FBE,#B794F6,#7FFFD4)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>explore</span></span>
-          </div>
-          <div className="mw-topbar-right">
-            <button
-              type="button"
-              className={'mw-wallet-btn' + (wallet.publicKey ? ' mw-connected' : '')}
-              onClick={() => {
-                if (wallet.publicKey && wallet.disconnect) wallet.disconnect();
-                else if (onConnectWallet) onConnectWallet();
-                else if (wallet.connect) wallet.connect().catch(() => {});
-              }}
-            >
-              {wallet.publicKey
-                ? <><span className="mw-wallet-dot" />{wallet.publicKey.toBase58().slice(0,4)}…{wallet.publicKey.toBase58().slice(-4)}</>
-                : 'Connect Wallet'}
-            </button>
-          </div>
-        </div>
 
         <div className="mw-hero">
           <h1>
