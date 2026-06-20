@@ -2547,7 +2547,6 @@ export default function Ape({ mainWalletPubkey } = {}) {
     } catch (e) {}
   }, [wallet.publicKey]);
 
-  /* ---- THE BUY/SELL HOT PATH ---- */
   const executeSwap = useCallback(
   ({ mode, swapParams, token }) =>
     apeExecuteSwap({
@@ -2560,7 +2559,6 @@ export default function Ape({ mainWalletPubkey } = {}) {
     }),
   [wallet.keypair, wallet.publicKey, tradeConnection, walletStr, solPrice]
 );
-
 
     // ALT lookup + route build run on the trade connection.
     const route = await getPumpRoute({
