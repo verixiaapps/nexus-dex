@@ -1,7 +1,7 @@
 /** 
  * NEXUS DEX — CrossChainSwap.jsx
  * Chainflip native, two-tx atomic, fee in SOL.
- *  
+ *   
  * SOLANA-SIDE
  *   • RPC: same-origin server proxy at /api/solana-rpc — the Alchemy key
  *     stays server-side and never reaches the browser bundle.
