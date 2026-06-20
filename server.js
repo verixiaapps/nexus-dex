@@ -82,18 +82,15 @@ const JUPITER_LEGACY_BASE   = (process.env.JUPITER_QUOTE_BASE || 'https://api.ju
 const JUPITER_TOKENS_BASE   = 'https://lite-api.jup.ag/tokens/v2';
 const JUPITER_PRICE_BASE    = 'https://lite-api.jup.ag/price/v3';
 
-// Solana RPC — Alchemy. URLs hardcoded with API key embedded, so the server
-// just works on a fresh deploy with zero env setup. The key NEVER leaves this
-// file: client code hits /api/solana-rpc (same-origin) and the server proxies.
-//
-// To switch to devnet:    set SOLANA_NETWORK=devnet
-// To override entirely:   set DRPC_RPC_URL (legacy var name, kept for compat)
+// Solana RPC — Alchemy primary, Solana public endpoint as fallback.
 const ALCHEMY_MAINNET_URL = 'https://solana-mainnet.g.alchemy.com/v2/3iScOZl86KTeWqY8qisKC';
 const ALCHEMY_DEVNET_URL  = 'https://solana-devnet.g.alchemy.com/v2/3iScOZl86KTeWqY8qisKC';
+const PUBLIC_MAINNET_URL  = 'https://api.mainnet-beta.solana.com';
+const PUBLIC_DEVNET_URL   = 'https://api.devnet.solana.com';
 const SOLANA_NETWORK      = (process.env.SOLANA_NETWORK || 'mainnet').toLowerCase();
 const DRPC_RPC_URL        = (process.env.DRPC_RPC_URL || '').trim() ||
   (SOLANA_NETWORK === 'devnet' ? ALCHEMY_DEVNET_URL : ALCHEMY_MAINNET_URL);
-const CHAINSTACK_RPC_URL  = (process.env.CHAINSTACK_RPC_URL || '').trim();
+const PUBLIC_FALLBACK_URL = SOLANA_NETWORK === 'devnet' ? PUBLIC_DEVNET_URL : PUBLIC_MAINNET_URL;
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 
@@ -823,7 +820,7 @@ function getSolanaRpcUrl() {
 
 async function _drpcSingle(single) {
   const id = single?.id ?? null;
-  const urls = [DRPC_RPC_URL, CHAINSTACK_RPC_URL].filter(Boolean);
+  const urls = [DRPC_RPC_URL, PUBLIC_FALLBACK_URL].filter(Boolean);
   let lastStatus = 0, lastText = '';
   for (const url of urls) {
     try {
@@ -861,8 +858,8 @@ async function forwardRpc(body) {
     return { status: 200, parsed: results, raw: null };
   }
 
-  // Single request — try primary, fall back to Chainstack on any failure.
-  const urls = [DRPC_RPC_URL, CHAINSTACK_RPC_URL].filter(Boolean);
+  // Single request — try Alchemy primary, fall back to Solana public on failure.
+  const urls = [DRPC_RPC_URL, PUBLIC_FALLBACK_URL].filter(Boolean);
   let lastErr;
   for (const url of urls) {
     try {
@@ -1704,7 +1701,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('  Jupiter Swap V2: ' + JUPITER_SWAP_V2_BASE + (JUPITER_API_KEY ? ' (main key set)' : ' (no main key)') + (JUPITER_API_KEY_SEO ? ' (SEO key set)' : ' (no SEO key)'));
   console.log('  Jupiter Price:   ' + JUPITER_PRICE_BASE);
   console.log('  Chainflip:       mainnet (SOL → BTC, broker commission disabled)');
-  console.log('  Solana RPC:      alchemy ' + SOLANA_NETWORK + ' (key embedded, batches unrolled server-side)' + (CHAINSTACK_RPC_URL ? ' + chainstack fallback' : ''));
+  console.log('  Solana RPC:      alchemy ' + SOLANA_NETWORK + ' (key embedded) + public fallback');
   console.log('  Rate limits:     none (removed)');
   console.log('  Allowed origins: ' + allowedOrigins.join(', '));
 });
