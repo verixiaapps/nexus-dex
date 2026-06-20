@@ -350,6 +350,7 @@ secure crypto trading
 security scanner crypto
 self custody crypto
 shiba inu exchange
+smart contract checker
 smart contract scanner
 smart contract trading
 smart money tracker
