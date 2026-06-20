@@ -1683,6 +1683,17 @@ app.get('/api/debug/wallet/:wallet', async (req, res) => {
  * ===================================================================== */
 require('./referrals')(app, { rpcUrl: PRIMARY_RPC_URL });
 
+/* ========================================================================
+ * Ape (burner page) — dedicated Pump.fun trade route   [ADDED SECTION]
+ *
+ * Mounts POST /api/ape/pump-trade via ape-pump-trade.js, using the same
+ * require(...)-style call as ./referrals above. Must sit AFTER the
+ * middleware and referrals mount, and BEFORE the /api/* 404 catch-all
+ * below, or the catch-all would swallow it. Nothing else in this file is
+ * changed by this section.
+ * ===================================================================== */
+require('./ape-pump-trade').mountRoutes(app);
+
 app.all('/api/*', (req, res) => res.status(404).json({ error: 'API route not found: ' + req.path }));
 
 /* ========================================================================
