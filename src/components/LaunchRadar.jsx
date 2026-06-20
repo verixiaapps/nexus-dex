@@ -1,7 +1,14 @@
 // LaunchRadar.jsx — Solana new launches + per-card BUY/SELL modal trade flow.
-//   
-// TRADE PATH: /api/pumpfun/trade (your existing pumpfun-trade.js).
-// Pump.fun bonding curve only. One signature per trade. Atomic 3% SOL fee.
+//
+// TRADE PATH:
+//   • BUILD : /api/pumpfun/trade (your existing pumpfun-trade.js) returns a
+//             built v0 tx. Pump.fun bonding curve only.
+//   • SUBMIT: the signed buy/sell tx is sent through /api/trade-rpc — Alchemy
+//             primary, Ankr fallback. This is the ONLY path in the file that
+//             uses the Ankr fallback (via `tradeConnection`). Everything else
+//             (balances, SOL price, feed) uses /api/solana-rpc (Alchemy only)
+//             via `connection`.
+//   One signature per trade. Atomic 3% SOL fee.
 //
 //   BUY  : user enters X SOL. 0.97 * X → pump curve (server builds the ix
 //          set with this as the trade amount); SystemProgram.transfer of
@@ -30,7 +37,7 @@ import {
 import { useWallet } from '@solana/wallet-adapter-react';
 
 const LR_CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap');
 .lr-root{
   --ink:#1A1B4E; --ink-2:rgba(26,27,78,0.7); --ink-3:rgba(26,27,78,0.45);
   --pink:#FF8FBE; --mint:#7FFFD4; --lav:#B794F6; --peach:#FFB088;
@@ -386,12 +393,21 @@ const DEFAULT_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
 const DEFAULT_SELL_PRESETS = [25, 50, 100];
 
 // ── RPC ──────────────────────────────────────────────────────────────
-// Same-origin server proxy → Alchemy mainnet. The server (server.js)
-// holds the Alchemy API key and forwards via /api/solana-rpc. All
-// Connection instances in this file route through the proxy.
+// /api/solana-rpc — Alchemy mainnet only. Used for everything EXCEPT the
+// buy/sell submit path: balances, SOL price, the launch feed. The server
+// (server.js) holds the Alchemy API key and forwards.
 const RPC_URL = (typeof window !== 'undefined' && window.location)
   ? window.location.origin + '/api/solana-rpc'
   : 'http://localhost:3001/api/solana-rpc';
+
+// /api/trade-rpc — Alchemy primary, Ankr fallback. Used ONLY by the buy/sell
+// critical path inside executeSwap (ALT lookup, getLatestBlockhash,
+// simulateTransaction, sendRawTransaction, getSignatureStatus, getBlockHeight).
+// This is the only place in the file that exercises the Ankr fallback.
+const TRADE_RPC_URL = (typeof window !== 'undefined' && window.location)
+  ? window.location.origin + '/api/trade-rpc'
+  : 'http://localhost:3001/api/trade-rpc';
+
 const BAL_COMMITMENT = 'processed';
 
 
@@ -400,6 +416,15 @@ const getConn = (commitment, url = RPC_URL) => {
   const key = url + '|' + commitment;
   let c = _connCache.get(key);
   if (!c) { c = new Connection(url, commitment); _connCache.set(key, c); }
+  return c;
+};
+
+// Trade-path connection — /api/trade-rpc (Alchemy primary, Ankr fallback).
+// Separate cache so it never collides with the general-purpose connection.
+const _tradeConnCache = new Map();
+const getTradeConn = (commitment) => {
+  let c = _tradeConnCache.get(commitment);
+  if (!c) { c = new Connection(TRADE_RPC_URL, commitment); _tradeConnCache.set(commitment, c); }
   return c;
 };
 
@@ -535,7 +560,7 @@ function describeSimLogs(logs, fallbackMsg) {
    PUMP.FUN TRADE via PumpPortal — server returns a built v0 tx as
    base64. Client decompiles it (fetching any address-lookup tables),
    splices in the 3% SOL fee, recompiles with a fresh blockhash, signs,
-   sends.
+   sends. The ALT lookup here runs on the trade connection (passed in).
    ════════════════════════════════════════════════════════════════════ */
 async function decodeBuiltTx(b64, connection) {
   const txBytes = Buffer.from(b64, 'base64');
@@ -1194,7 +1219,12 @@ function LaunchCard({ token, owned, onBuy, onSell, isFresh, tintIndex = 0 }) {
 export default function LaunchRadar({ onConnectWallet } = {}) {
   useLrCSS();
   const wallet = useWallet();
+  // General-purpose connection — /api/solana-rpc (Alchemy only). Balances,
+  // SOL price, the launch feed.
   const connection = useMemo(() => getConn('confirmed'), []);
+  // Trade-path connection — /api/trade-rpc (Alchemy primary, Ankr fallback).
+  // Used ONLY by executeSwap. This is the only Ankr-fallback path in the file.
+  const tradeConnection = useMemo(() => getTradeConn('confirmed'), []);
 
   const { buyPresets, setBuyPresets, sellPresets, setSellPresets } = usePresets();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1384,9 +1414,11 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
   }, [confettiKey]);
 
   /* ════════════════════════════════════════════════════════════════
-     executeSwap — PumpPortal pump.fun/PumpSwap. Flow:
+     executeSwap — PumpPortal pump.fun/PumpSwap. The submit path runs on
+     `tradeConnection` (/api/trade-rpc, Alchemy primary + Ankr fallback):
        1. POST /api/pumpfun/trade → built v0 tx (base64) including
-          PumpPortal's own compute-budget priority fee.
+          PumpPortal's own compute-budget priority fee. The ALT lookup
+          inside decodeBuiltTx uses tradeConnection.
        2. decodeBuiltTx: deserialize, fetch any ALTs, decompile to a
           flat instruction list.
        3. Build the 3% SOL fee transfer:
@@ -1402,6 +1434,8 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
           on-chain reason and Phantom never opens.
        7. Sign once, send skipPreflight, rebroadcast until confirmed
           or blockhash expires.
+     All RPC in this function uses tradeConnection so the Ankr fallback
+     covers the entire buy/sell critical path.
      ════════════════════════════════════════════════════════════════ */
   const executeSwap = useCallback(async ({ mode, swapParams, token }) => {
     if (!wallet.publicKey || !wallet.signTransaction) {
@@ -1412,14 +1446,15 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     const isBuy  = mode === 'buy';
     const userPk = wallet.publicKey;
 
-    // 1. PumpPortal builds the tx; we decompile it locally.
+    // 1. PumpPortal builds the tx; we decompile it locally. ALT lookup runs
+    //    on the trade connection.
     const route = await getPumpRoute({
       action: isBuy ? 'buy' : 'sell',
       mint:   token.mint,
       user:   userPk,
       amount: isBuy ? swapParams.tradeLamports : swapParams.tradeTokens,
       decimals: isBuy ? undefined : swapParams.decimals,
-      connection,
+      connection: tradeConnection,
     });
 
     // 2. Build the 3% SOL fee transfer.
@@ -1449,7 +1484,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     }
 
     // 4. Fresh blockhash, recompile with the SAME ALTs PumpPortal used.
-    const latest = await connection.getLatestBlockhash('confirmed');
+    const latest = await tradeConnection.getLatestBlockhash('confirmed');
     const message = new TransactionMessage({
       payerKey:        userPk,
       recentBlockhash: latest.blockhash,
@@ -1462,7 +1497,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     //    without spending a Phantom popup.
     let simLogs = null;
     try {
-      const sim = await connection.simulateTransaction(tx, {
+      const sim = await tradeConnection.simulateTransaction(tx, {
         sigVerify: false,
         replaceRecentBlockhash: true,
         commitment: 'processed',
@@ -1489,14 +1524,14 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     // 7. Send.
     let sig;
     try {
-      sig = await connection.sendRawTransaction(raw, {
+      sig = await tradeConnection.sendRawTransaction(raw, {
         skipPreflight: true,
         maxRetries:    5,
       });
     } catch (sendErr) {
       let logs = sendErr?.logs || null;
       if (!logs && typeof sendErr?.getLogs === 'function') {
-        try { logs = await sendErr.getLogs(connection); } catch {}
+        try { logs = await sendErr.getLogs(tradeConnection); } catch {}
       }
       console.error('[lr-send] rejected:', sendErr?.message, logs ? '\n' + logs.join('\n') : '');
       throw new Error(describeSimLogs(logs, sendErr?.message));
@@ -1508,16 +1543,16 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     const HARD_CAP_MS = 60_000;
     while (Date.now() - startedAt < HARD_CAP_MS) {
       try {
-        const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+        const st = await tradeConnection.getSignatureStatus(sig, { searchTransactionHistory: true });
         if (st?.value?.err) { onchainErr = st.value.err; break; }
         const cs = st?.value?.confirmationStatus;
         if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
       } catch {}
       try {
-        const h = await connection.getBlockHeight('confirmed');
+        const h = await tradeConnection.getBlockHeight('confirmed');
         if (h > latest.lastValidBlockHeight) break;
       } catch {}
-      try { await connection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }); } catch {}
+      try { await tradeConnection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }); } catch {}
       await new Promise(r => setTimeout(r, 2000));
     }
     if (onchainErr) {
@@ -1526,7 +1561,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     }
 
     return { sig, confirmed, mode, token, route: route.route };
-  }, [wallet, connection]);
+  }, [wallet, connection, tradeConnection]);
 
   /* ──── card actions ──── */
   const onCardBuy = useCallback((token) => {
