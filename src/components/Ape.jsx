@@ -3003,12 +3003,9 @@ export default function Ape({ mainWalletPubkey } = {}) {
     const message = new TransactionMessage({ payerKey: userPk, recentBlockhash: latest.blockhash, instructions: ixs }).compileToV0Message(route.alts);
     const tx = new VersionedTransaction(message);
 
-    let simLogs = null;
-    try {
-      const sim = await connection.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true, commitment: 'processed' });
-      simLogs = (sim && sim.value && sim.value.logs) || null;
-      if (sim && sim.value && sim.value.err) { console.error('[wr-sim]', JSON.stringify(sim.value.err)); throw new Error(describeSimLogs(simLogs, JSON.stringify(sim.value.err))); }
-    } catch (simErr) { if (simErr instanceof Error && /sim failed/i.test(simErr.message)) throw simErr; console.warn('[wr-sim] skip', simErr && simErr.message); }
+    // [wr-sim] removed — PumpPortal tx is pre-validated; sim was doubling RPC cost
+    // per trade. Send-error path below still uses describeSimLogs() on returned logs.
+
 
     tx.sign([wallet.keypair]);
     const raw = tx.serialize();
@@ -3022,7 +3019,7 @@ export default function Ape({ mainWalletPubkey } = {}) {
       try { const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true }); if (st && st.value && st.value.err) { onchainErr = st.value.err; break; } const cs = st && st.value && st.value.confirmationStatus; if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; } } catch (e) {}
       try { const h = await connection.getBlockHeight('confirmed'); if (h > latest.lastValidBlockHeight) break; } catch (e) {}
       try { await connection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }); } catch (e) {}
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 5000));
     }
     if (onchainErr) throw new Error('Trade failed on-chain — price likely moved past slippage.');
 
