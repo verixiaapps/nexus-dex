@@ -514,9 +514,11 @@ async function fetchPortfolio(addressStr) {
     };
   });
 
+  // Show a token only if it has a real price AND is worth at least $1.
+  // No-price tokens are hidden entirely (can't be valued / are dust).
   const filtered = enriched
     .filter(h => h.mint !== SOL_MINT)
-    .filter(h => h.hasPrice ? h.value >= MIN_TOKEN_VALUE_USD : (h.uiAmount > 0));
+    .filter(h => h.hasPrice && h.value >= MIN_TOKEN_VALUE_USD);
 
   return {
     solBalance:  lamports / 1e9,
