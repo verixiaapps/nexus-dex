@@ -1,6 +1,6 @@
 // pumpfun-trade.js — Pump.fun bonding-curve trade builder for Launch Radar.
 //
-// SCOPE 
+// SCOPE
 //   Pump.fun BONDING CURVE only. Pre-graduation buys/sells via the pump SDK.
 //   Graduated tokens (curve.complete) and non-pump mints are NOT traded here —
 //   they return a clean, explicit rejection (no AMM/Jupiter routing).
@@ -8,7 +8,9 @@
 // WHAT THIS DOES
 //   Builds buy/sell INSTRUCTIONS server-side using @pump-fun/pump-sdk, returns
 //   them to the client as JSON. The client appends the 3% platform-fee
-//   instruction and signs ONE atomic transaction.
+//   instruction and signs ONE atomic transaction, then submits it via
+//   /api/trade-rpc (Alchemy primary, Ankr fallback — the only place Ankr
+//   is used).
 //
 // SLIPPAGE
 //   10% on both buys and sells. The client's BUY math sizes the trade portion
@@ -18,18 +20,18 @@
 //   LaunchRadar.jsx's swapParams BUY branch.
 //
 // RPC
-//   Alchemy URLs hardcoded (matches server.js). Defaults to mainnet. To
-//   override: set DRPC_RPC_URL (legacy var name, kept for compat). To switch
-//   to devnet: set SOLANA_NETWORK=devnet. Variable name retained as
-//   DRPC_RPC_URL throughout to avoid breaking other modules.
+//   Reads from the same env vars as server.js:
+//     SOLANA_NETWORK=mainnet (default) → ALCHEMY_RPC_URL
+//     SOLANA_NETWORK=devnet           → DEVNET_RPC_URL
+//   No fallback at this layer (state reads only). Ankr fallback applies
+//   exclusively at /api/trade-rpc for the actual signed-tx submission.
 //
 // CACHING
 //   fetchGlobal() and fetchFeeConfig() are cached process-wide for 60s.
 //   These are the heaviest calls in the trade flow (each does several
 //   getAccountInfo RPCs internally) and the underlying accounts almost
 //   never change between blocks. This cuts per-trade RPC pressure by
-//   roughly half and is the main reason a single trade no longer
-//   triggers 429s on the free Alchemy tier.
+//   roughly half.
 //
 // DEPENDENCIES
 //     npm install @pump-fun/pump-sdk @coral-xyz/anchor bn.js @solana/web3.js
@@ -65,23 +67,24 @@ function callMath(fn, { global, feeConfig, mintSupply, bondingCurve, amount }) {
 }
 
 // ── Solana RPC URL resolution ─────────────────────────────────────────────
-// Trade hot path. Resolution order:
-//   1) TRADE_RPC_URL  — dedicated trade RPC (Ankr). Recommended.
-//   2) DRPC_RPC_URL   — general override (legacy name, kept for compat).
-//   3) Hardcoded Alchemy mainnet/devnet by SOLANA_NETWORK.
-// Set TRADE_RPC_URL in Railway to your Ankr endpoint so pump-sdk fetches
-// (fetchBuyState / fetchSellState / fetchGlobal) hit Ankr instead of the
-// shared Alchemy quota used by background reads.
-const _ALCHEMY_MAINNET = 'https://solana-mainnet.g.alchemy.com/v2/3iScOZl86KTeWqY8qisKC';
-const _ALCHEMY_DEVNET  = 'https://solana-devnet.g.alchemy.com/v2/3iScOZl86KTeWqY8qisKC';
+// Two env vars only:
+//   ALCHEMY_RPC_URL — used when SOLANA_NETWORK=mainnet (default).
+//   DEVNET_RPC_URL  — used when SOLANA_NETWORK=devnet.
+// No fallback chain here. The buy/sell Ankr fallback lives at
+// /api/trade-rpc in server.js, which is where the signed transaction
+// actually gets submitted.
+const SOLANA_NETWORK = (process.env.SOLANA_NETWORK || 'mainnet').toLowerCase();
 
 function getRpcUrl() {
-  const trade = (process.env.TRADE_RPC_URL || '').trim();
-  if (trade) return trade;
-  const override = (process.env.DRPC_RPC_URL || '').trim();
-  if (override) return override;
-  const net = (process.env.SOLANA_NETWORK || 'mainnet').toLowerCase();
-  return net === 'devnet' ? _ALCHEMY_DEVNET : _ALCHEMY_MAINNET;
+  const url = SOLANA_NETWORK === 'devnet'
+    ? (process.env.DEVNET_RPC_URL  || '').trim()
+    : (process.env.ALCHEMY_RPC_URL || '').trim();
+  if (!url) {
+    throw new Error(SOLANA_NETWORK === 'devnet'
+      ? 'pumpfun-trade: DEVNET_RPC_URL is not set'
+      : 'pumpfun-trade: ALCHEMY_RPC_URL is not set');
+  }
+  return url;
 }
 
 // Cached instances for the process.
@@ -115,8 +118,7 @@ function getOffline() {
 // ── Cache for pump globals ────────────────────────────────────────────────
 // fetchGlobal() and fetchFeeConfig() each do several RPC calls internally
 // and return data that almost never changes between blocks. Caching them
-// for 60s drops per-trade RPC pressure significantly — the main lever
-// that gets a single trade under the free-tier rate ceiling.
+// for 60s drops per-trade RPC pressure significantly.
 const PUMP_GLOBAL_TTL_MS = 60_000;
 let _globalCache    = { value: null, ts: 0 };
 let _feeConfigCache = { value: null, ts: 0 };
