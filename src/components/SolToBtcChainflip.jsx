@@ -1,7 +1,7 @@
 /**
  * NEXUS · SolToBtcChainflip.jsx
  * SOL → Native BTC via Chainflip (single-signature, two-tx atomic flow).
- *
+ * 
  * Same Wonderland-lite identity as SolToBtc.jsx.
  *
  * Chainflip flow:
