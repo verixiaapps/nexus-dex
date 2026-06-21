@@ -37,8 +37,6 @@ const CSP_DIRECTIVES = [
   ['connect-src',     [
     "'self'",
     'https://api.jup.ag', 'https://lite-api.jup.ag', 'https://quote-api.jup.ag', 'https://token.jup.ag',
-    // Solana RPC — client only talks to /api/solana-rpc and /api/trade-rpc
-    // (same-origin), so upstream RPC hosts do NOT need to be in connect-src.
     'https://explorer-api.walletconnect.com',
     'https://*.walletconnect.com', 'https://*.walletconnect.org',
     'wss://relay.walletconnect.com', 'wss://relay.walletconnect.org',
@@ -83,21 +81,11 @@ const JUPITER_LEGACY_BASE   = (process.env.JUPITER_QUOTE_BASE || 'https://api.ju
 const JUPITER_TOKENS_BASE   = 'https://lite-api.jup.ag/tokens/v2';
 const JUPITER_PRICE_BASE    = 'https://lite-api.jup.ag/price/v3';
 
-/* ------------------------------------------------------------------------
- * Solana RPC configuration — three env vars, full URL + key in each.
- *
- * ALCHEMY_RPC_URL — mainnet primary. Used for EVERYTHING on mainnet.
- * ANKR_RPC_URL    — mainnet fallback. Used ONLY on the buy/sell trade
- *                   path (/api/trade-rpc), after Alchemy fails.
- * DEVNET_RPC_URL  — devnet RPC. Used for everything when
- *                   SOLANA_NETWORK=devnet. No fallback on devnet.
- * ---------------------------------------------------------------------- */
 const SOLANA_NETWORK   = (process.env.SOLANA_NETWORK || 'mainnet').toLowerCase();
 const ALCHEMY_RPC_URL  = (process.env.ALCHEMY_RPC_URL || '').trim();
 const ANKR_RPC_URL     = (process.env.ANKR_RPC_URL    || '').trim();
 const DEVNET_RPC_URL   = (process.env.DEVNET_RPC_URL  || '').trim();
 
-// Active primary RPC for the current network.
 const PRIMARY_RPC_URL  = SOLANA_NETWORK === 'devnet' ? DEVNET_RPC_URL : ALCHEMY_RPC_URL;
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
@@ -819,7 +807,7 @@ app.get('/api/whale-events', async (req, res) => {
 });
 
 /* ========================================================================
- * Solana RPC — General path (everything except buy/sell trade execution)
+ * Solana RPC — General path
  * ===================================================================== */
 const RPC_TIMEOUT_MS = 10_000;
 
@@ -1696,31 +1684,20 @@ app.get('/embed/config.js', (req, res) => {
  * Static SPA + SEO slug pages
  *
  * Order matters:
- *   1) express.static serves any matching file from build/ (favicon, JS
- *      bundles, manifest.json, and nested files like
- *      build/<slug>/index.html when accessed with explicit /index.html).
- *   2) Explicit SEO slug handler — for URLs like /amazon-stock-token or
- *      /amazon-stock-token/ (no /index.html), look for
- *      build/<slug>/index.html and serve it directly. This is the
- *      bulletproof fix for slug routing without relying on express.static's
- *      directory-redirect behavior.
- *   3) SPA catch-all — anything not handled above gets the React app.
+ *   1) SEO slug handler FIRST — for /wif-token-swap, /solana-swap, etc.
+ *      Looks for public/<slug>/index.html on disk and serves it directly.
+ *      This must run BEFORE express.static so that the SEO pages win over
+ *      anything in the React build output.
+ *   2) express.static for the React build — JS bundles, manifest, favicon.
+ *   3) express.static for public/ — any other static SEO assets.
+ *   4) SPA catch-all — anything else gets the React DEX app.
  * ===================================================================== */
-app.use(express.static(path.join(__dirname, 'build'), {
-  maxAge: '7d',
-  setHeaders: (res, filePath) => {
-    if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  },
-}));
 
-// Explicit SEO slug handler — matches /slug and /slug/ but not deeper paths.
-// Looks for build/<slug>/index.html on disk; if found, serves it; otherwise
-// falls through to the SPA catch-all below.
+// (1) SEO slug handler — checks public/<slug>/index.html FIRST.
 app.get(/^\/([a-z0-9][a-z0-9-]*)\/?$/i, (req, res, next) => {
   const slug = req.params[0];
-  // Skip obvious non-slug paths so we don't shadow API or static asset names.
   if (!slug || slug.startsWith('api') || slug === 'health' || slug === 'embed') return next();
-  const file = path.join(__dirname, 'build', slug, 'index.html');
+  const file = path.join(__dirname, 'public', slug, 'index.html');
   fs.access(file, fs.constants.R_OK, (err) => {
     if (err) return next();
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -1728,6 +1705,23 @@ app.get(/^\/([a-z0-9][a-z0-9-]*)\/?$/i, (req, res, next) => {
   });
 });
 
+// (2) Static files from the React build (DEX bundles).
+app.use(express.static(path.join(__dirname, 'build'), {
+  maxAge: '7d',
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  },
+}));
+
+// (3) Static files from public/ (SEO assets — images, css, etc.).
+app.use(express.static(path.join(__dirname, 'public'), {
+  maxAge: '7d',
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  },
+}));
+
+// (4) SPA catch-all — DEX React app for any remaining route.
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'build', 'index.html')));
 
 /* ========================================================================
