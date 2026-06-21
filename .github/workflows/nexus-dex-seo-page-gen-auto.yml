@@ -1,283 +1,359 @@
 name: Nexus DEX SEO Page Generator Auto
 
 "on":
- workflow_dispatch:
-   inputs:
-     manual_daily_limit:
-       description: "Pages to generate on this manual run"
-       required: false
-       default: "1000"
-       type: string
-     full_rebuild:
-       description: "Optional manual rebuild of generated /public/ pages only"
-       required: false
-       default: false
-       type: boolean
-     resume_rebuild:
-       description: "Resume an interrupted rebuild instead of starting fresh"
-       required: false
-       default: false
-       type: boolean
-     rebuild_daily_limit:
-       description: "Total pages to rebuild during this manual rebuild run (leave blank to rebuild all remaining pages in one run)"
-       required: false
-       default: ""
-       type: string
-     rebuild_batch_size:
-       description: "How many pages to rebuild per committed batch"
-       required: false
-       default: "50"
-       type: string
+  workflow_dispatch:
+    inputs:
+      manual_daily_limit:
+        description: "Pages to generate on this manual run"
+        required: false
+        default: "1000"
+        type: string
+      full_rebuild:
+        description: "Optional manual rebuild of generated /public/ pages only"
+        required: false
+        default: false
+        type: boolean
+      resume_rebuild:
+        description: "Resume an interrupted rebuild instead of starting fresh"
+        required: false
+        default: false
+        type: boolean
+      abort_rebuild:
+        description: "Abort an in-flight rebuild and restore the pre-rebuild state"
+        required: false
+        default: false
+        type: boolean
+      rebuild_daily_limit:
+        description: "Total pages to rebuild during this manual rebuild run (leave blank to rebuild all remaining pages in one run)"
+        required: false
+        default: ""
+        type: string
+      rebuild_batch_size:
+        description: "How many pages to rebuild per committed batch"
+        required: false
+        default: "50"
+        type: string
 
 permissions:
- contents: write
- actions: write
+  contents: write
+  actions: write
 
 concurrency:
- group: nexus-dex-writer
- cancel-in-progress: false
+  group: nexus-dex-writer
+  cancel-in-progress: false
 
 jobs:
- generate:
-   runs-on: ubuntu-latest
-   timeout-minutes: 350
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
 
-   env:
-     KEYWORDS_FILE: "data/nexus_dex_keywords.txt"
-     GENERATED_KEYWORDS_FILE: "data/nexus_dex_generated_keywords.txt"
-     GENERATED_SLUGS_FILE: "data/nexus_dex_generated_slugs.txt"
-     OUTPUT_DIR: "public"
-     PROTECTED_SLUG: ""
-     REBUILD_KEYWORDS_SOURCE_FILE: "data/rebuild_keywords_source_nexusdex.txt"
-     REBUILD_SLUGS_SOURCE_FILE: "data/rebuild_slugs_source_nexusdex.txt"
-     REBUILD_PROGRESS_FILE: "data/rebuild_progress_nexusdex.txt"
+    env:
+      KEYWORDS_FILE: "data/nexus_dex_keywords.txt"
+      GENERATED_KEYWORDS_FILE: "data/nexus_dex_generated_keywords.txt"
+      GENERATED_SLUGS_FILE: "data/nexus_dex_generated_slugs.txt"
+      OUTPUT_DIR: "public"
+      PROTECTED_SLUG: ""
+      REBUILD_KEYWORDS_SOURCE_FILE: "data/rebuild_keywords_source_nexusdex.txt"
+      REBUILD_SLUGS_SOURCE_FILE: "data/rebuild_slugs_source_nexusdex.txt"
+      REBUILD_PROGRESS_FILE: "data/rebuild_progress_nexusdex.txt"
 
-   steps:
-     - name: Checkout repo
-       uses: actions/checkout@v4
-       with:
-         fetch-depth: 0
-         ref: main
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
 
-     - name: Setup Python
-       uses: actions/setup-python@v5
-       with:
-         python-version: "3.11"
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-     - name: Install dependencies
-       shell: bash
-       run: |
-         set -euo pipefail
-         python -m pip install --upgrade pip
-         if [ -f requirements.txt ]; then
-           pip install -r requirements.txt
-         else
-           pip install openai requests
-         fi
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install openai requests
+          fi
 
-     - name: Configure git
-       shell: bash
-       run: |
-         set -euo pipefail
-         git config user.name "nexus-dex-bot"
-         git config user.email "bot@users.noreply.github.com"
+      - name: Configure git
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "nexus-dex-bot"
+          git config user.email "bot@users.noreply.github.com"
 
-     - name: Sync latest main before build
-       shell: bash
-       run: |
-         set -euo pipefail
-         git fetch origin main
-         git checkout main
-         git reset --hard origin/main
-         git clean -fd
+      - name: Sync latest main before build
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git checkout main
+          git reset --hard origin/main
+          git clean -fd
 
-     - name: Ensure tracking files exist
-       shell: bash
-       run: |
-         set -euo pipefail
-         mkdir -p "$(dirname "$KEYWORDS_FILE")"
-         mkdir -p "$(dirname "$GENERATED_KEYWORDS_FILE")"
-         mkdir -p "$(dirname "$GENERATED_SLUGS_FILE")"
-         mkdir -p "$(dirname "$REBUILD_KEYWORDS_SOURCE_FILE")"
-         mkdir -p "$(dirname "$REBUILD_SLUGS_SOURCE_FILE")"
-         mkdir -p "$(dirname "$REBUILD_PROGRESS_FILE")"
-         mkdir -p "$OUTPUT_DIR"
-         touch "$KEYWORDS_FILE"
-         touch "$GENERATED_KEYWORDS_FILE"
-         touch "$GENERATED_SLUGS_FILE"
+      - name: Ensure tracking files exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$KEYWORDS_FILE")"
+          mkdir -p "$(dirname "$GENERATED_KEYWORDS_FILE")"
+          mkdir -p "$(dirname "$GENERATED_SLUGS_FILE")"
+          mkdir -p "$(dirname "$REBUILD_KEYWORDS_SOURCE_FILE")"
+          mkdir -p "$(dirname "$REBUILD_SLUGS_SOURCE_FILE")"
+          mkdir -p "$(dirname "$REBUILD_PROGRESS_FILE")"
+          mkdir -p "$OUTPUT_DIR"
+          touch "$KEYWORDS_FILE"
+          touch "$GENERATED_KEYWORDS_FILE"
+          touch "$GENERATED_SLUGS_FILE"
 
-     - name: Set effective limits
-       id: limits
-       shell: bash
-       env:
-         EVENT_NAME: ${{ github.event_name }}
-         INPUT_MANUAL_DAILY_LIMIT: ${{ github.event.inputs.manual_daily_limit }}
-         INPUT_FULL_REBUILD: ${{ github.event.inputs.full_rebuild }}
-         INPUT_RESUME_REBUILD: ${{ github.event.inputs.resume_rebuild }}
-         INPUT_REBUILD_DAILY_LIMIT: ${{ github.event.inputs.rebuild_daily_limit }}
-         INPUT_REBUILD_BATCH_SIZE: ${{ github.event.inputs.rebuild_batch_size }}
-       run: |
-         set -euo pipefail
-         FULL_REBUILD="false"
-         RESUME_REBUILD="false"
-         EFFECTIVE_DAILY_LIMIT="1000"
-         REBUILD_BATCH_SIZE="50"
-         REBUILD_ALL_REMAINING="false"
-         if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-           MANUAL_DAILY_LIMIT="${INPUT_MANUAL_DAILY_LIMIT:-}"
-           if [ -n "$MANUAL_DAILY_LIMIT" ]; then
-             EFFECTIVE_DAILY_LIMIT="$MANUAL_DAILY_LIMIT"
-           fi
-           if [ "${INPUT_FULL_REBUILD:-false}" = "true" ]; then
-             FULL_REBUILD="true"
-             if [ "${INPUT_RESUME_REBUILD:-false}" = "true" ]; then
-               RESUME_REBUILD="true"
-             fi
-             if [ -n "${INPUT_REBUILD_BATCH_SIZE:-}" ]; then
-               REBUILD_BATCH_SIZE="$INPUT_REBUILD_BATCH_SIZE"
-             fi
-             REBUILD_DAILY_LIMIT="${INPUT_REBUILD_DAILY_LIMIT:-}"
-             if [ -n "$REBUILD_DAILY_LIMIT" ]; then
-               EFFECTIVE_DAILY_LIMIT="$REBUILD_DAILY_LIMIT"
-             else
-               EFFECTIVE_DAILY_LIMIT="ALL"
-               REBUILD_ALL_REMAINING="true"
-             fi
-           fi
-         fi
-         if [ "$EFFECTIVE_DAILY_LIMIT" != "ALL" ]; then
-           if ! [[ "$EFFECTIVE_DAILY_LIMIT" =~ ^[0-9]+$ ]] || [ "$EFFECTIVE_DAILY_LIMIT" -le 0 ]; then
-             echo "Invalid EFFECTIVE_DAILY_LIMIT: $EFFECTIVE_DAILY_LIMIT"
-             exit 1
-           fi
-         fi
-         if ! [[ "$REBUILD_BATCH_SIZE" =~ ^[0-9]+$ ]] || [ "$REBUILD_BATCH_SIZE" -le 0 ]; then
-           echo "Invalid REBUILD_BATCH_SIZE: $REBUILD_BATCH_SIZE"
-           exit 1
-         fi
-         echo "full_rebuild=$FULL_REBUILD" >> "$GITHUB_OUTPUT"
-         echo "resume_rebuild=$RESUME_REBUILD" >> "$GITHUB_OUTPUT"
-         echo "effective_daily_limit=$EFFECTIVE_DAILY_LIMIT" >> "$GITHUB_OUTPUT"
-         echo "rebuild_batch_size=$REBUILD_BATCH_SIZE" >> "$GITHUB_OUTPUT"
-         echo "rebuild_all_remaining=$REBUILD_ALL_REMAINING" >> "$GITHUB_OUTPUT"
+      - name: Set effective limits
+        id: limits
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_MANUAL_DAILY_LIMIT: ${{ github.event.inputs.manual_daily_limit }}
+          INPUT_FULL_REBUILD: ${{ github.event.inputs.full_rebuild }}
+          INPUT_RESUME_REBUILD: ${{ github.event.inputs.resume_rebuild }}
+          INPUT_ABORT_REBUILD: ${{ github.event.inputs.abort_rebuild }}
+          INPUT_REBUILD_DAILY_LIMIT: ${{ github.event.inputs.rebuild_daily_limit }}
+          INPUT_REBUILD_BATCH_SIZE: ${{ github.event.inputs.rebuild_batch_size }}
+        run: |
+          set -euo pipefail
+          FULL_REBUILD="false"
+          RESUME_REBUILD="false"
+          ABORT_REBUILD="false"
+          EFFECTIVE_DAILY_LIMIT="1000"
+          REBUILD_BATCH_SIZE="50"
+          REBUILD_ALL_REMAINING="false"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            MANUAL_DAILY_LIMIT="${INPUT_MANUAL_DAILY_LIMIT:-}"
+            if [ -n "$MANUAL_DAILY_LIMIT" ]; then
+              EFFECTIVE_DAILY_LIMIT="$MANUAL_DAILY_LIMIT"
+            fi
+            if [ "${INPUT_FULL_REBUILD:-false}" = "true" ]; then
+              FULL_REBUILD="true"
+              if [ "${INPUT_RESUME_REBUILD:-false}" = "true" ]; then
+                RESUME_REBUILD="true"
+              fi
+              if [ "${INPUT_ABORT_REBUILD:-false}" = "true" ]; then
+                ABORT_REBUILD="true"
+              fi
+              if [ -n "${INPUT_REBUILD_BATCH_SIZE:-}" ]; then
+                REBUILD_BATCH_SIZE="$INPUT_REBUILD_BATCH_SIZE"
+              fi
+              REBUILD_DAILY_LIMIT="${INPUT_REBUILD_DAILY_LIMIT:-}"
+              if [ -n "$REBUILD_DAILY_LIMIT" ]; then
+                EFFECTIVE_DAILY_LIMIT="$REBUILD_DAILY_LIMIT"
+              else
+                EFFECTIVE_DAILY_LIMIT="ALL"
+                REBUILD_ALL_REMAINING="true"
+              fi
+            fi
+          fi
+          if [ "$EFFECTIVE_DAILY_LIMIT" != "ALL" ]; then
+            if ! [[ "$EFFECTIVE_DAILY_LIMIT" =~ ^[0-9]+$ ]] || [ "$EFFECTIVE_DAILY_LIMIT" -le 0 ]; then
+              echo "Invalid EFFECTIVE_DAILY_LIMIT: $EFFECTIVE_DAILY_LIMIT"
+              exit 1
+            fi
+          fi
+          if ! [[ "$REBUILD_BATCH_SIZE" =~ ^[0-9]+$ ]] || [ "$REBUILD_BATCH_SIZE" -le 0 ]; then
+            echo "Invalid REBUILD_BATCH_SIZE: $REBUILD_BATCH_SIZE"
+            exit 1
+          fi
+          echo "full_rebuild=$FULL_REBUILD" >> "$GITHUB_OUTPUT"
+          echo "resume_rebuild=$RESUME_REBUILD" >> "$GITHUB_OUTPUT"
+          echo "abort_rebuild=$ABORT_REBUILD" >> "$GITHUB_OUTPUT"
+          echo "effective_daily_limit=$EFFECTIVE_DAILY_LIMIT" >> "$GITHUB_OUTPUT"
+          echo "rebuild_batch_size=$REBUILD_BATCH_SIZE" >> "$GITHUB_OUTPUT"
+          echo "rebuild_all_remaining=$REBUILD_ALL_REMAINING" >> "$GITHUB_OUTPUT"
 
-     - name: Standard incremental build
-       if: steps.limits.outputs.full_rebuild != 'true'
-       shell: bash
-       env:
-         DAILY_LIMIT: ${{ steps.limits.outputs.effective_daily_limit }}
-       run: python scripts/build_nexus_dex_seo_incremental.py
+      - name: Standard incremental build
+        if: steps.limits.outputs.full_rebuild != 'true'
+        shell: bash
+        env:
+          DAILY_LIMIT: ${{ steps.limits.outputs.effective_daily_limit }}
+        run: python scripts/build_nexus_dex_seo_incremental.py
 
-     - name: Full rebuild of /public pages
-       if: steps.limits.outputs.full_rebuild == 'true'
-       shell: bash
-       env:
-         DAILY_LIMIT: ${{ steps.limits.outputs.effective_daily_limit }}
-         COMMIT_EVERY: ${{ steps.limits.outputs.rebuild_batch_size }}
-         RESUME: "false"
-         RESET_ENGINE: "true"
-         RESUME_REBUILD: ${{ steps.limits.outputs.resume_rebuild }}
-         PENDING_BACKUP: "data/.nexus_dex_pending_backup.txt"
-       run: |
-         set -euo pipefail
+      - name: Full rebuild of /public pages
+        if: steps.limits.outputs.full_rebuild == 'true'
+        shell: bash
+        env:
+          DAILY_LIMIT: ${{ steps.limits.outputs.effective_daily_limit }}
+          COMMIT_EVERY: ${{ steps.limits.outputs.rebuild_batch_size }}
+          RESUME: "false"
+          RESET_ENGINE: "true"
+          RESUME_REBUILD: ${{ steps.limits.outputs.resume_rebuild }}
+          ABORT_REBUILD: ${{ steps.limits.outputs.abort_rebuild }}
+          PENDING_BACKUP: "data/.nexus_dex_pending_backup.txt"
+          GENERATED_KEYWORDS_BACKUP: "data/.nexus_dex_generated_keywords_backup.txt"
+          GENERATED_SLUGS_BACKUP: "data/.nexus_dex_generated_slugs_backup.txt"
+        run: |
+          set -euo pipefail
 
-         # The incremental script does int(os.getenv("DAILY_LIMIT","100"))
-         # and would crash on "ALL"; translate it to a large finite number.
-         if [ "$DAILY_LIMIT" = "ALL" ]; then
-           export DAILY_LIMIT=1000000
-         fi
+          if [ "$DAILY_LIMIT" = "ALL" ]; then
+            export DAILY_LIMIT=1000000
+          fi
 
-         if [ "$RESUME_REBUILD" = "true" ]; then
-           # Resume: $KEYWORDS_FILE on remote is already the unprocessed
-           # remainder from the previous interrupted run. Do not swap.
-           # The original pending queue (if any) is preserved in
-           # $PENDING_BACKUP from that first run; it will be restored
-           # at the end if this run completes the rebuild.
-           if [ ! -s "$KEYWORDS_FILE" ]; then
-             echo "[rebuild] resume requested but $KEYWORDS_FILE is empty -- nothing to do"
-             exit 0
-           fi
-           echo "[rebuild] RESUME: $(wc -l < "$KEYWORDS_FILE") pages left to rebuild"
-         else
-           # Fresh rebuild. Stash the pending queue to a TRACKED file and
-           # commit it immediately, so an interrupted rebuild can still
-           # recover the original queue on the next run via resume.
-           cp "$KEYWORDS_FILE" "$PENDING_BACKUP"
-           git add "$PENDING_BACKUP"
-           if ! git diff --cached --quiet; then
-             git commit -m "Nexus DEX rebuild: stash pending queue"
-             git push --force-with-lease origin HEAD:main
-           fi
-           cp "$GENERATED_KEYWORDS_FILE" "$KEYWORDS_FILE"
-           echo "[rebuild] FRESH: $(wc -l < "$KEYWORDS_FILE") pages queued for rebuild"
-         fi
+          # ABORT MODE: restore everything from backups and exit. Used to
+          # cleanly cancel a partial / test rebuild without manual git work.
+          if [ "$ABORT_REBUILD" = "true" ]; then
+            echo "[rebuild] ABORT requested -- restoring state from backups"
+            RESTORED_ANY="false"
+            if [ -f "$PENDING_BACKUP" ]; then
+              mv "$PENDING_BACKUP" "$KEYWORDS_FILE"
+              RESTORED_ANY="true"
+              echo "[rebuild]   restored $KEYWORDS_FILE from PENDING_BACKUP"
+            fi
+            if [ -f "$GENERATED_KEYWORDS_BACKUP" ]; then
+              mv "$GENERATED_KEYWORDS_BACKUP" "$GENERATED_KEYWORDS_FILE"
+              RESTORED_ANY="true"
+              echo "[rebuild]   restored $GENERATED_KEYWORDS_FILE"
+            fi
+            if [ -f "$GENERATED_SLUGS_BACKUP" ]; then
+              mv "$GENERATED_SLUGS_BACKUP" "$GENERATED_SLUGS_FILE"
+              RESTORED_ANY="true"
+              echo "[rebuild]   restored $GENERATED_SLUGS_FILE"
+            fi
+            if [ "$RESTORED_ANY" = "false" ]; then
+              echo "[rebuild] no backup files found; nothing to abort"
+            fi
+            exit 0
+          fi
 
-         REBUILD_RC=0
-         python scripts/build_nexus_dex_seo_incremental.py || REBUILD_RC=$?
+          # AUTO-RECOVERY: if only PENDING_BACKUP exists (no tracking backups),
+          # it's leftover from the old buggy workflow version. Restore the
+          # queue and remove the stale backup so the fresh-rebuild guard
+          # below doesn't trip on it.
+          if [ "$RESUME_REBUILD" != "true" ] \
+             && [ -f "$PENDING_BACKUP" ] \
+             && [ ! -f "$GENERATED_KEYWORDS_BACKUP" ] \
+             && [ ! -f "$GENERATED_SLUGS_BACKUP" ]; then
+            echo "[rebuild] detected stale PENDING_BACKUP from previous workflow version"
+            mv "$PENDING_BACKUP" "$KEYWORDS_FILE"
+            git add -A
+            if ! git diff --cached --quiet; then
+              git commit -m "Nexus DEX: auto-recover stale rebuild backup"
+              git push --force-with-lease origin HEAD:main
+            fi
+            echo "[rebuild] auto-recovery complete"
+          fi
 
-         # Restore the original pending queue only if the rebuild finished
-         # cleanly AND $KEYWORDS_FILE is now empty (every rebuild keyword
-         # processed). On timeout/failure we leave the partial remainder
-         # in place so the next run can resume.
-         if [ "$REBUILD_RC" = "0" ] && [ ! -s "$KEYWORDS_FILE" ] && [ -f "$PENDING_BACKUP" ]; then
-           mv "$PENDING_BACKUP" "$KEYWORDS_FILE"
-           git rm --cached -f "$PENDING_BACKUP" 2>/dev/null || true
-           echo "[rebuild] restored original pending queue from backup"
-         fi
+          if [ "$RESUME_REBUILD" = "true" ]; then
+            if [ ! -f "$PENDING_BACKUP" ]; then
+              echo "[rebuild] ERROR: resume requested but $PENDING_BACKUP not found."
+              echo "[rebuild] There is no interrupted rebuild to resume from."
+              exit 1
+            fi
+            if [ ! -s "$KEYWORDS_FILE" ]; then
+              echo "[rebuild] resume requested but $KEYWORDS_FILE is empty -- nothing left; cleaning up backups"
+            else
+              echo "[rebuild] RESUME: $(wc -l < "$KEYWORDS_FILE") pages left to rebuild"
+            fi
+          else
+            # Fresh rebuild. Refuse to start if backup files from a previous
+            # rebuild are still on remote -- they indicate a rebuild in flight
+            # whose state we must not clobber. Use resume_rebuild=true to
+            # continue or abort_rebuild=true to reset.
+            if [ -f "$PENDING_BACKUP" ] || [ -f "$GENERATED_KEYWORDS_BACKUP" ] || [ -f "$GENERATED_SLUGS_BACKUP" ]; then
+              echo "[rebuild] ERROR: backup files from a previous rebuild are still on remote:"
+              [ -f "$PENDING_BACKUP" ]            && echo "  - $PENDING_BACKUP"
+              [ -f "$GENERATED_KEYWORDS_BACKUP" ] && echo "  - $GENERATED_KEYWORDS_BACKUP"
+              [ -f "$GENERATED_SLUGS_BACKUP" ]    && echo "  - $GENERATED_SLUGS_BACKUP"
+              echo "[rebuild] Re-run with resume_rebuild=true to continue,"
+              echo "[rebuild] OR abort_rebuild=true to reset state cleanly."
+              exit 1
+            fi
 
-         exit "$REBUILD_RC"
+            cp "$KEYWORDS_FILE"            "$PENDING_BACKUP"
+            cp "$GENERATED_KEYWORDS_FILE"  "$GENERATED_KEYWORDS_BACKUP"
+            cp "$GENERATED_SLUGS_FILE"     "$GENERATED_SLUGS_BACKUP"
 
-     - name: Build hub pages
-       if: success()
-       shell: bash
-       run: python scripts/build_nexus_dex_hubs.py
+            git add "$PENDING_BACKUP" "$GENERATED_KEYWORDS_BACKUP" "$GENERATED_SLUGS_BACKUP"
+            if ! git diff --cached --quiet; then
+              git commit -m "Nexus DEX rebuild: stash queue + tracking"
+              git push --force-with-lease origin HEAD:main
+            fi
 
-     - name: Build sitemap
-       if: success()
-       shell: bash
-       run: |
-         set -euo pipefail
-         get_lastmod() {
-           local file_path="$1"
-           local commit_date
-           commit_date=$(git log -1 --format=%cs -- "$file_path" 2>/dev/null || true)
-           if [ -n "$commit_date" ]; then echo "$commit_date"; else date -u +%F; fi
-         }
-         is_reserved_slug() {
-           case "$1" in
-             nexus-dex|health|api|embed) return 0 ;;
-             static|images|assets|og|fonts|icons) return 0 ;;
-             *) return 1 ;;
-           esac
-         }
-         {
-           echo '<?xml version="1.0" encoding="UTF-8"?>'
-           echo '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
-           find "$OUTPUT_DIR" -mindepth 1 -maxdepth 1 -type d | sort | while read -r dir; do
-             [ -f "$dir/index.html" ] || continue
-             slug=$(basename "$dir")
-             if is_reserved_slug "$slug"; then continue; fi
-             page_lastmod=$(get_lastmod "$dir/index.html")
-             echo "<url><loc>https://swap.verixiaapps.com/$slug/</loc><lastmod>${page_lastmod}</lastmod></url>"
-           done
-           echo '</urlset>'
-         } > "$OUTPUT_DIR/nexus-sitemap.xml"
-         echo "[sitemap] $(grep -c '<url>' "$OUTPUT_DIR/nexus-sitemap.xml") URLs written to $OUTPUT_DIR/nexus-sitemap.xml"
+            cp "$GENERATED_KEYWORDS_FILE" "$KEYWORDS_FILE"
+            : > "$GENERATED_KEYWORDS_FILE"
+            : > "$GENERATED_SLUGS_FILE"
 
-     - name: Commit and push
-       if: success()
-       shell: bash
-       run: |
-         set -euo pipefail
-         git add -A
-         if git diff --cached --quiet; then
-           echo "No changes to commit"
-           exit 0
-         fi
-         git commit -m "Nexus DEX SEO auto generation + hub update + sitemap update"
-         git fetch origin main
-         if git diff --quiet origin/main..HEAD; then
-           echo "Nothing to push"
-           exit 0
-         fi
-         git push --force-with-lease origin HEAD:main
+            echo "[rebuild] FRESH: $(wc -l < "$KEYWORDS_FILE") pages queued for rebuild"
+          fi
+
+          REBUILD_RC=0
+          if [ -s "$KEYWORDS_FILE" ]; then
+            python scripts/build_nexus_dex_seo_incremental.py || REBUILD_RC=$?
+          fi
+
+          # Auto-restore + cleanup only if the rebuild completed cleanly AND
+          # the queue is now empty (every rebuild keyword processed).
+          if [ "$REBUILD_RC" = "0" ] && [ ! -s "$KEYWORDS_FILE" ]; then
+            if [ -f "$PENDING_BACKUP" ]; then
+              mv "$PENDING_BACKUP" "$KEYWORDS_FILE"
+            fi
+            rm -f "$GENERATED_KEYWORDS_BACKUP" "$GENERATED_SLUGS_BACKUP"
+            echo "[rebuild] rebuild complete: restored pending queue, removed backups"
+          fi
+
+          exit "$REBUILD_RC"
+
+      - name: Build hub pages
+        if: success() && steps.limits.outputs.abort_rebuild != 'true'
+        shell: bash
+        run: python scripts/build_nexus_dex_hubs.py
+
+      - name: Build sitemap
+        if: success() && steps.limits.outputs.abort_rebuild != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          get_lastmod() {
+            local file_path="$1"
+            local commit_date
+            commit_date=$(git log -1 --format=%cs -- "$file_path" 2>/dev/null || true)
+            if [ -n "$commit_date" ]; then echo "$commit_date"; else date -u +%F; fi
+          }
+          is_reserved_slug() {
+            case "$1" in
+              nexus-dex|health|api|embed) return 0 ;;
+              static|images|assets|og|fonts|icons) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          {
+            echo '<?xml version="1.0" encoding="UTF-8"?>'
+            echo '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+            find "$OUTPUT_DIR" -mindepth 1 -maxdepth 1 -type d | sort | while read -r dir; do
+              [ -f "$dir/index.html" ] || continue
+              slug=$(basename "$dir")
+              if is_reserved_slug "$slug"; then continue; fi
+              page_lastmod=$(get_lastmod "$dir/index.html")
+              echo "<url><loc>https://swap.verixiaapps.com/$slug/</loc><lastmod>${page_lastmod}</lastmod></url>"
+            done
+            echo '</urlset>'
+          } > "$OUTPUT_DIR/nexus-sitemap.xml"
+          echo "[sitemap] $(grep -c '<url>' "$OUTPUT_DIR/nexus-sitemap.xml") URLs written to $OUTPUT_DIR/nexus-sitemap.xml"
+
+      - name: Commit and push
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "Nexus DEX SEO auto generation + hub update + sitemap update"
+          git fetch origin main
+          if git diff --quiet origin/main..HEAD; then
+            echo "Nothing to push"
+            exit 0
+          fi
+          git push --force-with-lease origin HEAD:main
