@@ -1683,16 +1683,19 @@ app.get('/embed/config.js', (req, res) => {
 /* ========================================================================
  * Static SPA + SEO slug pages
  *
- * Order matters:
- *   1) DEBUG endpoint — exposes what's on disk so we can verify the deploy.
- *   2) express.static for public/ FIRST — auto-serves SEO pages at
- *      /<slug>/ because express.static serves index.html for directory
- *      requests by default. This must beat the React build's index.html.
- *   3) express.static for build/ — React JS bundles, static assets.
+ * Order:
+ *   1) Debug endpoint — /debug-seo lists what's actually on disk.
+ *   2) express.static(build/) — serves the DEX bundle AND any subfolders
+ *      copied by CRA from public/ (like SEO pages). express.static
+ *      auto-serves /<slug>/ → build/<slug>/index.html.
+ *   3) express.static(public/) — fallback to the source public/ folder
+ *      in case Railway didn't copy SEO subfolders into build/. We pass
+ *      `index: false` so it WON'T serve public/index.html for the root
+ *      (which is CRA's template, not a working page).
  *   4) SPA catch-all — DEX React app for any remaining route.
  * ===================================================================== */
 
-// (1) Debug — visit /debug-seo to see what the server actually sees.
+// (1) Debug — visit /debug-seo to see what the server actually sees on disk.
 app.get('/debug-seo', (req, res) => {
   const publicDir = path.join(__dirname, 'public');
   const buildDir  = path.join(__dirname, 'build');
@@ -1716,21 +1719,44 @@ app.get('/debug-seo', (req, res) => {
   res.json(out);
 });
 
-// (2) Static files from public/ — auto-serves /<slug>/ → public/<slug>/index.html
-app.use(express.static(path.join(__dirname, 'public'), {
-  maxAge: '7d',
-  setHeaders: (res, filePath) => {
-    if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  },
-}));
-
-// (3) Static files from the React build (DEX bundles).
+// (2) Static files from the React build (DEX bundles + SEO files copied by CRA).
 app.use(express.static(path.join(__dirname, 'build'), {
   maxAge: '7d',
   setHeaders: (res, filePath) => {
     if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   },
 }));
+
+// (3) Fallback: serve SEO pages from public/ if they weren't copied to build/.
+//     `index: false` prevents serving public/index.html (the CRA template) at the root.
+app.use(express.static(path.join(__dirname, 'public'), {
+  maxAge: '7d',
+  index: false,
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  },
+}));
+
+// Explicit SEO slug handler — for /<slug>/ requests, manually serve
+// public/<slug>/index.html. Needed because express.static with index:false
+// won't auto-serve directory index files.
+app.get(/^\/([a-z0-9][a-z0-9-]*)\/?$/i, (req, res, next) => {
+  const slug = req.params[0];
+  if (!slug || slug.startsWith('api') || slug === 'health' || slug === 'embed' || slug === 'debug-seo') return next();
+  const fileInPublic = path.join(__dirname, 'public', slug, 'index.html');
+  fs.access(fileInPublic, fs.constants.R_OK, (err) => {
+    if (!err) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      return res.sendFile(fileInPublic);
+    }
+    const fileInBuild = path.join(__dirname, 'build', slug, 'index.html');
+    fs.access(fileInBuild, fs.constants.R_OK, (err2) => {
+      if (err2) return next();
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.sendFile(fileInBuild);
+    });
+  });
+});
 
 // (4) SPA catch-all — DEX React app for any remaining route.
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'build', 'index.html')));
