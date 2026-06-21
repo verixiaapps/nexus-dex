@@ -1646,6 +1646,7 @@ usdc trading
 usdt exchange
 usdt swap
 usdt trading
+verify token contract
 viral meme coins
 viral meme tokens
 wallet based crypto exchange
