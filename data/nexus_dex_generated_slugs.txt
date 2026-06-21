@@ -34,6 +34,7 @@ best-solana-meme-coin-trading
 best-stablecoin-bridge
 best-token-scanner
 best-wallets-trading
+birdeye-alternative
 birdeye-vs-dexscreener-fees
 birdeye-vs-dexscreener-for-beginners
 birdeye-vs-dexscreener-for-memecoins
