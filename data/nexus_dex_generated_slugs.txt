@@ -277,6 +277,7 @@ meme-coin-exchange
 meme-coin-exchange-no-account
 meme-coin-finder
 meme-coin-marketplace
+meme-coin-risk-checker
 meme-coin-scanner
 meme-coin-swap-no-kyc
 meme-coin-swaps
