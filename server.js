@@ -1692,8 +1692,8 @@ app.get('/embed/config.js', (req, res) => {
  *   4) SPA catch-all — DEX React app for any remaining route.
  * ===================================================================== */
 
-// (1) Debug — visit /api/debug/seo-files to see what the server actually sees.
-app.get('/api/debug/seo-files', (req, res) => {
+// (1) Debug — visit /debug-seo to see what the server actually sees.
+app.get('/debug-seo', (req, res) => {
   const publicDir = path.join(__dirname, 'public');
   const buildDir  = path.join(__dirname, 'build');
   const out = { __dirname, publicDir, buildDir, publicExists: false, buildExists: false, publicFolders: [], buildFolders: [] };
