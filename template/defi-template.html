@@ -600,7 +600,7 @@ footer.nx-foot .non-custodial b{color:var(--ink);font-weight:800}
 {{PAGE_META_SCRIPT}}
 
 <script>
-window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: "/api/solana-rpc", wcProjectId: "1a7c741caab0a2c5ffa2b199a816ea92" };
+window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.origin + "/api/solana-rpc", wcProjectId: "1a7c741caab0a2c5ffa2b199a816ea92" };
 </script>
 <!-- =============================================================================
      VERIXIA SWAP WIDGET — Jupiter + Pump.fun, self-contained, per-page isolated.
@@ -773,7 +773,8 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: "/api/solana-rpc
 
     // --- Config ---------------------------------------------------------------
     var ORIGIN          = window.location.origin;
-    var RPC_URL         = (window.__VERIXIA_CONFIG__ && window.__VERIXIA_CONFIG__.rpc) || (ORIGIN + '/api/solana-rpc');
+    var _cfgRpc         = (window.__VERIXIA_CONFIG__ && window.__VERIXIA_CONFIG__.rpc) || '';
+    var RPC_URL         = /^https?:\/\//i.test(_cfgRpc) ? _cfgRpc : (ORIGIN + '/api/solana-rpc');
     var TRADE_RPC_URL   = ORIGIN + '/api/trade-rpc';
     var FEE_WALLET      = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
     var FEE_BPS         = 300;
@@ -1785,6 +1786,12 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: "/api/solana-rpc
         else els.out.value = '';
       }
 
+      // Sync the amount input with S.amount, but only when the user isn't
+      // actively typing (input not focused) so we don't yank the cursor.
+      if (els.amount && document.activeElement !== els.amount && els.amount.value !== (S.amount || '')) {
+        els.amount.value = S.amount || '';
+      }
+
       // USD subtitle under the input and output amounts.
       if (els.usdInput) {
         var inUsd = computeUsd(S.inputMint, Number(S.amount));
@@ -2140,6 +2147,48 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: "/api/solana-rpc
       return '$' + n.toFixed(2);
     }
 
+    // Draw a sparkline from real OHLCV points: [{ts, price}, ...] sorted
+    // oldest-to-newest. Returns true if drawn, false if the data was empty.
+    function drawSparklineFromPoints(svg, points) {
+      if (!svg || !Array.isArray(points) || points.length < 2) return false;
+      var w = 320, h = 60;
+      var min = Infinity, max = -Infinity;
+      for (var k = 0; k < points.length; k++) {
+        var p = Number(points[k].price);
+        if (!Number.isFinite(p) || p <= 0) continue;
+        if (p < min) min = p;
+        if (p > max) max = p;
+      }
+      if (!Number.isFinite(min) || !Number.isFinite(max)) return false;
+      // Avoid divide-by-zero on flat lines.
+      var span = max - min;
+      if (span <= 0) { var pad = Math.max(min * 0.01, 1e-12); min -= pad; max += pad; span = max - min; }
+      var first = Number(points[0].price);
+      var last  = Number(points[points.length - 1].price);
+      var up = last >= first;
+      var color     = up ? '#0a7a4c' : '#D14B6A';
+      var fillColor = up ? 'rgba(127,255,212,0.35)' : 'rgba(255,143,190,0.35)';
+      var pathD = '', fillD = '';
+      var n = points.length;
+      for (var i = 0; i < n; i++) {
+        var x = (i / (n - 1)) * w;
+        // 6px top/bottom inset so the stroke isn't clipped.
+        var y = 6 + (1 - (Number(points[i].price) - min) / span) * (h - 12);
+        var cmd = (i === 0 ? 'M' : 'L') + x.toFixed(2) + ' ' + y.toFixed(2);
+        pathD += cmd;
+        fillD += cmd;
+      }
+      fillD += 'L' + w + ' ' + h + 'L0 ' + h + 'Z';
+      svg.innerHTML =
+        '<path d="' + fillD + '" fill="' + fillColor + '" />' +
+        '<path class="spark-line" d="' + pathD + '" stroke="' + color + '" />';
+      return true;
+    }
+
+    // Synthetic sparkline — only used as a fallback when the OHLCV endpoint
+    // returns no data (e.g. very fresh pump.fun mints with no GeckoTerminal
+    // pool yet). The shape follows the 24h change direction so it never
+    // misleads about trend.
     function drawSparkline(svg, change) {
       if (!svg) return;
       var w = 320, h = 60, pts = 24;
@@ -2177,6 +2226,20 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: "/api/solana-rpc
         '<path d="' + fillD + '" fill="' + fillColor + '" />' +
         '<path class="spark-line" d="' + pathD + '" stroke="' + color + '" />';
     }
+
+    // Fetch live 24h chart via the backend (GeckoTerminal OHLCV under the
+    // hood). Returns an array of {ts, price} or null on failure.
+    async function fetchChartPoints(mint) {
+      if (!mint || !PUMP_BASE58_RE.test(mint)) return null;
+      try {
+        var r = await fetch(ORIGIN + '/api/dex/chart/' + encodeURIComponent(mint) + '?tf=24H');
+        if (!r.ok) return null;
+        var d = await r.json();
+        if (!d || !Array.isArray(d.points) || d.points.length < 2) return null;
+        return d.points;
+      } catch (e) { return null; }
+    }
+
 
     var priceCardCacheKey = 'vx:pxcard:v1';
     var priceCardCacheMs = 60000;
@@ -2240,7 +2303,28 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: "/api/solana-rpc
         else if (change < 0) { chg.className = 'px-chg dn';   chg.textContent = change.toFixed(2) + '% \u00B7 24H'; }
         else                 { chg.className = 'px-chg muted'; chg.textContent = '0.00% \u00B7 24H'; }
         if (range) range.textContent = fmtPriceCardPrice(price);
+        // Live 24h chart from /api/dex/chart/:mint (GeckoTerminal OHLCV). If
+        // the mint has no GT pool yet (very fresh pump.fun launches), fall
+        // back to a directional synthetic line so the card never goes blank.
         drawSparkline(spark, change);
+        var chartMint = base.address || (PUMP_BASE58_RE.test(subject) ? subject : null);
+        if (chartMint) {
+          fetchChartPoints(chartMint).then(function (pts) {
+            if (pts && drawSparklineFromPoints(spark, pts)) {
+              // Update the right-side spark label to show the 24h range.
+              if (range) {
+                var lo = Infinity, hi = -Infinity;
+                for (var k = 0; k < pts.length; k++) {
+                  var p = Number(pts[k].price);
+                  if (Number.isFinite(p) && p > 0) { if (p < lo) lo = p; if (p > hi) hi = p; }
+                }
+                if (Number.isFinite(lo) && Number.isFinite(hi)) {
+                  range.textContent = fmtPriceCardPrice(lo) + '\u2013' + fmtPriceCardPrice(hi);
+                }
+              }
+            }
+          });
+        }
         mcap.textContent = fmtCompactUsd(Number(pair.marketCap || pair.fdv || 0));
         liq.textContent  = fmtCompactUsd(Number(pair.liquidity && pair.liquidity.usd || 0));
         vol.textContent  = fmtCompactUsd(Number(pair.volume && pair.volume.h24 || 0));
