@@ -939,12 +939,14 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
     }
 
     function detectSubjectRaw() {
+      var h1 = document.querySelector('h1');
+      var h1Text = h1 ? h1.textContent : '';
+      // Bridge pages aren't about a specific Solana token — skip detection so no chart card renders
+      if (/bridge/i.test(h1Text)) return null;
       var meta = window.__pageMeta || {};
       if (meta.subject && typeof meta.subject === 'string' && meta.subject.trim().length >= 2) {
         return meta.subject.trim();
       }
-      var h1 = document.querySelector('h1');
-      var h1Text = h1 ? h1.textContent : '';
       var kwMeta = document.querySelector('meta[name="keywords"]');
       var kw = kwMeta ? kwMeta.content : '';
       var combined = h1Text + ' ' + kw;
@@ -2156,4 +2158,3 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
 
 </body>
 </html>
- 
