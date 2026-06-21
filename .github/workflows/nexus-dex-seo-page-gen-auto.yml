@@ -13,6 +13,11 @@ name: Nexus DEX SEO Page Generator Auto
        required: false
        default: false
        type: boolean
+     resume_rebuild:
+       description: "Resume an interrupted rebuild instead of starting fresh"
+       required: false
+       default: false
+       type: boolean
      rebuild_daily_limit:
        description: "Total pages to rebuild during this manual rebuild run (leave blank to rebuild all remaining pages in one run)"
        required: false
@@ -108,11 +113,13 @@ jobs:
          EVENT_NAME: ${{ github.event_name }}
          INPUT_MANUAL_DAILY_LIMIT: ${{ github.event.inputs.manual_daily_limit }}
          INPUT_FULL_REBUILD: ${{ github.event.inputs.full_rebuild }}
+         INPUT_RESUME_REBUILD: ${{ github.event.inputs.resume_rebuild }}
          INPUT_REBUILD_DAILY_LIMIT: ${{ github.event.inputs.rebuild_daily_limit }}
          INPUT_REBUILD_BATCH_SIZE: ${{ github.event.inputs.rebuild_batch_size }}
        run: |
          set -euo pipefail
          FULL_REBUILD="false"
+         RESUME_REBUILD="false"
          EFFECTIVE_DAILY_LIMIT="1000"
          REBUILD_BATCH_SIZE="50"
          REBUILD_ALL_REMAINING="false"
@@ -123,6 +130,9 @@ jobs:
            fi
            if [ "${INPUT_FULL_REBUILD:-false}" = "true" ]; then
              FULL_REBUILD="true"
+             if [ "${INPUT_RESUME_REBUILD:-false}" = "true" ]; then
+               RESUME_REBUILD="true"
+             fi
              if [ -n "${INPUT_REBUILD_BATCH_SIZE:-}" ]; then
                REBUILD_BATCH_SIZE="$INPUT_REBUILD_BATCH_SIZE"
              fi
@@ -146,6 +156,7 @@ jobs:
            exit 1
          fi
          echo "full_rebuild=$FULL_REBUILD" >> "$GITHUB_OUTPUT"
+         echo "resume_rebuild=$RESUME_REBUILD" >> "$GITHUB_OUTPUT"
          echo "effective_daily_limit=$EFFECTIVE_DAILY_LIMIT" >> "$GITHUB_OUTPUT"
          echo "rebuild_batch_size=$REBUILD_BATCH_SIZE" >> "$GITHUB_OUTPUT"
          echo "rebuild_all_remaining=$REBUILD_ALL_REMAINING" >> "$GITHUB_OUTPUT"
@@ -156,6 +167,65 @@ jobs:
        env:
          DAILY_LIMIT: ${{ steps.limits.outputs.effective_daily_limit }}
        run: python scripts/build_nexus_dex_seo_incremental.py
+
+     - name: Full rebuild of /public pages
+       if: steps.limits.outputs.full_rebuild == 'true'
+       shell: bash
+       env:
+         DAILY_LIMIT: ${{ steps.limits.outputs.effective_daily_limit }}
+         COMMIT_EVERY: ${{ steps.limits.outputs.rebuild_batch_size }}
+         RESUME: "false"
+         RESET_ENGINE: "true"
+         RESUME_REBUILD: ${{ steps.limits.outputs.resume_rebuild }}
+         PENDING_BACKUP: "data/.nexus_dex_pending_backup.txt"
+       run: |
+         set -euo pipefail
+
+         # The incremental script does int(os.getenv("DAILY_LIMIT","100"))
+         # and would crash on "ALL"; translate it to a large finite number.
+         if [ "$DAILY_LIMIT" = "ALL" ]; then
+           export DAILY_LIMIT=1000000
+         fi
+
+         if [ "$RESUME_REBUILD" = "true" ]; then
+           # Resume: $KEYWORDS_FILE on remote is already the unprocessed
+           # remainder from the previous interrupted run. Do not swap.
+           # The original pending queue (if any) is preserved in
+           # $PENDING_BACKUP from that first run; it will be restored
+           # at the end if this run completes the rebuild.
+           if [ ! -s "$KEYWORDS_FILE" ]; then
+             echo "[rebuild] resume requested but $KEYWORDS_FILE is empty -- nothing to do"
+             exit 0
+           fi
+           echo "[rebuild] RESUME: $(wc -l < "$KEYWORDS_FILE") pages left to rebuild"
+         else
+           # Fresh rebuild. Stash the pending queue to a TRACKED file and
+           # commit it immediately, so an interrupted rebuild can still
+           # recover the original queue on the next run via resume.
+           cp "$KEYWORDS_FILE" "$PENDING_BACKUP"
+           git add "$PENDING_BACKUP"
+           if ! git diff --cached --quiet; then
+             git commit -m "Nexus DEX rebuild: stash pending queue"
+             git push --force-with-lease origin HEAD:main
+           fi
+           cp "$GENERATED_KEYWORDS_FILE" "$KEYWORDS_FILE"
+           echo "[rebuild] FRESH: $(wc -l < "$KEYWORDS_FILE") pages queued for rebuild"
+         fi
+
+         REBUILD_RC=0
+         python scripts/build_nexus_dex_seo_incremental.py || REBUILD_RC=$?
+
+         # Restore the original pending queue only if the rebuild finished
+         # cleanly AND $KEYWORDS_FILE is now empty (every rebuild keyword
+         # processed). On timeout/failure we leave the partial remainder
+         # in place so the next run can resume.
+         if [ "$REBUILD_RC" = "0" ] && [ ! -s "$KEYWORDS_FILE" ] && [ -f "$PENDING_BACKUP" ]; then
+           mv "$PENDING_BACKUP" "$KEYWORDS_FILE"
+           git rm --cached -f "$PENDING_BACKUP" 2>/dev/null || true
+           echo "[rebuild] restored original pending queue from backup"
+         fi
+
+         exit "$REBUILD_RC"
 
      - name: Build hub pages
        if: success()
