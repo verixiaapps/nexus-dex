@@ -120,6 +120,7 @@ app.use('/api/', (req, res, next) => {
   next();
 });
 
+
 /* ========================================================================
  * Shared helpers
  * ===================================================================== */
@@ -1681,48 +1682,119 @@ app.get('/embed/config.js', (req, res) => {
 });
 
 /* ========================================================================
- * Static SPA + SEO slug pages
+ * SEO slug pages + SW killer + Static SPA  (INLINE — no external file)
  *
- * Order:
- *   1) Debug endpoint — /debug-seo lists what's actually on disk.
- *   2) express.static(build/) — serves the DEX bundle AND any subfolders
- *      copied by CRA from public/ (like SEO pages). express.static
- *      auto-serves /<slug>/ → build/<slug>/index.html.
- *   3) express.static(public/) — fallback to the source public/ folder
- *      in case Railway didn't copy SEO subfolders into build/. We pass
- *      `index: false` so it WON'T serve public/index.html for the root
- *      (which is CRA's template, not a working page).
- *   4) SPA catch-all — DEX React app for any remaining route.
+ * - Kills any stale CRA service worker stuck in browsers (tombstone SW
+ *   served at common paths; activates → unregisters → clears caches).
+ * - Self-hosts @solana/web3.js so SEO HTML doesn't need jsdelivr/unpkg
+ *   (which CSP may block).
+ * - Serves /<slug> and /<slug>/index.html from public/<slug>/index.html
+ *   (falls back to build/<slug>/index.html), injecting the SW-killer
+ *   script + the self-hosted web3.js script tag into <head>.
  * ===================================================================== */
 
-// (1) Debug — visit /debug-seo to see what the server actually sees on disk.
+const SEO_TOMBSTONE_SW = `// Verixia SW tombstone
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (event) => {
+  event.waitUntil((async () => {
+    try { const keys = await caches.keys(); await Promise.all(keys.map(k => caches.delete(k))); } catch (e) {}
+    try { await self.registration.unregister(); } catch (e) {}
+    try { const cs = await self.clients.matchAll({ type: 'window' }); cs.forEach(c => { try { c.navigate(c.url); } catch (e) {} }); } catch (e) {}
+  })());
+});
+self.addEventListener('fetch', () => {});
+`;
 
-require('./seo-protect')(app);
+const SEO_SW_UNREG = `<script>(function(){try{if('serviceWorker' in navigator){navigator.serviceWorker.getRegistrations().then(function(rs){rs.forEach(function(r){try{r.unregister();}catch(e){}});}).catch(function(){});}if(window.caches&&caches.keys){caches.keys().then(function(ks){ks.forEach(function(k){try{caches.delete(k);}catch(e){}});}).catch(function(){});}}catch(e){}})();</script>`;
 
+let SEO_WEB3_PATH = null;
+for (const p of [
+  path.join(__dirname, 'node_modules', '@solana', 'web3.js', 'lib', 'index.iife.min.js'),
+  path.join(__dirname, 'node_modules', '@solana', 'web3.js', 'lib', 'index.iife.js'),
+]) {
+  try { if (fs.existsSync(p)) { SEO_WEB3_PATH = p; break; } } catch {}
+}
+const SEO_WEB3_TAG = SEO_WEB3_PATH ? '<script src="/solana-web3.iife.min.js"></script>' : '';
+
+// SW tombstone routes
+for (const swPath of ['/service-worker.js', '/sw.js', '/serviceWorker.js']) {
+  app.get(swPath, (req, res) => {
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Service-Worker-Allowed', '/');
+    res.send(SEO_TOMBSTONE_SW);
+  });
+}
+
+// Self-hosted Solana web3.js
+if (SEO_WEB3_PATH) {
+  app.get('/solana-web3.iife.min.js', (req, res) => {
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
+    res.sendFile(SEO_WEB3_PATH);
+  });
+  console.log('[seo] serving solana-web3.js from', SEO_WEB3_PATH);
+} else {
+  console.warn('[seo] @solana/web3.js not in node_modules — widget will fall back to CDN');
+}
+
+// Debug
 app.get('/debug-seo', (req, res) => {
   const publicDir = path.join(__dirname, 'public');
   const buildDir  = path.join(__dirname, 'build');
-  const out = { __dirname, publicDir, buildDir, publicExists: false, buildExists: false, publicFolders: [], buildFolders: [] };
+  const out = { __dirname, publicDir, buildDir, publicExists: false, buildExists: false, publicFolders: [], buildFolders: [], web3Available: !!SEO_WEB3_PATH };
   try {
     out.publicExists = fs.existsSync(publicDir);
-    if (out.publicExists) {
-      out.publicFolders = fs.readdirSync(publicDir).filter(n => {
-        try { return fs.statSync(path.join(publicDir, n)).isDirectory(); } catch { return false; }
-      });
-    }
+    if (out.publicExists) out.publicFolders = fs.readdirSync(publicDir).filter(n => { try { return fs.statSync(path.join(publicDir, n)).isDirectory(); } catch { return false; } });
   } catch (e) { out.publicError = e.message; }
   try {
     out.buildExists = fs.existsSync(buildDir);
-    if (out.buildExists) {
-      out.buildFolders = fs.readdirSync(buildDir).filter(n => {
-        try { return fs.statSync(path.join(buildDir, n)).isDirectory(); } catch { return false; }
-      });
-    }
+    if (out.buildExists) out.buildFolders = fs.readdirSync(buildDir).filter(n => { try { return fs.statSync(path.join(buildDir, n)).isDirectory(); } catch { return false; } });
   } catch (e) { out.buildError = e.message; }
   res.json(out);
 });
 
-// (2) Static files from the React build (DEX bundles + SEO files copied by CRA).
+// SEO slug handler (matches /slug, /slug/, /slug/index.html)
+const SEO_SLUG_RE = /^\/([a-z0-9][a-z0-9-]*)(?:\/(?:index\.html)?)?$/i;
+const SEO_RESERVED = new Set([
+  'api', 'health', 'embed', 'debug-seo', 'static', 'assets',
+  'favicon.ico', 'robots.txt', 'sitemap.xml', 'manifest.json',
+  'service-worker.js', 'sw.js', 'serviceWorker.js',
+  'og', 'images', 'fonts', 'solana-web3.iife.min.js',
+]);
+
+app.get(SEO_SLUG_RE, (req, res, next) => {
+  const slug = (req.params[0] || '').toLowerCase();
+  if (!slug || SEO_RESERVED.has(slug)) return next();
+
+  const candidates = [
+    path.join(__dirname, 'public', slug, 'index.html'),
+    path.join(__dirname, 'build',  slug, 'index.html'),
+  ];
+
+  (function tryNext(i) {
+    if (i >= candidates.length) return next();
+    fs.readFile(candidates[i], 'utf8', (err, html) => {
+      if (err) return tryNext(i + 1);
+      const injection = '\n' + SEO_SW_UNREG + '\n' + SEO_WEB3_TAG + '\n';
+      let out = html;
+      if (/<head[^>]*>/i.test(out)) {
+        out = out.replace(/<head[^>]*>/i, (m) => m + injection);
+      } else if (/<html[^>]*>/i.test(out)) {
+        out = out.replace(/<html[^>]*>/i, (m) => m + '\n<head>' + injection + '</head>');
+      } else {
+        out = injection + out;
+      }
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      res.send(out);
+    });
+  })(0);
+});
+
+// Static files from React build
 app.use(express.static(path.join(__dirname, 'build'), {
   maxAge: '7d',
   setHeaders: (res, filePath) => {
@@ -1730,8 +1802,7 @@ app.use(express.static(path.join(__dirname, 'build'), {
   },
 }));
 
-// (3) Fallback: serve SEO pages from public/ if they weren't copied to build/.
-//     `index: false` prevents serving public/index.html (the CRA template) at the root.
+// Fallback static from public/
 app.use(express.static(path.join(__dirname, 'public'), {
   maxAge: '7d',
   index: false,
@@ -1740,28 +1811,7 @@ app.use(express.static(path.join(__dirname, 'public'), {
   },
 }));
 
-// Explicit SEO slug handler — for /<slug>/ requests, manually serve
-// public/<slug>/index.html. Needed because express.static with index:false
-// won't auto-serve directory index files.
-app.get(/^\/([a-z0-9][a-z0-9-]*)\/?$/i, (req, res, next) => {
-  const slug = req.params[0];
-  if (!slug || slug.startsWith('api') || slug === 'health' || slug === 'embed' || slug === 'debug-seo') return next();
-  const fileInPublic = path.join(__dirname, 'public', slug, 'index.html');
-  fs.access(fileInPublic, fs.constants.R_OK, (err) => {
-    if (!err) {
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-      return res.sendFile(fileInPublic);
-    }
-    const fileInBuild = path.join(__dirname, 'build', slug, 'index.html');
-    fs.access(fileInBuild, fs.constants.R_OK, (err2) => {
-      if (err2) return next();
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-      res.sendFile(fileInBuild);
-    });
-  });
-});
-
-// (4) SPA catch-all — DEX React app for any remaining route.
+// SPA catch-all
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'build', 'index.html')));
 
 /* ========================================================================
