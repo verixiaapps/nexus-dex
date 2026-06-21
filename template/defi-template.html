@@ -443,7 +443,7 @@ footer.nx-foot .non-custodial b{color:var(--ink);font-weight:800}
 </style>
 </head>
 <body>
-<a class="nx-promo" href="https://verixiaapps.com">
+<a class="nx-promo" href="https://swap.verixiaapps.com">
   <span class="badge">NEW</span>
   <b>Verixia</b>: Swap, Bridge, Stocks &amp; Prediction Markets all in one app
   <span class="arr">&rarr;</span>
@@ -571,14 +571,6 @@ footer.nx-foot .non-custodial b{color:var(--ink);font-weight:800}
         <span class="nx-refer-tag">PUMP.FUN TIER</span>
         <b>Earn <em>33%</em> of every pump.fun trade</b>
         <span>FROM EVERYONE YOU REFER &middot; FOREVER &middot; PAID DAILY IN SOL</span>
-      </span>
-      <span class="nx-refer-r">Join &rarr;</span>
-    </a>
-    <a class="nx-refer swap-tier" href="https://verixiaapps.com/refer?source=swap">
-      <span class="nx-refer-l">
-        <span class="nx-refer-tag">SWAP TIER</span>
-        <b>Earn <em>30%</em> on every swap</b>
-        <span>FROM EVERYONE YOU REFER &middot; FOREVER</span>
       </span>
       <span class="nx-refer-r">Join &rarr;</span>
     </a>
@@ -1943,9 +1935,9 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       var mint = null;
       if (S.outputMint && S.outputMint !== SOL_MINT && S.outputMint !== USDC_MINT) mint = S.outputMint;
       else if (S.inputMint && S.inputMint !== SOL_MINT && S.inputMint !== USDC_MINT) mint = S.inputMint;
-      if (!mint) { card.style.display = 'none'; var stats = document.getElementById('nx-px-stats'); if (stats) stats.style.display = 'none'; return; }
-      card.style.display = '';
-      var statsEl = document.getElementById('nx-px-stats'); if (statsEl) statsEl.style.display = '';
+      if (!mint) { card.classList.remove('is-live'); var stats = document.getElementById('nx-px-stats'); if (stats) stats.classList.remove('is-live'); return; }
+      card.classList.add('is-live');
+      var statsEl = document.getElementById('nx-px-stats'); if (statsEl) statsEl.classList.add('is-live');
 
       var icoEl    = document.getElementById('nx-px-ico');
       var symEl    = document.getElementById('nx-px-sym');
