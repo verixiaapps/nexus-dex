@@ -1696,6 +1696,9 @@ app.get('/embed/config.js', (req, res) => {
  * ===================================================================== */
 
 // (1) Debug — visit /debug-seo to see what the server actually sees on disk.
+
+require('./seo-protect')(app);
+
 app.get('/debug-seo', (req, res) => {
   const publicDir = path.join(__dirname, 'public');
   const buildDir  = path.join(__dirname, 'build');
