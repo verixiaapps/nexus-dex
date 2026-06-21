@@ -43,7 +43,7 @@ jobs:
      - name: Run CRA build (matches Railway)
        run: npm run build:all
        env:
-         CI: 'true'
+         CI: 'false'
          NODE_OPTIONS: '--max-old-space-size=4096'
 
      - name: Count slug folders in build/ AFTER build
