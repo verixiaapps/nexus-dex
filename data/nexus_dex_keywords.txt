@@ -120,7 +120,6 @@ contract scanner
 copy whale trades
 cross border defi
 cross chain analytics
-cross chain app
 cross chain bridge
 cross chain bridge aggregator
 cross chain crypto exchange
@@ -292,17 +291,6 @@ hot crypto tokens
 injective exchange
 instant crypto swap
 instant crypto swaps
-is slippage normal when swapping act
-is slippage normal when swapping ai16z
-is slippage normal when swapping jitosol
-is slippage normal when swapping jto
-is slippage normal when swapping jup
-is slippage normal when swapping msol
-is slippage normal when swapping pyth
-is slippage normal when swapping ray
-is slippage normal when swapping render
-is this token a scam
-is this token safe
 jupiter alternative
 kaspa exchange
 latest solana meme coins
@@ -333,7 +321,6 @@ meme coin finder
 meme coin marketplace
 meme coin risk checker
 meme coin scanner
-meme coin swap no kyc
 meme coin swaps
 meme coin tracker
 meme coin trading
@@ -1642,7 +1629,6 @@ swap wif to usdc solana
 swap wif to usdt solana
 swap wif to w
 swap wif to wen
-swap without kyc
 swap xrp to sol
 tesla stock token
 tesla token chart
@@ -1729,7 +1715,6 @@ trade solana for usdt
 trade solana for wif
 trade solana meme coins
 trade tesla with crypto
-trade without kyc
 transfer crypto across chains
 trending crypto pairs
 trending meme coins
@@ -1763,14 +1748,12 @@ wallet insights
 wallet intelligence
 wallet rejected solana swap transaction
 wallet risk checker
-wallet swap app
 wallet to wallet bridge
 wallet to wallet swap
 wallet tracker
 wallet tracker solana
 web3 bridge
 web3 exchange
-web3 finance app
 web3 swap
 web3 trading
 web3 trading platform
@@ -1818,55 +1801,6 @@ what is the best time to swap sol
 what is the best time to swap wen
 what is the best time to swap wif
 what wallet has lowest swap fees solana
-where to buy act solana
-where to buy ai16z solana
-where to buy atlas solana
-where to buy ban solana
-where to buy bome solana
-where to buy bonk solana
-where to buy chillguy solana
-where to buy cloud solana
-where to buy daddy solana
-where to buy drift solana
-where to buy fartcoin solana
-where to buy fwog solana
-where to buy giga solana
-where to buy gigachad solana
-where to buy goat solana
-where to buy grass solana
-where to buy guac solana
-where to buy hnt solana
-where to buy io solana
-where to buy jitosol solana
-where to buy jto solana
-where to buy jup solana
-where to buy kmno solana
-where to buy mew solana
-where to buy mnde solana
-where to buy moodeng solana
-where to buy mother solana
-where to buy msol solana
-where to buy mumu solana
-where to buy myro solana
-where to buy pengu solana
-where to buy pnut solana
-where to buy ponke solana
-where to buy popcat solana
-where to buy pyth solana
-where to buy ray solana
-where to buy render solana
-where to buy retardio solana
-where to buy samo solana
-where to buy shdw solana
-where to buy sigma solana
-where to buy slerf solana
-where to buy sol solana
-where to buy spx solana
-where to buy tnsr solana
-where to buy w solana
-where to buy wen solana
-where to buy wif solana
-where to swap brand new solana tokens
 why are solana swap fees suddenly high
 why did my act swap fail
 why did my ai16z swap fail
