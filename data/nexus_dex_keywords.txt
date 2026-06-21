@@ -43,7 +43,6 @@ swap sol to usdt
 token risk checker
 crypto scam checker
 meme coin scanner
-new token scanner
 token launch scanner
 solana launch tracker
 new crypto launches

@@ -316,6 +316,7 @@ new-crypto-tokens
 new-meme-coins
 new-solana-meme-coins
 new-solana-tokens
+new-token-scanner
 no-kyc-exchange
 non-custodial-exchange
 nvidia-stock-token
