@@ -57,7 +57,6 @@ token screener
 crypto market scanner
 crypto intelligence
 crypto insights
-jupiter alternative
 solana trading tools
 best solana tools
 crypto trader tools
