@@ -160,6 +160,7 @@ crypto-assets
 crypto-bridge
 crypto-bridge-platform
 crypto-contract-checker
+crypto-dashboard
 crypto-discovery-platform
 crypto-due-diligence
 crypto-ecosystem
@@ -227,6 +228,7 @@ defi-routing
 defi-trading
 dex-aggregator
 dex-analytics
+dex-screener-alternative
 dexscreener-vs-gmgn-fees
 dexscreener-vs-gmgn-for-beginners
 dexscreener-vs-gmgn-for-memecoins
@@ -267,6 +269,7 @@ future-of-finance
 global-crypto-swap
 global-defi-exchange
 global-token-exchange
+gmgn-alternative
 gmgn-vs-bullx-fees
 gmgn-vs-bullx-for-beginners
 gmgn-vs-bullx-for-memecoins
@@ -321,6 +324,7 @@ market-trends
 meme-coin-alerts
 meme-coin-alpha
 meme-coin-bridge
+meme-coin-dashboard
 meme-coin-discovery
 meme-coin-exchange
 meme-coin-exchange-no-account
@@ -380,6 +384,7 @@ on-chain-data
 on-chain-trading
 onchain-alpha
 onchain-analytics
+onchain-intelligence
 onchain-scanner
 onchain-trading-signals
 onchain-wallet-tracker
@@ -426,6 +431,7 @@ solana-cross-chain
 solana-crypto-exchange
 solana-crypto-platform
 solana-crypto-trading
+solana-dashboard
 solana-defi
 solana-defi-platform
 solana-dex
@@ -433,6 +439,7 @@ solana-ecosystem
 solana-exchange
 solana-gainers
 solana-gem-finder
+solana-insights
 solana-launch-tracker
 solana-liquidity
 solana-liquidity-pools
@@ -1654,6 +1661,8 @@ token-fraud-detection
 token-health-checker
 token-holder-analysis
 token-holder-tracker
+token-insights
+token-intelligence
 token-launch-scanner
 token-launches
 token-legitimacy-checker
@@ -1750,6 +1759,7 @@ wallet-based-exchange
 wallet-connect-swap
 wallet-crypto-bridge
 wallet-insights
+wallet-intelligence
 wallet-rejected-solana-swap-transaction
 wallet-risk-checker
 wallet-swap-app
