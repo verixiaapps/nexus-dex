@@ -95,6 +95,33 @@ input[type="text"],input[type="number"],input[type="email"],input[type="password
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:rgba(26,27,78,0.18);border-radius:2px}
 
+
+.nx-promo{
+  position:sticky;top:0;z-index:60;
+  display:block;text-decoration:none;color:#1A1B4E;
+  padding:9px 16px;text-align:center;
+  font-family:'Space Grotesk',sans-serif;font-size:12px;font-weight:600;
+  letter-spacing:0.02em;
+  background:linear-gradient(90deg,#A0E7FF 0%,#FFE8F4 40%,#FFD9CC 60%,#FFB088 100%);
+  background-size:300% 100%;
+  animation:nx-shimmer 8s linear infinite;
+  border-bottom:1px solid rgba(255,255,255,0.85);
+  box-shadow:0 4px 14px rgba(160,231,255,.22);
+  transition:filter .15s;
+}
+.nx-promo:hover{filter:brightness(1.04)}
+.nx-promo b{font-weight:800;font-family:'Instrument Serif',serif;font-style:italic;font-size:14px;margin:0 2px;color:#1A1B4E}
+.nx-promo .arr{font-family:'Instrument Serif',serif;font-style:italic;font-weight:400;margin-left:6px;color:#1A1B4E}
+.nx-promo .badge{
+  display:inline-block;margin-right:8px;
+  font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:800;
+  letter-spacing:0.10em;text-transform:uppercase;
+  background:rgba(26,27,78,0.10);color:#1A1B4E;
+  padding:2px 7px;border-radius:999px;vertical-align:middle;
+}
+/* Push the original sticky header down so it doesn't sit underneath the promo strip */
+header.nx-header{top:36px}
+
 .nx-blob{position:fixed;border-radius:50%;filter:blur(70px);opacity:0.42;animation:nx-drift 14s ease-in-out infinite;pointer-events:none;z-index:0}
 @keyframes nx-drift{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(20px,-30px) scale(1.05)}}
 @keyframes nx-pulse{0%,100%{opacity:1}50%{opacity:0.4}}
@@ -219,14 +246,12 @@ header.nx-header{
 .nx-trust-pill .lbl{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;color:var(--ink);letter-spacing:0.12em}
 .nx-trust-pill .cross{color:var(--cyan);font-weight:800;margin-right:3px}
 
-.nx-pump-tag{
   display:inline-flex;align-items:center;gap:6px;margin:0 0 14px 0;
   padding:5px 11px;border-radius:999px;font-family:'JetBrains Mono',monospace;
   font-size:10px;font-weight:700;letter-spacing:.10em;text-transform:uppercase;
   background:linear-gradient(135deg,rgba(255,176,136,.25),rgba(255,212,107,.25));
   border:1px solid rgba(255,176,136,.45);color:#8B4F00;
 }
-.nx-pump-tag .dot{width:5px;height:5px;border-radius:50%;background:#FFB088;box-shadow:0 0 8px #FFB088;animation:nx-pulse 1.6s infinite}
 
 .nx-swap-label{display:flex;align-items:center;justify-content:space-between;padding:6px 4px 8px}
 .nx-swap-label-title{font-family:'Instrument Serif',serif;font-weight:400;font-size:22px;line-height:1;color:var(--ink);letter-spacing:-0.015em}
@@ -273,9 +298,6 @@ header.nx-header{
 }
 .sw-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
 .sw-title{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;color:var(--sw-ink-3);letter-spacing:0.14em;text-transform:uppercase}
-.sw-route-pill{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:800;letter-spacing:0.10em;text-transform:uppercase;padding:3px 8px;border-radius:999px}
-.sw-route-pill.route-jupiter{background:rgba(61,212,245,.12);color:var(--sw-cyan);border:1px solid var(--border)}
-.sw-route-pill.route-pump{background:linear-gradient(135deg,rgba(255,176,136,.20),rgba(255,212,107,.20));color:#8B4F00;border:1px solid rgba(255,176,136,.45)}
 .sw-panel{display:flex;flex-direction:column;gap:0}
 .sw-row{background:#fff;border:1.5px solid var(--sw-hairline);border-radius:18px;padding:14px 16px;transition:border-color .15s,box-shadow .15s}
 .sw-row:focus-within{border-color:var(--sw-cyan);box-shadow:0 0 0 4px rgba(61,212,245,.10)}
@@ -338,7 +360,6 @@ header.nx-header{
 .sw-token-row-sym{font-family:'Instrument Serif',serif;font-style:italic;font-size:17px;color:var(--ink);line-height:1}
 .sw-token-row-name{font-size:12px;color:var(--ink-2);font-weight:500;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sw-token-row-bal{text-align:right;font-family:'JetBrains Mono',monospace;font-weight:700;font-size:12px;color:var(--cyan);flex-shrink:0}
-.sw-token-row-pump{font-family:'JetBrains Mono',monospace;font-weight:800;font-size:8px;letter-spacing:.08em;padding:3px 7px;border-radius:999px;background:linear-gradient(135deg,rgba(255,176,136,.30),rgba(255,212,107,.30));color:#8B4F00;border:1px solid rgba(255,176,136,.45);text-transform:uppercase}
 
 #verixia-swap-root{display:block;min-height:460px}
 .swap-skeleton{min-height:460px;border-radius:24px;background:var(--glass-strong);border:1px solid rgba(255,255,255,.90);box-shadow:0 16px 50px rgba(160,231,255,.18);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:var(--ink-3);position:relative;overflow:hidden}
@@ -365,13 +386,21 @@ header.nx-header{
 .nx-eco-ic{font-size:18px}
 .nx-eco-lbl{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;white-space:nowrap;color:var(--ink-2)}
 
-.nx-refer{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:24px;padding:14px 16px;border-radius:16px;background:linear-gradient(135deg,rgba(127,255,212,.20),rgba(160,231,255,.20),rgba(255,143,190,.20));border:1px solid var(--border-hi);text-decoration:none;color:var(--ink);transition:transform .15s,box-shadow .15s}
+.nx-refer-stack{display:flex;flex-direction:column;gap:10px;margin-top:24px}
+.nx-refer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 16px;border-radius:16px;border:1px solid var(--border-hi);text-decoration:none;color:var(--ink);transition:transform .15s,box-shadow .15s;position:relative;overflow:hidden}
 .nx-refer:hover{transform:translateY(-1px);box-shadow:0 10px 24px rgba(160,231,255,.20)}
-.nx-refer-l{display:flex;flex-direction:column;gap:2px;min-width:0}
-.nx-refer-l b{font-family:'Instrument Serif',serif;font-style:italic;font-size:20px;line-height:1;color:var(--ink);font-weight:400;letter-spacing:-0.01em}
-.nx-refer-l b em{background:linear-gradient(120deg,#A0E7FF,#FF8FBE);-webkit-background-clip:text;background-clip:text;color:transparent;font-style:italic}
-.nx-refer-l span{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:600;color:var(--ink-2);letter-spacing:0.06em;margin-top:4px}
+.nx-refer.swap-tier{background:linear-gradient(135deg,rgba(127,255,212,.20),rgba(160,231,255,.20),rgba(255,143,190,.20))}
+.nx-refer.pump-tier{background:linear-gradient(135deg,rgba(255,212,107,.30),rgba(255,176,136,.28),rgba(255,143,190,.20));border-color:rgba(255,176,136,.55);background-size:200% 100%;animation:nx-shimmer 7s linear infinite}
+.nx-refer.pump-tier::after{content:'NEW';position:absolute;top:10px;right:78px;font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:800;letter-spacing:.10em;background:rgba(26,27,78,0.85);color:#FFD46B;padding:2px 6px;border-radius:999px}
+.nx-refer-l{display:flex;flex-direction:column;gap:3px;min-width:0}
+.nx-refer-tag{font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:800;color:var(--ink-3);letter-spacing:.14em;text-transform:uppercase;margin-bottom:2px}
+.nx-refer.pump-tier .nx-refer-tag{color:#8B4F00}
+.nx-refer-l b{font-family:'Instrument Serif',serif;font-style:italic;font-size:20px;line-height:1.1;color:var(--ink);font-weight:400;letter-spacing:-0.01em}
+.nx-refer-l b em{background:linear-gradient(120deg,#A0E7FF,#FF8FBE);-webkit-background-clip:text;background-clip:text;color:transparent;font-style:italic;font-weight:600}
+.nx-refer.pump-tier .nx-refer-l b em{background:linear-gradient(120deg,#FFB088,#FF8FBE,#B794F6);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:700}
+.nx-refer-l span:not(.nx-refer-tag){font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:600;color:var(--ink-2);letter-spacing:0.06em;margin-top:2px}
 .nx-refer-r{flex-shrink:0;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;color:var(--cyan);letter-spacing:0.08em;text-transform:uppercase}
+.nx-refer.pump-tier .nx-refer-r{color:#8B4F00}
 
 .ai-article{padding-top:8px}
 .ai-article p{background:var(--glass-strong);backdrop-filter:blur(10px);border:1px solid var(--hairline);border-left:3px solid var(--sky);border-radius:16px;padding:16px 18px;margin-bottom:10px;font-size:14px;line-height:1.6;color:var(--ink-2);position:relative;overflow:hidden}
@@ -413,6 +442,11 @@ footer.nx-foot .non-custodial b{color:var(--ink);font-weight:800}
 </style>
 </head>
 <body>
+<a class="nx-promo" href="https://verixiaapps.com">
+  <span class="badge">NEW</span>
+  <b>Verixia</b>: Swap, Bridge, Stocks &amp; Prediction Markets all in one app
+  <span class="arr">&rarr;</span>
+</a>
 
 <div class="nx-blob" style="width:380px;height:380px;background:var(--sky);top:-100px;right:-120px"></div>
 <div class="nx-blob" style="width:420px;height:420px;background:var(--pink);top:35%;left:-160px;animation-delay:3s"></div>
@@ -436,12 +470,8 @@ footer.nx-foot .non-custodial b{color:var(--ink);font-weight:800}
       <span class="txt">{{STATIC_INTRO}}</span>
     </div>
     <h1 class="nx-h1">{{STATIC_H1}}</h1>
-    <p class="nx-lede"><b>Non-custodial. No KYC.</b> Trade on Solana directly from your wallet &mdash; Jupiter routing for SPL tokens, pump.fun bonding-curve trading for fresh launches, settled in seconds.</p>
+    <p class="nx-lede"><b>Non-custodial. No KYC.</b> Best price on every Solana token, routed live through Jupiter &mdash; settled in your wallet in seconds.</p>
 
-    <div class="nx-pump-tag" id="nx-pump-tag" style="display:none">
-      <span class="dot"></span>
-      <span>pump.fun token detected &middot; bonding-curve route enabled</span>
-    </div>
 
     <div class="px-card" id="nx-px-card">
       <div class="px-top">
@@ -512,7 +542,7 @@ footer.nx-foot .non-custodial b{color:var(--ink);font-weight:800}
     <span>Powered by</span>
     <b>JUPITER</b>
     <span class="sep">&middot;</span>
-    <b>PUMP.FUN</b>
+    <b>LI.FI</b>
     <span class="sep">&middot;</span>
     <b>CHAINALYSIS</b>
   </div>
@@ -534,13 +564,24 @@ footer.nx-foot .non-custodial b{color:var(--ink);font-weight:800}
     </div>
   </div>
 
-  <a class="nx-refer" href="https://swap.verixiaapps.com/referrals/">
-    <span class="nx-refer-l">
-      <b>Earn <em>30%</em> of swap fees</b>
-      <span>FROM EVERYONE YOU REFER &middot; FOREVER</span>
-    </span>
-    <span class="nx-refer-r">Join &rarr;</span>
-  </a>
+  <div class="nx-refer-stack">
+    <a class="nx-refer pump-tier" href="https://verixiaapps.com/refer?source=swap">
+      <span class="nx-refer-l">
+        <span class="nx-refer-tag">PUMP.FUN TIER</span>
+        <b>Earn <em>33%</em> of every pump.fun trade</b>
+        <span>FROM EVERYONE YOU REFER &middot; FOREVER &middot; PAID DAILY IN SOL</span>
+      </span>
+      <span class="nx-refer-r">Join &rarr;</span>
+    </a>
+    <a class="nx-refer swap-tier" href="https://verixiaapps.com/refer?source=swap">
+      <span class="nx-refer-l">
+        <span class="nx-refer-tag">SWAP TIER</span>
+        <b>Earn <em>30%</em> on every swap</b>
+        <span>FROM EVERYONE YOU REFER &middot; FOREVER</span>
+      </span>
+      <span class="nx-refer-r">Join &rarr;</span>
+    </a>
+  </div>
 
   <section class="section">
     <div class="section-tag">{{SUPP_HEADING}}</div>
@@ -576,9 +617,9 @@ footer.nx-foot .non-custodial b{color:var(--ink);font-weight:800}
     </div>
     <div class="non-custodial">
       <b>Non-custodial.</b> Your keys, your coins.<br>
-      Jupiter routing &middot; pump.fun bonding curves &middot; Sanctions-screened via Chainalysis
+      Jupiter aggregator &middot; 12,000+ tokens &middot; Sanctions-screened via Chainalysis
     </div>
-    <div class="legal" style="margin-top:14px">VERIXIA &middot; JUPITER + PUMP.FUN &middot; NON-CUSTODIAL &middot; NOT FINANCIAL ADVICE</div>
+    <div class="legal" style="margin-top:14px">VERIXIA &middot; POWERED BY JUPITER &middot; NON-CUSTODIAL &middot; NOT FINANCIAL ADVICE</div>
   </footer>
 
 </main>
@@ -603,26 +644,23 @@ footer.nx-foot .non-custodial b{color:var(--ink);font-weight:800}
 window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.origin + "/api/solana-rpc", wcProjectId: "1a7c741caab0a2c5ffa2b199a816ea92" };
 </script>
 <!-- =============================================================================
-     VERIXIA SWAP WIDGET — Jupiter + Pump.fun, self-contained, per-page isolated.
+     VERIXIA SWAP WIDGET — Jupiter-only. Per-page isolated. No pump.fun.
 
-     Routes:
-       Jupiter path (default for any SPL token):
-         /api/jupiter/tokens                 token list
-         /api/jupiter/tokens/search          token search
-         /api/seo/jupiter/build              SEO-keyed quote+build
-         /api/solana-rpc                     balances, general RPC
+     APIs:
+       /api/jupiter/tokens                token list
+       /api/jupiter/tokens/search         token search
+       /api/seo/jupiter/build             SEO-keyed quote+build
+       /api/solana-rpc                    balances, blockhash, simulate, submit
+       /api/dex/sol-price                 SOL price for USD subtitles + presets
+       /api/dex/chart/:mint               24h OHLCV for the price-card sparkline
 
-       Pump.fun path (auto-detected for bonding-curve tokens):
-         /api/dex/token/:mint                detect pump pair
-         /api/pumpfun/trade                  PumpPortal-built v0 tx
-         /api/trade-rpc                      ALT lookup, blockhash, submit
-                                             (Alchemy primary + Ankr fallback)
+     Atomic 3% fee: SystemProgram.transfer if input is SOL, else SPL
+     transferChecked. Bundled into the same v0 tx as the Jupiter swap and the
+     ALTs Jupiter built used.
 
-     Atomic 3% SOL fee:
-       Jupiter SOL→X         : SystemProgram.transfer prepended in user-spliced ix list
-       Jupiter X→Y (non-SOL) : SPL transferChecked prepended
-       Pump.fun BUY          : SOL transfer prepended after compute-budget ixs
-       Pump.fun SELL         : SOL transfer appended (curve pays native SOL first)
+     Wallet: window.VerixiaWallet from /nexus-dex/verixia-wc.js
+     (.open / .subscribe / .getProvider / .disconnect). State shape:
+     { isConnected, address, walletName, providerType }.
 ============================================================================= -->
 
 <script>
@@ -631,10 +669,6 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
 
   // ---------------------------------------------------------------------------
   // 1. Wait for DOM and window.solanaWeb3, then run __verixiaApp.
-  //    The server injects <script src="/solana-web3.iife.min.js"> into SEO pages,
-  //    so the library is usually already on the page. We add a defensive
-  //    same-origin + CDN fallback in case the injection didn't fire (e.g. when
-  //    serving the template directly without the SEO slug handler).
   // ---------------------------------------------------------------------------
   var WEB3_URLS = [
     '/solana-web3.iife.min.js',
@@ -659,7 +693,6 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       '<button onclick="location.reload()" style="margin-top:6px;padding:12px 22px;border:none;border-radius:14px;background:linear-gradient(135deg,#A0E7FF,#FF8FBE);font-family:\'Space Grotesk\',sans-serif;font-weight:700;font-size:13px;color:#1A1B4E;cursor:pointer;letter-spacing:.04em">Retry</button>' +
       '</div>';
   }
-
   function tryBoot() {
     if (booted) return true;
     if (!window.solanaWeb3) return false;
@@ -671,17 +704,14 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
     }
     return true;
   }
-
   function loadWeb3(idx) {
     if (booted) return;
-    if (idx >= WEB3_URLS.length) { showFatal('All CDNs failed.'); return; }
-    var src = WEB3_URLS[idx];
+    if (idx >= WEB3_URLS.length) { showFatal('Could not load Solana library.'); return; }
     var s = document.createElement('script');
     s.async = false;
     var settled = false;
     var t = setTimeout(function () {
-      if (settled) return;
-      settled = true;
+      if (settled) return; settled = true;
       try { s.onload = s.onerror = null; s.remove(); } catch (e) {}
       loadWeb3(idx + 1);
     }, PER_LOAD_TIMEOUT_MS);
@@ -693,17 +723,15 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       if (settled) return; settled = true; clearTimeout(t);
       loadWeb3(idx + 1);
     };
-    s.src = src;
+    s.src = WEB3_URLS[idx];
     document.head.appendChild(s);
   }
-
   setTimeout(function () {
     var root = document.getElementById('verixia-swap-root');
     if (root && root.querySelector('.swap-skeleton')) {
       showFatal('The swap widget took too long to load. Tap Retry.');
     }
   }, WATCHDOG_MS);
-
   function start() {
     if (window.solanaWeb3) { tryBoot(); return; }
     loadWeb3(0);
@@ -712,8 +740,7 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
   else start();
 
   // ===========================================================================
-  // 2. __verixiaApp — the actual widget. Closure-scoped so every page gets
-  //    its own isolated instance with its own state.
+  // 2. __verixiaApp — the widget. Closure-scoped, isolated per page.
   // ===========================================================================
   function __verixiaApp() {
     var sw = window.solanaWeb3;
@@ -725,7 +752,10 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
     var AddressLookupTableAccount = sw.AddressLookupTableAccount;
     var TransactionInstruction = sw.TransactionInstruction;
 
-    // --- SPL helpers (hand-rolled, no spl-token dep) -------------------------
+    // base64 helpers
+    var b64ToBytes = function (b64) { return Uint8Array.from(atob(b64), function (c) { return c.charCodeAt(0); }); };
+
+    // SPL helpers (hand-rolled, no spl-token dep)
     var TOKEN_PROGRAM_ID       = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
     var TOKEN_2022_PROGRAM_ID  = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
     var ASSOC_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
@@ -768,14 +798,10 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       });
     }
 
-    // --- base64 helpers -------------------------------------------------------
-    var b64ToBytes = function (b64) { return Uint8Array.from(atob(b64), function (c) { return c.charCodeAt(0); }); };
-
-    // --- Config ---------------------------------------------------------------
+    // Config
     var ORIGIN          = window.location.origin;
     var _cfgRpc         = (window.__VERIXIA_CONFIG__ && window.__VERIXIA_CONFIG__.rpc) || '';
     var RPC_URL         = /^https?:\/\//i.test(_cfgRpc) ? _cfgRpc : (ORIGIN + '/api/solana-rpc');
-    var TRADE_RPC_URL   = ORIGIN + '/api/trade-rpc';
     var FEE_WALLET      = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
     var FEE_BPS         = 300;
     var SOL_MINT        = 'So11111111111111111111111111111111111111112';
@@ -784,29 +810,25 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
     var PRIORITY_FEE_MICROLAMPORTS = 50000;
     var SOL_RESERVE     = 0.01;
     var DISCONNECT_FLAG = 'verixia:disconnected';
-    var PUMP_BASE58_RE  = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+    var MINT_RE         = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
-    var connection      = new Connection(RPC_URL, 'confirmed');
-    var tradeConnection = new Connection(TRADE_RPC_URL, 'confirmed');
+    var connection = new Connection(RPC_URL, 'confirmed');
 
-    // --- State ---------------------------------------------------------------
+    // State
     var S = {
       provider: null, publicKey: null, walletName: null,
       tokens: [], tokensLoading: true,
       inputMint: SOL_MINT, outputMint: USDC_MINT,
-      // Conversion lever: prefill so cold visitors see a live quote within 1s.
-      amount: '0.5',
+      amount: '0.5',  // conversion lever — initial quote within ~1s of load
       quote: null, quoting: false, quoteError: null,
       swapping: false, swapError: null, swapResult: null,
       balances: {}, balancesLoading: false,
-      // mint -> { isPump, pool, sym, name, decimals, icon, price, change }
-      pumpInfo: {},
       solPrice: 0
     };
-
     var root, els = {};
+    var _subjectRaw = null;
 
-    // --- Formatting helpers --------------------------------------------------
+    // Formatters
     function fmtAmount(n, decimals) {
       decimals = decimals || 6;
       if (n == null || isNaN(n)) return '0';
@@ -835,18 +857,16 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       if (m.indexOf('insufficient') >= 0)               return 'Insufficient balance for this swap.';
       if (m.indexOf('slippage') >= 0)                   return 'Price moved too much. Try again.';
       if (m.indexOf('blockhash') >= 0 || m.indexOf('expired') >= 0) return 'Transaction expired. Please try again.';
-      if (m.indexOf('user reject') >= 0 || m.indexOf('user denied') >= 0 || m.indexOf('user cancelled') >= 0 || m.indexOf('cancelled') >= 0) return 'Transaction cancelled.';
+      if (m.indexOf('user reject') >= 0 || m.indexOf('user denied') >= 0 || m.indexOf('cancelled') >= 0) return 'Transaction cancelled.';
       if (m.indexOf('simulation failed') >= 0)          return 'Swap simulation failed \u2014 the price may have moved.';
       if (m.indexOf('account not') >= 0)                return 'Token account not ready. Please try again in a moment.';
       if (m.indexOf('rate') >= 0)                       return 'Too many requests \u2014 please wait a moment.';
       if (m.indexOf('could not find any route') >= 0 || m.indexOf('no route') >= 0) return 'No route available for this pair.';
       if (m.indexOf('too large') >= 0)                  return 'Route too complex for one transaction. Try a different amount.';
-      if (m.indexOf('not a pump') >= 0 || m.indexOf('not indexed') >= 0) return 'Not a pump.fun bonding-curve token.';
-      if (m.indexOf('graduat') >= 0)                    return 'Token graduated off the bonding curve \u2014 try Jupiter route.';
       return (err && err.message) || 'Swap failed. Please try again.';
     }
 
-    // --- Jupiter v2 build response → ix deserializer -------------------------
+    // Jupiter build response → TransactionInstruction
     function deserJupIx(ix) {
       return {
         programId: new PublicKey(ix.programId),
@@ -857,9 +877,10 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       };
     }
 
-    // --- AppKit wallet readiness wait ----------------------------------------
+    // Wallet bundle readiness (verixia-wc.js exposes window.VerixiaWallet)
     function appKitReady() {
-      return typeof window !== 'undefined' && window.VerixiaWallet && typeof window.VerixiaWallet.open === 'function';
+      return typeof window !== 'undefined' && window.VerixiaWallet
+          && typeof window.VerixiaWallet.open === 'function';
     }
     function waitForAppKit() {
       return new Promise(function (resolve) {
@@ -870,25 +891,24 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
         var tries = 0;
         var iv = setInterval(function () {
           if (appKitReady()) { clearInterval(iv); finish(true); }
-          else if (++tries > 60) { clearInterval(iv); finish(false); }
+          else if (++tries > 40) { clearInterval(iv); finish(false); }
         }, 100);
       });
     }
 
     // ========================================================================
-    // 3. Token list, pump detection, balances, subject auto-select
+    // 3. Token list, subject auto-select
     // ========================================================================
     function tokenBy(mint) {
       for (var i = 0; i < S.tokens.length; i++) if (S.tokens[i].address === mint) return S.tokens[i];
       return null;
     }
-
     function upsertToken(t) {
       if (!t || !t.address || !t.symbol || t.decimals == null) return;
       var existing = tokenBy(t.address);
       if (existing) {
         if (!existing.logoURI && t.logoURI) existing.logoURI = t.logoURI;
-        if (!existing.name && t.name) existing.name = t.name;
+        if (!existing.name    && t.name)    existing.name    = t.name;
         return;
       }
       S.tokens.push(t);
@@ -908,16 +928,13 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
             logoURI:  t.icon || t.logoURI || null
           };
         }).filter(function (t) { return t.address && t.symbol && t.decimals != null; });
-
-        if (norm.length) S.tokens = norm;
-        else S.tokens = fallbackTokens();
+        S.tokens = norm.length ? norm : fallbackTokens();
       } catch (e) {
         console.warn('[verixia] token list failed', e);
         S.tokens = fallbackTokens();
       } finally {
         S.tokensLoading = false;
         renderRows();
-        // Resolve subject once tokens are loaded (in case subject was a symbol).
         resolveSubjectFromTokens();
       }
     }
@@ -928,11 +945,6 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       ];
     }
 
-    // Detect the page's subject token. Order: __pageMeta.subject (could be
-    // symbol or mint) → ticker pattern in H1 / keyword. Stored, then resolved
-    // against the loaded token list, or against /api/dex/token/:mint for
-    // pump.fun mints not on Jupiter.
-    var _subjectRaw = null;
     function detectSubjectRaw() {
       var meta = window.__pageMeta || {};
       if (meta.subject && typeof meta.subject === 'string' && meta.subject.trim().length >= 2) {
@@ -943,39 +955,30 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       var kwMeta = document.querySelector('meta[name="keywords"]');
       var kw = kwMeta ? kwMeta.content : '';
       var combined = h1Text + ' ' + kw;
-
       var mintMatch = combined.match(/\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/);
       if (mintMatch) return mintMatch[0];
-
       var xMatch = combined.match(/\b[A-Z]{2,6}x\b/);
       if (xMatch) return xMatch[0];
-
       var noise = { USA:1,USD:1,DEX:1,CEX:1,API:1,SEO:1,FAQ:1,ETF:1,NFT:1,DAO:1,KYC:1,SPL:1,RPC:1,SDK:1,NEW:1,TOP:1,BEST:1,ALL:1 };
       var upperMatch = combined.match(/\b[A-Z]{3,6}\b/);
       if (upperMatch && !noise[upperMatch[0]]) return upperMatch[0];
-
       return null;
     }
 
     async function resolveSubjectFromTokens() {
       if (!_subjectRaw) return;
       var raw = _subjectRaw;
-
-      // 1. Mint address? Use directly.
-      if (PUMP_BASE58_RE.test(raw)) {
-        await applyOutputMint(raw);
-        return;
-      }
-
-      // 2. Try exact symbol match in loaded token list.
+      // Mint address? Use directly.
+      if (MINT_RE.test(raw)) { applyOutputMint(raw); return; }
+      // Exact symbol match in loaded list?
       var rawU = raw.toUpperCase();
-      var bySym = null;
       for (var i = 0; i < S.tokens.length; i++) {
-        if (S.tokens[i].symbol && S.tokens[i].symbol.toUpperCase() === rawU) { bySym = S.tokens[i]; break; }
+        if (S.tokens[i].symbol && S.tokens[i].symbol.toUpperCase() === rawU) {
+          applyOutputMint(S.tokens[i].address);
+          return;
+        }
       }
-      if (bySym) { await applyOutputMint(bySym.address); return; }
-
-      // 3. Probe Jupiter search.
+      // Probe Jupiter search.
       try {
         var r = await fetch(ORIGIN + '/api/jupiter/tokens/search?query=' + encodeURIComponent(raw));
         var data = await r.json();
@@ -996,87 +999,21 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
           };
           if (norm.address && norm.symbol && norm.decimals != null) {
             upsertToken(norm);
-            await applyOutputMint(norm.address);
-            return;
+            applyOutputMint(norm.address);
           }
         }
       } catch (e) { console.warn('[verixia] subject search failed', e); }
-
-      // 4. Couldn't resolve — leave default USDC.
     }
 
-    // Applies a new outputMint and triggers pump-info probe + quote.
-    async function applyOutputMint(mint) {
-      if (!mint || mint === S.outputMint) {
-        // Still probe pump info in case it changed.
-        await probePumpInfo(mint);
-        renderAll();
-        scheduleQuote();
-        return;
-      }
+    function applyOutputMint(mint) {
+      if (!mint || mint === S.outputMint) { renderAll(); scheduleQuote(); return; }
       S.outputMint = mint;
       S.quote = null;
       S.quoteError = null;
       renderAll();
-      await probePumpInfo(mint);
-      renderAll();
       scheduleQuote();
+      bootPriceCard();  // refresh price card for the new token
       if (S.publicKey) refreshBalances();
-    }
-
-    // GET /api/dex/token/:mint → { token: {sym,name,price,...}, hasPumpPair }.
-    // If hasPumpPair, register the token in S.tokens so the picker shows it
-    // and the swap row renders properly.
-    async function probePumpInfo(mint) {
-      if (!mint || mint === SOL_MINT) return;
-      if (S.pumpInfo[mint]) return S.pumpInfo[mint];
-      try {
-        var r = await fetch(ORIGIN + '/api/dex/token/' + encodeURIComponent(mint));
-        if (!r.ok) { S.pumpInfo[mint] = { isPump: false }; return S.pumpInfo[mint]; }
-        var data = await r.json();
-        if (data && data.hasPumpPair && data.token) {
-          var t = data.token;
-          var info = {
-            isPump:   true,
-            pool:     t.pumpPool || 'auto',
-            sym:      t.sym || '???',
-            name:     t.name || t.sym || 'Unknown',
-            decimals: Number(t.decimals != null ? t.decimals : 6),
-            icon:     t.icon || null,
-            price:    Number(t.price || 0),
-            change:   Number(t.priceChange24h || 0)
-          };
-          S.pumpInfo[mint] = info;
-          // Register in token list so it appears in picker / row.
-          upsertToken({
-            address:  mint,
-            symbol:   info.sym,
-            name:     info.name,
-            decimals: info.decimals,
-            logoURI:  info.icon
-          });
-          return info;
-        }
-        S.pumpInfo[mint] = { isPump: false };
-        return S.pumpInfo[mint];
-      } catch (e) {
-        console.warn('[verixia] pump probe failed', e);
-        S.pumpInfo[mint] = { isPump: false };
-        return S.pumpInfo[mint];
-      }
-    }
-
-    // Returns the active route: 'jupiter' or 'pumpfun'. Pump.fun route applies
-    // only when SOL ↔ pump_token. Other pump pairings fall back to Jupiter
-    // (which may or may not have a route).
-    function activeRoute() {
-      var inP  = S.pumpInfo[S.inputMint];
-      var outP = S.pumpInfo[S.outputMint];
-      var inIsPump  = inP && inP.isPump;
-      var outIsPump = outP && outP.isPump;
-      if (S.inputMint === SOL_MINT && outIsPump) return 'pumpfun';
-      if (S.outputMint === SOL_MINT && inIsPump) return 'pumpfun';
-      return 'jupiter';
     }
 
     async function loadSolPrice() {
@@ -1089,8 +1026,7 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
     }
 
     // ========================================================================
-    // 4. Balances — Alchemy via /api/solana-rpc only (general path, no
-    //    fallback). Ankr is reserved for the trade-path only.
+    // 4. Balances — Alchemy via /api/solana-rpc
     // ========================================================================
     function mergeTokenAccounts(out, accs) {
       if (!accs || !accs.value) return;
@@ -1106,41 +1042,32 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
         out[mint] = { amount: Number(amt), decimals: dec, uiAmount: uiAmt };
       }
     }
-
     async function refreshBalances() {
       if (!S.publicKey) { S.balances = {}; S.balancesLoading = false; renderRows(); return; }
       S.balancesLoading = true;
       renderRows();
       var owner = S.publicKey;
       var out = {};
-
       try {
         var solBal = await connection.getBalance(owner, 'confirmed');
         out[SOL_MINT] = { amount: solBal, decimals: 9, uiAmount: solBal / 1e9 };
       } catch (e) { console.warn('[verixia] SOL balance failed:', e && e.message); }
-
       try {
         var tokAccs = await connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, 'confirmed');
         mergeTokenAccounts(out, tokAccs);
       } catch (e) { console.warn('[verixia] SPL accounts failed:', e && e.message); }
-
       try {
         var t22Accs = await connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, 'confirmed');
         mergeTokenAccounts(out, t22Accs);
       } catch (e) { console.warn('[verixia] Token-2022 accounts failed:', e && e.message); }
-
       if (!out[SOL_MINT]) out[SOL_MINT] = { amount: 0, decimals: 9, uiAmount: 0 };
-
       S.balances = out;
       S.balancesLoading = false;
       renderRows();
     }
 
     // ========================================================================
-    // 5. Quote — routes to Jupiter or Pump.fun based on activeRoute(). The
-    //    Pump path doesn't have a quote endpoint in our backend; we use the
-    //    DexScreener price feed for the displayed estimate and rely on
-    //    PumpPortal's slippage tolerance + on-chain sim to catch movement.
+    // 5. Quote — Jupiter only, via SEO-keyed build endpoint
     // ========================================================================
     function rawAmount() {
       var t = tokenBy(S.inputMint);
@@ -1149,16 +1076,13 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       if (!Number.isFinite(n) || n <= 0) return '';
       return Math.floor(n * Math.pow(10, t.decimals)).toString();
     }
-
     var quoteAbort = null;
     var quoteTimer = null;
-
     function scheduleQuote() {
       var raw = rawAmount();
       if (!raw || S.inputMint === S.outputMint) {
         S.quote = null; S.quoteError = null; S.quoting = false;
-        renderDetails(); renderButton(); renderRows();
-        return;
+        renderAll(); return;
       }
       if (quoteAbort) quoteAbort.abort();
       if (quoteTimer) clearTimeout(quoteTimer);
@@ -1166,30 +1090,25 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       quoteAbort = ac;
       S.quoting = true; S.quoteError = null;
       renderButton(); renderRows();
-
       quoteTimer = setTimeout(async function () {
-        var route = activeRoute();
         try {
-          if (route === 'pumpfun') {
-            await getPumpQuote(raw, ac);
-          } else {
-            try {
-              await getJupiterQuote(raw, ac);
-            } catch (jupErr) {
-              if (ac.signal.aborted) return;
-              // Jupiter has no route — auto-probe pump and retry if pump.
-              if (/no route|could not find/i.test(String(jupErr && jupErr.message || ''))) {
-                var probeMint = S.outputMint !== SOL_MINT ? S.outputMint : S.inputMint;
-                var info = await probePumpInfo(probeMint);
-                if (info && info.isPump && !ac.signal.aborted) {
-                  renderAll();
-                  await getPumpQuote(raw, ac);
-                  return;
-                }
-              }
-              throw jupErr;
-            }
+          var net = (BigInt(raw) * BigInt(10000 - FEE_BPS)) / 10000n;
+          if (net <= 0n) { S.quote = null; S.quoting = false; renderAll(); return; }
+          var params = new URLSearchParams({
+            inputMint:  S.inputMint,
+            outputMint: S.outputMint,
+            amount:     net.toString(),
+            slippageBps: String(SLIPPAGE_BPS),
+            taker: S.publicKey ? S.publicKey.toBase58() : '11111111111111111111111111111111',
+            computeUnitPriceMicroLamports: String(PRIORITY_FEE_MICROLAMPORTS)
+          });
+          var r = await fetch(ORIGIN + '/api/seo/jupiter/build?' + params.toString(), { signal: ac.signal });
+          if (!r.ok) {
+            var body = await r.json().catch(function () { return {}; });
+            throw new Error(body.error || ('Quote failed (' + r.status + ')'));
           }
+          var data = await r.json();
+          if (!ac.signal.aborted) { S.quote = data; S.quoteError = null; }
         } catch (e) {
           if (e && e.name === 'AbortError') return;
           if (!ac.signal.aborted) { S.quote = null; S.quoteError = friendlyError(e); }
@@ -1198,166 +1117,113 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
         }
       }, 350);
     }
-
-    async function getJupiterQuote(raw, ac) {
-      var net = (BigInt(raw) * BigInt(10000 - FEE_BPS)) / 10000n;
-      if (net <= 0n) { S.quote = null; return; }
-      var params = new URLSearchParams({
-        inputMint:  S.inputMint,
-        outputMint: S.outputMint,
-        amount:     net.toString(),
-        slippageBps: String(SLIPPAGE_BPS),
-        taker: S.publicKey ? S.publicKey.toBase58() : '11111111111111111111111111111111',
-        computeUnitPriceMicroLamports: String(PRIORITY_FEE_MICROLAMPORTS)
-      });
-      var r = await fetch(ORIGIN + '/api/seo/jupiter/build?' + params.toString(), { signal: ac.signal });
-      if (!r.ok) {
-        var body = await r.json().catch(function () { return {}; });
-        throw new Error(body.error || ('Quote failed (' + r.status + ')'));
-      }
-      var data = await r.json();
-      if (ac.signal.aborted) return;
-      S.quote = { source: 'jupiter', data: data };
-    }
-
-    // Pump quote: no upstream call needed — we already have token.price and
-    // S.solPrice from DexScreener (set in probePumpInfo + loadSolPrice). The
-    // actual tx is built at swap time via /api/pumpfun/trade.
-    async function getPumpQuote(raw, ac) {
-      var inT  = tokenBy(S.inputMint);
-      var outT = tokenBy(S.outputMint);
-      if (!inT || !outT) { S.quote = null; return; }
-
-      var isBuy = S.inputMint === SOL_MINT;
-      var pumpMint = isBuy ? S.outputMint : S.inputMint;
-      var pumpInfo = S.pumpInfo[pumpMint];
-      if (!pumpInfo || !pumpInfo.isPump) { S.quote = null; throw new Error('Not a pump.fun token.'); }
-      if (!(pumpInfo.price > 0) || !(S.solPrice > 0)) {
-        // No price feed yet — show pending quote.
-        S.quote = { source: 'pumpfun', pending: true, isBuy: isBuy, pumpMint: pumpMint };
-        return;
-      }
-
-      if (isBuy) {
-        // BUY: user enters X SOL. Wallet debit = X. Pump pulls up to 1.10× of
-        // what we send (10% PumpPortal slippage), so size accordingly.
-        var totalLamports = BigInt(raw);
-        var feeLamports   = (totalLamports * BigInt(FEE_BPS)) / 10000n;
-        var tradeLamports = ((totalLamports - feeLamports) * 100n) / 110n;
-        if (tradeLamports <= 0n || feeLamports <= 0n) { S.quote = null; return; }
-        var tradeSol = Number(tradeLamports) / 1e9;
-        var estTokens = (tradeSol * S.solPrice) / pumpInfo.price;
-        var outRaw = Math.floor(estTokens * Math.pow(10, pumpInfo.decimals));
-        S.quote = {
-          source: 'pumpfun',
-          isBuy: true,
-          pumpMint: pumpMint,
-          pool: pumpInfo.pool,
-          totalLamports: totalLamports.toString(),
-          tradeLamports: tradeLamports.toString(),
-          feeLamports:   feeLamports.toString(),
-          outAmount: outRaw,
-          otherAmountThreshold: outRaw,
-          priceImpactPct: null
-        };
-      } else {
-        // SELL: user enters tokens. Full amount → curve. Fee in SOL appended.
-        var tradeTokensRaw = BigInt(raw);
-        if (tradeTokensRaw <= 0n) { S.quote = null; return; }
-        var tradeTokensUi = Number(tradeTokensRaw) / Math.pow(10, inT.decimals);
-        var grossSol = (tradeTokensUi * pumpInfo.price) / S.solPrice;
-        var feeSol   = grossSol * (FEE_BPS / 10000);
-        var netSol   = grossSol - feeSol;
-        if (!(netSol > 0)) { S.quote = null; return; }
-        S.quote = {
-          source: 'pumpfun',
-          isBuy: false,
-          pumpMint: pumpMint,
-          pool: pumpInfo.pool,
-          decimals: inT.decimals,
-          tradeTokens:  tradeTokensRaw.toString(),
-          tradeTokensUi: tradeTokensUi,
-          feeLamports:  String(Math.floor(feeSol * 1e9)),
-          outAmount:    Math.floor(netSol * 1e9),
-          otherAmountThreshold: Math.floor(netSol * 0.9 * 1e9),
-          priceImpactPct: null
-        };
-      }
-    }
-
     function outAmountUi() {
       var t = tokenBy(S.outputMint);
       if (!S.quote || !t) return null;
-      if (S.quote.source === 'pumpfun') {
-        if (S.quote.pending) return null;
-        return Number(S.quote.outAmount) / Math.pow(10, t.decimals);
-      }
-      return Number(S.quote.data.outAmount) / Math.pow(10, t.decimals);
+      return Number(S.quote.outAmount) / Math.pow(10, t.decimals);
     }
     function minReceived() {
       var t = tokenBy(S.outputMint);
       if (!S.quote || !t) return null;
-      if (S.quote.source === 'pumpfun') {
-        if (S.quote.pending) return null;
-        return Number(S.quote.otherAmountThreshold) / Math.pow(10, t.decimals);
-      }
-      return Number(S.quote.data.otherAmountThreshold) / Math.pow(10, t.decimals);
+      return Number(S.quote.otherAmountThreshold) / Math.pow(10, t.decimals);
     }
     function priceImpact() {
-      if (!S.quote) return null;
-      var src = S.quote.source === 'pumpfun' ? S.quote.priceImpactPct : S.quote.data.priceImpactPct;
-      if (src == null) return null;
-      var n = Number(src);
-      if (!Number.isFinite(n)) return null;
-      return n * (Math.abs(n) <= 1 ? 100 : 1);
+      if (!S.quote || S.quote.priceImpactPct == null) return null;
+      var n = Number(S.quote.priceImpactPct);
+      return Number.isFinite(n) ? n * (Math.abs(n) <= 1 ? 100 : 1) : null;
     }
 
     // ========================================================================
-    // 6. Swap execution
-    //    - Jupiter path: build instructions from /api/seo/jupiter/build,
-    //      prepend the fee transfer (SOL or SPL transferChecked), compile v0
-    //      with the ALTs from the build, sign, submit via /api/solana-rpc.
-    //    - Pump.fun path: POST /api/pumpfun/trade for the built v0 tx,
-    //      decompile it (fetching ALTs through /api/trade-rpc), splice in the
-    //      3% SOL fee (prepend on BUY, append on SELL), recompile with a
-    //      fresh blockhash from /api/trade-rpc, sign, submit through
-    //      /api/trade-rpc (Alchemy primary + Ankr fallback).
+    // 6. Swap execution — Jupiter only
     // ========================================================================
-    function flip() {
-      // Pump pairings only support SOL ↔ pump_token, so flipping is fine —
-      // the new direction will resolve again on the next quote tick.
-      var i = S.inputMint;
-      S.inputMint = S.outputMint;
-      S.outputMint = i;
-      S.amount = '';
-      S.quote = null;
-      renderAll();
-      scheduleQuote();
-    }
-    function setMax() {
-      var bal = S.balances[S.inputMint];
-      if (!bal) return;
-      var maxAmt = bal.uiAmount;
-      if (S.inputMint === SOL_MINT) maxAmt = Math.max(0, maxAmt - SOL_RESERVE);
-      S.amount = String(maxAmt);
-      renderRows();
-      scheduleQuote();
-    }
-
     async function handleSwap() {
+      var inputToken  = tokenBy(S.inputMint);
+      var outputToken = tokenBy(S.outputMint);
       if (!S.publicKey || !S.provider || (!S.provider._supportsSignTx && !S.provider._supportsSignAndSend)) {
         S.swapError = 'Please connect a wallet first.'; renderBanners(); return;
       }
-      if (!S.quote) { S.swapError = 'No quote available \u2014 try again.'; renderBanners(); return; }
-
+      if (!S.quote || !outputToken || !inputToken) {
+        S.swapError = 'No quote available \u2014 try again.'; renderBanners(); return;
+      }
       S.swapping = true; S.swapError = null; S.swapResult = null;
       renderButton(); renderBanners();
-
       try {
-        if (S.quote.source === 'pumpfun') await doPumpSwap();
-        else await doJupiterSwap();
+        var raw = rawAmount();
+        var feeAmount = (BigInt(raw) * BigInt(FEE_BPS)) / 10000n;
+        if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero \u2014 amount too small.');
+
+        var feeIxs = [];
+        if (S.inputMint === SOL_MINT) {
+          feeIxs.push(SystemProgram.transfer({
+            fromPubkey: S.publicKey, toPubkey: FEE_WALLET, lamports: Number(feeAmount)
+          }));
+        } else {
+          var mintPk = new PublicKey(S.inputMint);
+          var mintInfo = await connection.getAccountInfo(mintPk);
+          if (!mintInfo) throw new Error('Input mint not found on-chain.');
+          var tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID) ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
+          var sourceAta = getAta(mintPk, S.publicKey, tokenProgram);
+          var destAta   = getAta(mintPk, FEE_WALLET,  tokenProgram);
+          feeIxs.push(ataIdempotentIx(S.publicKey, destAta, FEE_WALLET, mintPk, tokenProgram));
+          feeIxs.push(transferCheckedIx(sourceAta, mintPk, destAta, S.publicKey, feeAmount, inputToken.decimals, tokenProgram));
+        }
+
+        var build = S.quote;
+        var ixs = [];
+        if (Array.isArray(build.computeBudgetInstructions))
+          for (var ci = 0; ci < build.computeBudgetInstructions.length; ci++) ixs.push(deserJupIx(build.computeBudgetInstructions[ci]));
+        for (var fi = 0; fi < feeIxs.length; fi++) ixs.push(feeIxs[fi]);
+        if (Array.isArray(build.setupInstructions))
+          for (var si = 0; si < build.setupInstructions.length; si++) ixs.push(deserJupIx(build.setupInstructions[si]));
+        if (build.swapInstruction) ixs.push(deserJupIx(build.swapInstruction));
+        if (build.cleanupInstruction) ixs.push(deserJupIx(build.cleanupInstruction));
+        if (Array.isArray(build.otherInstructions))
+          for (var oi = 0; oi < build.otherInstructions.length; oi++) ixs.push(deserJupIx(build.otherInstructions[oi]));
+
+        var altKeys = Object.keys(build.addressesByLookupTableAddress || {});
+        var alts = [];
+        if (altKeys.length > 0) {
+          var infos = await connection.getMultipleAccountsInfo(altKeys.map(function (k) { return new PublicKey(k); }));
+          alts = altKeys.map(function (k, i) {
+            return infos[i] ? new AddressLookupTableAccount({
+              key: new PublicKey(k),
+              state: AddressLookupTableAccount.deserialize(infos[i].data)
+            }) : null;
+          }).filter(Boolean);
+        }
+        var latest = await connection.getLatestBlockhash('confirmed');
+        var message = new TransactionMessage({
+          payerKey: S.publicKey, recentBlockhash: latest.blockhash, instructions: ixs
+        }).compileToV0Message(alts);
+        var tx = new VersionedTransaction(message);
+
+        var mapSimErr = function (logs) {
+          var j = (logs || []).join('\n').toLowerCase();
+          if (j.indexOf('insufficient') >= 0 || j.indexOf('0x1') >= 0) return 'Insufficient balance for this swap.';
+          if (j.indexOf('slippage') >= 0 || j.indexOf('0x1771') >= 0) return 'Price moved \u2014 try a higher slippage or smaller amount.';
+          if (j.indexOf('account not') >= 0 || j.indexOf('uninitialized') >= 0) return 'Token account not ready. Try again in a moment.';
+          if (j.indexOf('blockhash') >= 0 || j.indexOf('expired') >= 0) return 'Quote expired. Please refresh and retry.';
+          return null;
+        };
+        try {
+          var sim = await connection.simulateTransaction(tx, { replaceRecentBlockhash: true, sigVerify: false });
+          if (sim.value.err) throw new Error(mapSimErr(sim.value.logs) || 'Swap simulation failed \u2014 the price may have moved.');
+        } catch (simErr) {
+          if (simErr && simErr.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) throw simErr;
+          console.warn('[verixia] sim non-fatal', simErr);
+        }
+
+        var sig = await signAndSend(tx, latest, connection);
+        var confirmed = await confirmSig(connection, sig, latest);
+
+        S.swapResult = { signature: sig, pending: !confirmed };
+        if (confirmed) {
+          S.amount = ''; S.quote = null;
+          if (els.amount) els.amount.value = '';
+          setTimeout(refreshBalances, 2000);
+        }
       } catch (e) {
-        console.error('[verixia swap]', e);
+        console.error('[verixia] swap', e);
         S.swapError = friendlyError(e);
       } finally {
         S.swapping = false;
@@ -1365,281 +1231,49 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       }
     }
 
-    async function doJupiterSwap() {
-      var inT  = tokenBy(S.inputMint);
-      var outT = tokenBy(S.outputMint);
-      if (!inT || !outT) throw new Error('Token metadata missing.');
-      var build = S.quote.data;
-      var raw   = rawAmount();
-      var dec   = inT.decimals;
-
-      var feeAmount = (BigInt(raw) * BigInt(FEE_BPS)) / 10000n;
-      if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero \u2014 amount too small.');
-
-      // Build the 3% fee ix(s) in the input token.
-      var feeIxs = [];
-      if (S.inputMint === SOL_MINT) {
-        feeIxs.push(SystemProgram.transfer({
-          fromPubkey: S.publicKey, toPubkey: FEE_WALLET, lamports: Number(feeAmount)
-        }));
-      } else {
-        var mintPk = new PublicKey(S.inputMint);
-        var mintInfo = await connection.getAccountInfo(mintPk);
-        if (!mintInfo) throw new Error('Input mint not found on-chain.');
-        var tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID) ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
-        var sourceAta = getAta(mintPk, S.publicKey, tokenProgram);
-        var destAta   = getAta(mintPk, FEE_WALLET,  tokenProgram);
-        feeIxs.push(ataIdempotentIx(S.publicKey, destAta, FEE_WALLET, mintPk, tokenProgram));
-        feeIxs.push(transferCheckedIx(sourceAta, mintPk, destAta, S.publicKey, feeAmount, dec, tokenProgram));
-      }
-
-      // Assemble: ComputeBudget → fee → setup → swap → cleanup → other.
-      var ixs = [];
-      if (Array.isArray(build.computeBudgetInstructions))
-        for (var ci = 0; ci < build.computeBudgetInstructions.length; ci++) ixs.push(deserJupIx(build.computeBudgetInstructions[ci]));
-      for (var fi = 0; fi < feeIxs.length; fi++) ixs.push(feeIxs[fi]);
-      if (Array.isArray(build.setupInstructions))
-        for (var si = 0; si < build.setupInstructions.length; si++) ixs.push(deserJupIx(build.setupInstructions[si]));
-      if (build.swapInstruction)    ixs.push(deserJupIx(build.swapInstruction));
-      if (build.cleanupInstruction) ixs.push(deserJupIx(build.cleanupInstruction));
-      if (Array.isArray(build.otherInstructions))
-        for (var oi = 0; oi < build.otherInstructions.length; oi++) ixs.push(deserJupIx(build.otherInstructions[oi]));
-
-      // Fetch ALTs Jupiter built used.
-      var altKeys = Object.keys(build.addressesByLookupTableAddress || {});
-      var alts = [];
-      if (altKeys.length > 0) {
-        var infos = await connection.getMultipleAccountsInfo(altKeys.map(function (k) { return new PublicKey(k); }));
-        alts = altKeys.map(function (k, i) {
-          return infos[i] ? new AddressLookupTableAccount({
-            key:   new PublicKey(k),
-            state: AddressLookupTableAccount.deserialize(infos[i].data)
-          }) : null;
-        }).filter(Boolean);
-      }
-
-      var latest = await connection.getLatestBlockhash('confirmed');
-      var message = new TransactionMessage({
-        payerKey:        S.publicKey,
-        recentBlockhash: latest.blockhash,
-        instructions:    ixs
-      }).compileToV0Message(alts);
-      var tx = new VersionedTransaction(message);
-
-      // Pre-sign sim. Maps a few common chain errors to readable messages.
-      try {
-        var sim = await connection.simulateTransaction(tx, { replaceRecentBlockhash: true, sigVerify: false });
-        if (sim.value.err) {
-          var j = (sim.value.logs || []).join('\n').toLowerCase();
-          var msg = null;
-          if (j.indexOf('insufficient') >= 0 || j.indexOf('0x1') >= 0) msg = 'Insufficient balance for this swap.';
-          else if (j.indexOf('slippage') >= 0 || j.indexOf('0x1771') >= 0) msg = 'Price moved \u2014 try a higher slippage or smaller amount.';
-          else if (j.indexOf('account not') >= 0 || j.indexOf('uninitialized') >= 0) msg = 'Token account not ready. Try again in a moment.';
-          else if (j.indexOf('blockhash') >= 0 || j.indexOf('expired') >= 0) msg = 'Quote expired. Please refresh and retry.';
-          throw new Error(msg || 'Swap simulation failed \u2014 the price may have moved.');
-        }
-      } catch (simErr) {
-        if (simErr && simErr.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) throw simErr;
-        console.warn('[verixia] jup sim non-fatal', simErr);
-      }
-
-      var sig = await signAndSend(tx, latest, connection);
-      await confirmSig(connection, sig, latest);
-    }
-
-    async function doPumpSwap() {
-      var q = S.quote;
-      if (!q.pumpMint) throw new Error('Pump quote missing mint.');
-      if (q.pending) throw new Error('Quote still loading \u2014 wait a moment.');
-
-      // 1. Ask the server to build the PumpPortal tx for us.
-      var body = {
-        action: q.isBuy ? 'buy' : 'sell',
-        mint:   q.pumpMint,
-        user:   S.publicKey.toBase58(),
-        amount: q.isBuy ? q.tradeLamports : q.tradeTokens,
-        pool:   q.pool || 'auto'
-      };
-      if (!q.isBuy && q.decimals != null) body.decimals = q.decimals;
-
-      var br = await fetch(ORIGIN + '/api/pumpfun/trade', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-      var bd = await br.json().catch(function () { return {}; });
-      if (!br.ok) throw new Error(bd.error || ('Pump build failed (' + br.status + ')'));
-      if (!bd.tx) throw new Error('PumpPortal returned no tx.');
-
-      // 2. Decompile the built tx using ALTs fetched through the trade RPC.
-      var txBytes = b64ToBytes(bd.tx);
-      var rawTx   = VersionedTransaction.deserialize(txBytes);
-      var lookupKeys = (rawTx.message.addressTableLookups || []).map(function (l) { return l.accountKey; });
-      var alts = [];
-      if (lookupKeys.length > 0) {
-        var infos = await tradeConnection.getMultipleAccountsInfo(lookupKeys);
-        for (var i = 0; i < lookupKeys.length; i++) {
-          if (!infos[i]) continue;
-          alts.push(new AddressLookupTableAccount({
-            key:   lookupKeys[i],
-            state: AddressLookupTableAccount.deserialize(infos[i].data)
-          }));
-        }
-      }
-      var decompiled = TransactionMessage.decompile(rawTx.message, { addressLookupTableAccounts: alts });
-      var ixs = decompiled.instructions.slice();
-
-      // 3. Splice the 3% SOL fee.
-      var feeLamports = BigInt(q.feeLamports || '0');
-      if (feeLamports <= 0n) {
-        throw new Error(q.isBuy
-          ? 'Fee rounds to zero \u2014 amount too small.'
-          : 'Could not estimate sell fee \u2014 price feed unavailable.');
-      }
-      var feeIx = SystemProgram.transfer({
-        fromPubkey: S.publicKey,
-        toPubkey:   FEE_WALLET,
-        lamports:   Number(feeLamports)
-      });
-      var CB_PROGRAM = 'ComputeBudget111111111111111111111111111111';
-      if (q.isBuy) {
-        // Insert AFTER any leading compute-budget instructions so PumpPortal's
-        // priority fee still applies to the whole tx.
-        var insertAt = 0;
-        while (insertAt < ixs.length && ixs[insertAt].programId.toBase58() === CB_PROGRAM) insertAt++;
-        ixs.splice(insertAt, 0, feeIx);
-      } else {
-        // Append at the end so the curve has paid native SOL to the wallet
-        // before we transfer the fee out.
-        ixs.push(feeIx);
-      }
-
-      // 4. Fresh blockhash + recompile with the same ALTs.
-      var latest = await tradeConnection.getLatestBlockhash('confirmed');
-      var message = new TransactionMessage({
-        payerKey:        S.publicKey,
-        recentBlockhash: latest.blockhash,
-        instructions:    ixs
-      }).compileToV0Message(alts);
-      var tx = new VersionedTransaction(message);
-
-      // 5. Sim — non-fatal if it can't run, but if it returns err we surface
-      //    the most readable failure mode.
-      try {
-        var sim = await tradeConnection.simulateTransaction(tx, {
-          sigVerify: false, replaceRecentBlockhash: true, commitment: 'processed'
-        });
-        if (sim && sim.value && sim.value.err) {
-          var logs = sim.value.logs || [];
-          var j = logs.join('\n').toLowerCase();
-          var msg = null;
-          if (j.indexOf('slippage') >= 0 || j.indexOf('toomuchsol') >= 0 || j.indexOf('toolittlesol') >= 0)
-            msg = 'Price moved past slippage \u2014 try again.';
-          else if (j.indexOf('insufficient') >= 0) msg = 'Not enough SOL for this trade + fees.';
-          else if (j.indexOf('exceeded') >= 0 && j.indexOf('compute') >= 0) msg = 'Hit the compute limit \u2014 retry.';
-          if (!msg) {
-            var ctx = (logs.filter(function (l) { return /program log:|error|0x/i.test(l); }).pop() || '').replace(/^Program log:\s*/i, '').slice(0, 150);
-            msg = ctx ? ('Sim failed \u2192 ' + ctx) : 'Sim failed \u2014 try again.';
-          }
-          throw new Error(msg);
-        }
-      } catch (simErr) {
-        if (simErr && /sim failed|slippage|insufficient|compute/i.test(String(simErr.message))) throw simErr;
-        console.warn('[verixia] pump sim non-fatal', simErr && simErr.message);
-      }
-
-      // 6. Sign + send through trade RPC.
-      var sig = await signAndSend(tx, latest, tradeConnection);
-      await confirmSig(tradeConnection, sig, latest, true);
-    }
-
-    // Sign with the connected wallet, then send. Two-path wallet support:
-    // signTransaction (most wallets) → sendRawTransaction, OR
-    // signAndSendTransaction (mobile / some adapters).
     async function signAndSend(tx, latest, conn) {
-      var signed, sig;
-      if (S.provider._supportsSignAndSend && !S.provider._supportsSignTx) {
-        sig = await S.provider.signAndSendTransaction(tx);
-        if (!sig || typeof sig !== 'string') throw new Error('Wallet did not return a transaction signature.');
-      } else {
-        signed = await S.provider.signTransaction(tx);
-        sig = await conn.sendRawTransaction(signed.serialize(), { skipPreflight: false, maxRetries: 3 });
+      var p = S.provider;
+      if (!p) throw new Error('No wallet connected.');
+      if (p._supportsSignTx) {
+        var signed = await p.signTransaction(tx);
+        return await conn.sendRawTransaction(signed.serialize(), { skipPreflight: false, maxRetries: 3 });
       }
-      return sig;
+      if (p._supportsSignAndSend) {
+        var res = await p.signAndSendTransaction(tx);
+        if (!res || typeof res !== 'string') throw new Error('Wallet did not return a transaction signature.');
+        return res;
+      }
+      throw new Error('Connected wallet exposes no signing method.');
     }
 
-    // Confirm with timeout + rebroadcast fallback. `pump` mode is more
-    // aggressive about rebroadcasts since PumpPortal's slippage tolerance can
-    // expire faster than a Jupiter quote.
-    async function confirmSig(conn, sig, latest, pump) {
-      var confirmed = false;
+    async function confirmSig(conn, sig, latest) {
       try {
         var conf = await Promise.race([
-          conn.confirmTransaction({
-            signature: sig,
-            blockhash: latest.blockhash,
-            lastValidBlockHeight: latest.lastValidBlockHeight
-          }, 'confirmed'),
+          conn.confirmTransaction({ signature: sig, blockhash: latest.blockhash, lastValidBlockHeight: latest.lastValidBlockHeight }, 'confirmed'),
           new Promise(function (_, rej) { setTimeout(function () { rej(new Error('confirm-timeout')); }, 30000); })
         ]);
-        if (conf && conf.value && conf.value.err) throw new Error('Swap tx failed on-chain: ' + JSON.stringify(conf.value.err));
-        confirmed = true;
-      } catch (cfErr) {
-        var deadline = Date.now() + (pump ? 30000 : 20000);
+        if (conf && conf.value && conf.value.err) throw new Error('Swap tx failed on-chain.');
+        return true;
+      } catch (e) {
+        var deadline = Date.now() + 20000;
         while (Date.now() < deadline) {
           await new Promise(function (r) { setTimeout(r, 2000); });
           try {
             var st = await conn.getSignatureStatus(sig, { searchTransactionHistory: true });
             var cs = st && st.value && st.value.confirmationStatus;
-            if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
+            if (cs === 'confirmed' || cs === 'finalized') return true;
             if (st && st.value && st.value.err) throw new Error('Swap tx failed on-chain.');
-          } catch (e) {
-            if (/failed on-chain/i.test(String(e.message))) throw e;
+          } catch (er) {
+            if (/failed on-chain/i.test(String(er.message))) throw er;
           }
         }
-      }
-
-      S.swapResult = { signature: sig, pending: !confirmed };
-      if (confirmed) {
-        S.amount = '';
-        S.quote = null;
-        setTimeout(function () { refreshBalances(); }, 2000);
+        return false;
       }
     }
 
     // ========================================================================
-    // 7. DOM build + render. The widget renders into #verixia-swap-root,
-    //    replacing the loading skeleton.
+    // 7. UI — buildDom, renderRows, renderDetails, renderBanners, renderButton
     // ========================================================================
-    function buttonState() {
-      var inT = tokenBy(S.inputMint);
-      var bal = S.balances[S.inputMint];
-      var hasFunds = bal && Number(S.amount) > 0 && bal.uiAmount >= Number(S.amount);
-      var quoteReady = !!S.quote && !(S.quote.source === 'pumpfun' && S.quote.pending);
-      var canSwap = !!S.publicKey && quoteReady && !S.quoting && !S.swapping &&
-                    Number(S.amount) > 0 && S.inputMint !== S.outputMint && hasFunds;
-      var route = activeRoute();
-      var outT = tokenBy(S.outputMint);
-
-      var label;
-      var rich = null;
-      if (S.swapping)                       label = 'Swapping\u2026';
-      else if (!S.publicKey)                label = 'Connect Wallet';
-      else if (S.inputMint === S.outputMint) label = 'Select different tokens';
-      else if (!S.amount || Number(S.amount) <= 0) label = 'Enter amount';
-      else if (S.quoting)                   label = 'Getting quote\u2026';
-      else if (!S.quote)                    label = 'No route available';
-      else if (!hasFunds)                   label = 'Insufficient ' + (inT && inT.symbol || '');
-      else {
-        var oa = outAmountUi();
-        var outDisp = oa != null ? fmtAmount(oa, outT && outT.decimals) : '';
-        rich = '\uD83D\uDE80 Swap ' + esc(S.amount) + ' ' + esc(inT && inT.symbol || '') +
-               ' <b>\u2192</b> ' + esc(outDisp) + ' ' + esc(outT && outT.symbol || '');
-        label = rich;
-      }
-      return { label: label, rich: rich != null, enabled: !S.publicKey ? true : canSwap, route: route };
-    }
-
     var CHEV  = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
     var FLIP  = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4v16M7 4l-3 3M7 4l3 3M17 20V4M17 20l-3-3M17 20l3-3" transform="rotate(90 12 12)"/></svg>';
     var CLOSE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
@@ -1652,7 +1286,6 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
         '<div class="sw-container">' +
           '<div class="sw-header">' +
             '<h2 class="sw-title">Swap</h2>' +
-            '<span class="sw-route-pill route-jupiter" data-route-pill>JUPITER</span>' +
           '</div>' +
           '<div class="sw-panel">' +
             '<div class="sw-row" data-leg="input">' +
@@ -1661,10 +1294,10 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
                 '<span class="sw-balance" data-bal="input"></span>' +
               '</div>' +
               '<div class="sw-row-mid">' +
-                '<button class="sw-token-btn" data-pick="input"><span data-token-icon="input"></span><span data-sym="input">Select</span> ' + CHEV + '</button>' +
+                '<button class="sw-token-btn" data-pick="input"><span data-tok="input"><span data-fallback="input" class="sw-token-fallback"></span></span><span data-sym="input">Select</span> ' + CHEV + '</button>' +
                 '<input class="sw-amount-input" data-amount inputmode="decimal" placeholder="0.00" />' +
               '</div>' +
-              '<div class="sw-row-usd" data-usd="input"></div>' +
+              '<div class="sw-row-bot"><span class="sw-usd" data-usd="input"></span></div>' +
             '</div>' +
             '<div class="sw-flip-wrap"><button class="sw-flip-btn" data-flip aria-label="Flip tokens">' + FLIP + '</button></div>' +
             '<div class="sw-row" data-leg="output">' +
@@ -1673,49 +1306,45 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
                 '<span class="sw-balance" data-bal="output"></span>' +
               '</div>' +
               '<div class="sw-row-mid">' +
-                '<button class="sw-token-btn" data-pick="output"><span data-token-icon="output"></span><span data-sym="output">Select</span> ' + CHEV + '</button>' +
+                '<button class="sw-token-btn" data-pick="output"><span data-tok="output"><span data-fallback="output" class="sw-token-fallback"></span></span><span data-sym="output">Select</span> ' + CHEV + '</button>' +
                 '<input class="sw-amount-input" data-out readonly placeholder="0.00" />' +
               '</div>' +
-              '<div class="sw-row-usd" data-usd="output"></div>' +
+              '<div class="sw-row-bot"><span class="sw-usd" data-usd="output"></span></div>' +
             '</div>' +
           '</div>' +
           '<div class="sw-details" data-details style="display:none"></div>' +
           '<div data-banners></div>' +
           '<button class="sw-primary-btn" data-primary type="button">Connect Wallet</button>' +
-          '<p class="sw-footer" data-foot>Powered by <b>Jupiter</b> \u00B7 Solana\u2019s leading DEX aggregator</p>' +
+          '<p class="sw-footer" data-foot><b>Atomic 3% fee</b> \u00B7 Non-custodial \u00B7 Settles in seconds</p>' +
         '</div>';
       root.appendChild(wrap);
-
-      els.routePill = wrap.querySelector('[data-route-pill]');
-      els.symInput  = wrap.querySelector('[data-sym="input"]');
-      els.symOutput = wrap.querySelector('[data-sym="output"]');
-      els.icoInput  = wrap.querySelector('[data-token-icon="input"]');
-      els.icoOutput = wrap.querySelector('[data-token-icon="output"]');
-      els.balInput  = wrap.querySelector('[data-bal="input"]');
-      els.balOutput = wrap.querySelector('[data-bal="output"]');
-      els.amount    = wrap.querySelector('[data-amount]');
-      els.out       = wrap.querySelector('[data-out]');
-      els.usdInput  = wrap.querySelector('[data-usd="input"]');
-      els.usdOutput = wrap.querySelector('[data-usd="output"]');
-      els.details   = wrap.querySelector('[data-details]');
-      els.banners   = wrap.querySelector('[data-banners]');
-      els.primary   = wrap.querySelector('[data-primary]');
-      els.foot      = wrap.querySelector('[data-foot]');
-
-      // Restore prefilled amount.
-      if (S.amount) els.amount.value = S.amount;
+      els.symInput   = wrap.querySelector('[data-sym="input"]');
+      els.symOutput  = wrap.querySelector('[data-sym="output"]');
+      els.tokInput   = wrap.querySelector('[data-tok="input"]');
+      els.tokOutput  = wrap.querySelector('[data-tok="output"]');
+      els.balInput   = wrap.querySelector('[data-bal="input"]');
+      els.balOutput  = wrap.querySelector('[data-bal="output"]');
+      els.amount     = wrap.querySelector('[data-amount]');
+      els.out        = wrap.querySelector('[data-out]');
+      els.usdInput   = wrap.querySelector('[data-usd="input"]');
+      els.usdOutput  = wrap.querySelector('[data-usd="output"]');
+      els.details    = wrap.querySelector('[data-details]');
+      els.banners    = wrap.querySelector('[data-banners]');
+      els.primary    = wrap.querySelector('[data-primary]');
+      els.foot       = wrap.querySelector('[data-foot]');
 
       els.amount.addEventListener('input', function (e) {
         var v = e.target.value.replace(/[^\d.]/g, '');
-        var parts = v.split('.');
-        if (parts.length > 2) v = parts[0] + '.' + parts.slice(1).join('');
-        e.target.value = v;
-        S.amount = v;
-        renderRows();
-        renderButton();
-        scheduleQuote();
+        var parts = v.split('.'); if (parts.length > 2) v = parts[0] + '.' + parts.slice(1).join('');
+        e.target.value = v; S.amount = v; renderButton(); renderRows(); scheduleQuote();
       });
-      wrap.querySelector('[data-flip]').addEventListener('click', flip);
+      wrap.querySelector('[data-flip]').addEventListener('click', function () {
+        var i = S.inputMint;
+        S.inputMint = S.outputMint; S.outputMint = i;
+        S.amount = ''; S.quote = null;
+        if (els.amount) els.amount.value = '';
+        renderAll(); scheduleQuote();
+      });
       wrap.querySelector('[data-pick="input"]').addEventListener('click', function () { openPicker('input'); });
       wrap.querySelector('[data-pick="output"]').addEventListener('click', function () { openPicker('output'); });
       els.primary.addEventListener('click', function () {
@@ -1723,35 +1352,47 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
         else if (buttonState().enabled) handleSwap();
       });
 
+      if (els.amount && S.amount) els.amount.value = S.amount;
       renderAll();
     }
 
-    function renderTokenBtn(btnEl, symEl, icoEl, token) {
-      symEl.textContent = token && token.symbol || 'Select';
-      if (!token) {
-        icoEl.innerHTML = '<span class="sw-token-fallback">?</span>';
-        return;
+    function computeUsd(mint, uiAmt) {
+      if (!uiAmt || uiAmt <= 0) return 0;
+      if (mint === SOL_MINT && S.solPrice > 0) return uiAmt * S.solPrice;
+      if (mint === USDC_MINT) return uiAmt;
+      if (mint === 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB') return uiAmt; // USDT
+      return 0;
+    }
+
+    function setTokenVisual(containerEl, symEl, token) {
+      if (!containerEl || !symEl) return;
+      containerEl.innerHTML = '';
+      var fallback = document.createElement('span');
+      fallback.className = 'sw-token-fallback';
+      fallback.textContent = (token && token.symbol) ? token.symbol.charAt(0).toUpperCase() : '?';
+      containerEl.appendChild(fallback);
+      if (token && token.logoURI) {
+        var img = document.createElement('img');
+        img.className = 'sw-token-logo';
+        img.src = token.logoURI;
+        img.alt = '';
+        img.width = 24; img.height = 24;
+        img.loading = 'eager';
+        img.decoding = 'async';
+        img.style.position = 'absolute';
+        img.style.left = '6px';
+        img.onerror = function () { img.style.display = 'none'; };
+        containerEl.style.position = 'relative';
+        containerEl.appendChild(img);
       }
-      // Letter fallback always rendered behind the image; if the image loads
-      // it covers the letter, if it fails the onerror hides the image and the
-      // letter remains visible. This avoids any string-escaping fragility.
-      var letter = esc((token.symbol || '?').charAt(0).toUpperCase());
-      if (token.logoURI) {
-        icoEl.innerHTML =
-          '<span class="sw-token-fallback" style="position:relative">' + letter +
-            '<img src="' + esc(token.logoURI) + '" alt="" ' +
-              'style="position:absolute;inset:0;width:100%;height:100%;border-radius:50%;object-fit:cover" ' +
-              'onerror="this.style.display=\'none\'"/>' +
-          '</span>';
-      } else {
-        icoEl.innerHTML = '<span class="sw-token-fallback">' + letter + '</span>';
-      }
+      symEl.textContent = (token && token.symbol) || 'Select';
     }
 
     function renderRows() {
-      var inT = tokenBy(S.inputMint), outT = tokenBy(S.outputMint);
-      if (els.icoInput) renderTokenBtn(null, els.symInput, els.icoInput, inT);
-      if (els.icoOutput) renderTokenBtn(null, els.symOutput, els.icoOutput, outT);
+      var inputToken  = tokenBy(S.inputMint);
+      var outputToken = tokenBy(S.outputMint);
+      setTokenVisual(els.tokInput, els.symInput, inputToken);
+      setTokenVisual(els.tokOutput, els.symOutput, outputToken);
 
       var renderBal = function (el, mint, editable) {
         if (!el) return;
@@ -1759,20 +1400,26 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
         if (!S.publicKey) { el.innerHTML = ''; return; }
         if (S.balancesLoading && !S.balances[mint]) {
           el.classList.add('sw-bal-loading');
-          el.textContent = 'Loading balance\u2026';
+          el.textContent = 'Loading\u2026';
           return;
         }
         var bal = S.balances[mint];
-        var token = tokenBy(mint);
+        var tok = tokenBy(mint);
         if (!bal) {
-          el.textContent = 'Balance: 0 ' + (token ? token.symbol : '');
+          el.textContent = 'Balance: 0 ' + (tok ? tok.symbol : '');
           return;
         }
-        el.innerHTML = 'Balance: ' + esc(fmtAmount(bal.uiAmount, bal.decimals)) + ' ' + esc(token ? token.symbol : '');
+        el.innerHTML = 'Balance: ' + fmtAmount(bal.uiAmount, bal.decimals) + ' ' + (tok ? tok.symbol : '');
         if (editable && bal.uiAmount > 0) {
           var b = document.createElement('button');
           b.className = 'sw-max-btn'; b.textContent = 'MAX';
-          b.addEventListener('click', setMax);
+          b.addEventListener('click', function () {
+            var maxAmt = bal.uiAmount;
+            if (S.inputMint === SOL_MINT) maxAmt = Math.max(0, maxAmt - SOL_RESERVE);
+            S.amount = String(maxAmt);
+            if (els.amount) els.amount.value = S.amount;
+            renderRows(); scheduleQuote();
+          });
           el.appendChild(b);
         }
       };
@@ -1780,90 +1427,36 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       renderBal(els.balOutput, S.outputMint, false);
 
       var oa = outAmountUi();
-      if (els.out) {
-        if (oa != null) els.out.value = fmtAmount(oa, outT && outT.decimals);
-        else if (S.quoting || (S.quote && S.quote.source === 'pumpfun' && S.quote.pending)) els.out.value = '\u2026';
-        else els.out.value = '';
-      }
+      if (els.out) els.out.value = oa != null ? fmtAmount(oa, outputToken && outputToken.decimals) : (S.quoting ? '\u2026' : '');
 
-      // Sync the amount input with S.amount, but only when the user isn't
-      // actively typing (input not focused) so we don't yank the cursor.
-      if (els.amount && document.activeElement !== els.amount && els.amount.value !== (S.amount || '')) {
-        els.amount.value = S.amount || '';
-      }
-
-      // USD subtitle under the input and output amounts.
       if (els.usdInput) {
-        var inUsd = computeUsd(S.inputMint, Number(S.amount));
-        els.usdInput.textContent = inUsd ? '\u2248 ' + inUsd : '';
+        var inUi = Number(S.amount) || 0;
+        var inUsd = computeUsd(S.inputMint, inUi);
+        els.usdInput.textContent = inUsd > 0 ? '\u2248 ' + fmtUsd(inUsd) : '';
       }
       if (els.usdOutput) {
-        var outUsd = computeUsd(S.outputMint, oa || 0);
-        els.usdOutput.textContent = outUsd ? '\u2248 ' + outUsd : '';
+        var outUsd = oa != null ? computeUsd(S.outputMint, oa) : 0;
+        els.usdOutput.textContent = outUsd > 0 ? '\u2248 ' + fmtUsd(outUsd) : '';
       }
-
-      // Route pill (JUPITER vs PUMP.FUN).
-      if (els.routePill) {
-        var route = activeRoute();
-        if (route === 'pumpfun') {
-          els.routePill.textContent = 'PUMP.FUN';
-          els.routePill.className = 'sw-route-pill route-pump';
-        } else {
-          els.routePill.textContent = 'JUPITER';
-          els.routePill.className = 'sw-route-pill route-jupiter';
-        }
-      }
-      if (els.foot) {
-        var route2 = activeRoute();
-        els.foot.innerHTML = route2 === 'pumpfun'
-          ? 'Routed via <b>pump.fun</b> bonding curve \u00B7 atomic 3% fee'
-          : 'Powered by <b>Jupiter</b> \u00B7 Solana\u2019s leading DEX aggregator';
-      }
-
-      // Hero pump tag — show when output is pump.
-      var pumpTag = document.getElementById('nx-pump-tag');
-      if (pumpTag) {
-        var ap = S.pumpInfo[S.outputMint] && S.pumpInfo[S.outputMint].isPump
-              || S.pumpInfo[S.inputMint] && S.pumpInfo[S.inputMint].isPump;
-        pumpTag.style.display = ap ? 'inline-flex' : 'none';
-      }
-    }
-
-    // USD value for a given (mint, uiAmount). SOL uses S.solPrice. Pump tokens
-    // use S.pumpInfo[mint].price. Other tokens: best-effort, returns ''.
-    function computeUsd(mint, uiAmount) {
-      if (!uiAmount || uiAmount <= 0) return '';
-      if (mint === SOL_MINT && S.solPrice > 0) return fmtUsd(uiAmount * S.solPrice);
-      var info = S.pumpInfo[mint];
-      if (info && info.isPump && info.price > 0) return fmtUsd(uiAmount * info.price);
-      return '';
     }
 
     function renderDetails() {
-      if (!els.details) return;
-      var inT = tokenBy(S.inputMint), outT = tokenBy(S.outputMint);
+      var inputToken = tokenBy(S.inputMint), outputToken = tokenBy(S.outputMint);
       var oa = outAmountUi();
-      if (!(S.quote && outT && inT && Number(S.amount) > 0)) {
-        els.details.style.display = 'none'; els.details.innerHTML = '';
-        return;
-      }
-      if (S.quote.source === 'pumpfun' && S.quote.pending) {
-        els.details.style.display = '';
-        els.details.innerHTML = '<div class="sw-detail-row"><span>Route</span><span class="sw-detail-val">pump.fun bonding curve</span></div><div class="sw-detail-row"><span>Quote</span><span class="sw-detail-val">Loading price feed\u2026</span></div>';
-        return;
+      if (!els.details) return;
+      if (!(S.quote && outputToken && inputToken && Number(S.amount) > 0)) {
+        els.details.style.display = 'none'; els.details.innerHTML = ''; return;
       }
       var pi = priceImpact();
       var piClass = pi == null ? 'sw-impact-neutral' : pi > 5 ? 'sw-impact-bad' : pi > 1 ? 'sw-impact-warn' : 'sw-impact-good';
-      var rate = oa && Number(S.amount) > 0 ? (oa / Number(S.amount)) : 0;
-      var routeLabel = S.quote.source === 'pumpfun' ? 'pump.fun bonding curve' : 'Jupiter aggregator';
-      var html = '';
-      html += '<div class="sw-detail-row"><span>Route</span><span class="sw-detail-val">' + esc(routeLabel) + '</span></div>';
-      html += '<div class="sw-detail-row"><span>Rate</span><span class="sw-detail-val">1 ' + esc(inT.symbol) + ' \u2248 ' + esc(fmtAmount(rate, outT.decimals)) + ' ' + esc(outT.symbol) + '</span></div>';
-      html += '<div class="sw-detail-row"><span>Min received</span><span class="sw-detail-val">' + esc(fmtAmount(minReceived(), outT.decimals)) + ' ' + esc(outT.symbol) + (S.quote.source === 'pumpfun' ? ' <span style="color:var(--sw-ink-3)">(est.)</span>' : '') + '</span></div>';
-      if (pi != null) html += '<div class="sw-detail-row"><span>Price impact</span><span class="sw-detail-val ' + piClass + '">' + pi.toFixed(2) + '%</span></div>';
-      html += '<div class="sw-detail-row"><span>Platform fee</span><span class="sw-detail-val">' + (FEE_BPS/100).toFixed(1) + '% (in ' + esc(inT.symbol) + ')</span></div>';
+      var rate = (oa / Number(S.amount)) || 0;
+      var mr = minReceived();
       els.details.style.display = '';
-      els.details.innerHTML = html;
+      els.details.innerHTML =
+        '<div class="sw-detail-row"><span>Rate</span><span class="sw-detail-val">1 ' + esc(inputToken.symbol) + ' \u2248 ' + esc(fmtAmount(rate, outputToken.decimals)) + ' ' + esc(outputToken.symbol) + '</span></div>' +
+        '<div class="sw-detail-row"><span>Minimum received</span><span class="sw-detail-val">' + esc(fmtAmount(mr, outputToken.decimals)) + ' ' + esc(outputToken.symbol) + '</span></div>' +
+        '<div class="sw-detail-row"><span>Price impact</span><span class="sw-detail-val ' + piClass + '">' + (pi != null ? pi.toFixed(2) + '%' : '\u2014') + '</span></div>' +
+        '<div class="sw-detail-row"><span>Platform fee</span><span class="sw-detail-val">' + (FEE_BPS / 100).toFixed(1) + '% (in ' + esc(inputToken.symbol) + ')</span></div>';
     }
 
     function renderBanners() {
@@ -1879,98 +1472,74 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       els.banners.innerHTML = html;
     }
 
+    function buttonState() {
+      var inputToken = tokenBy(S.inputMint);
+      var bal = S.balances[S.inputMint];
+      var hasFunds = bal && Number(S.amount) > 0 && bal.uiAmount >= Number(S.amount);
+      var canSwap = !!S.publicKey && !!S.quote && !S.quoting && !S.swapping &&
+                    Number(S.amount) > 0 && S.inputMint !== S.outputMint && hasFunds;
+      var label;
+      if (S.swapping) label = 'Swapping\u2026';
+      else if (!S.publicKey) label = 'Connect Wallet';
+      else if (S.inputMint === S.outputMint) label = 'Select different tokens';
+      else if (!S.amount || Number(S.amount) <= 0) label = 'Enter amount';
+      else if (!S.quote && S.quoting) label = 'Getting quote\u2026';
+      else if (!S.quote) label = 'No route available';
+      else if (!hasFunds) label = 'Insufficient ' + (inputToken && inputToken.symbol || '');
+      else label = '\uD83D\uDE80 Swap';
+      return { label: label, enabled: !S.publicKey ? true : canSwap };
+    }
     function renderButton() {
       if (!els.primary) return;
       var st = buttonState();
-      if (st.rich) els.primary.innerHTML = st.label;
-      else els.primary.textContent = st.label;
+      els.primary.textContent = st.label;
       els.primary.classList.toggle('sw-disabled', !st.enabled);
     }
-
     function renderAll() { renderRows(); renderDetails(); renderBanners(); renderButton(); updateHeader(); }
 
     // ========================================================================
-    // 8. Token picker modal
+    // 8. Picker — canonical pins (SOL/USDC/USDT/JUP/BONK) + spam filter +
+    //    lazy image loading. Address paste also looks up via Jupiter search.
     // ========================================================================
-    var pickerSide = null;
+    var CANONICAL_ORDER = [
+      'So11111111111111111111111111111111111111112',                // SOL
+      'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',                // USDC
+      'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',                // USDT
+      'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN',                 // JUP
+      'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263'                 // BONK
+    ];
+    function isLikelySpam(t) {
+      var s = String(t.symbol || '');
+      if (s.length > 12) return true;
+      if (/\d/.test(s) && s.length >= 5) return true;
+      if (s.toLowerCase() === 'solana' && t.address !== CANONICAL_ORDER[0]) return true;
+      return false;
+    }
     var pickerEl = null;
-    var pickerSearchAbort = null;
-
     function openPicker(side) {
-      pickerSide = side;
-      if (pickerEl) { try { pickerEl.remove(); } catch (e) {} pickerEl = null; }
-      pickerEl = document.createElement('div');
-      pickerEl.className = 'sw-modal-overlay';
-      pickerEl.innerHTML =
-        '<div class="sw-modal-card" data-card>' +
+      closePicker();
+      var exclude = side === 'input' ? S.outputMint : S.inputMint;
+      var pickerSide = side;
+      var q = '', qLower = '', qUpper = '';
+      var searchTimer = null;
+      var searchAbort = null;
+      var overlay = document.createElement('div');
+      overlay.className = 'sw-modal-overlay';
+      overlay.innerHTML =
+        '<div class="sw-modal-card">' +
           '<div class="sw-modal-head">' +
             '<div class="sw-modal-head-row">' +
-              '<h3 class="sw-modal-title">Select <em style="font-style:italic;background:linear-gradient(120deg,#A0E7FF,#FF8FBE);-webkit-background-clip:text;background-clip:text;color:transparent">token</em></h3>' +
-              '<button class="sw-icon-btn" data-close type="button">' + CLOSE + '</button>' +
+              '<h3 class="sw-modal-title">Select <em>token</em></h3>' +
+              '<button class="sw-icon-btn" data-close>' + CLOSE + '</button>' +
             '</div>' +
             '<input class="sw-modal-search" data-search placeholder="Search name, symbol, or paste address" />' +
           '</div>' +
           '<div class="sw-modal-list" data-list></div>' +
         '</div>';
-      document.body.appendChild(pickerEl);
-      pickerEl.addEventListener('click', function (e) { if (e.target === pickerEl) closePicker(); });
-      pickerEl.querySelector('[data-close]').addEventListener('click', closePicker);
-      var input = pickerEl.querySelector('[data-search]');
-      input.addEventListener('input', function () { renderPickerList(input.value); });
-      setTimeout(function () { try { input.focus(); } catch (e) {} }, 100);
-      renderPickerList('');
-    }
-
-    function closePicker() {
-      if (pickerSearchAbort) { try { pickerSearchAbort.abort(); } catch (e) {} pickerSearchAbort = null; }
-      if (pickerEl) { try { pickerEl.remove(); } catch (e) {} pickerEl = null; }
-      pickerSide = null;
-    }
-
-    function renderPickerList(query) {
-      if (!pickerEl) return;
-      var listEl = pickerEl.querySelector('[data-list]');
-      var exclude = pickerSide === 'input' ? S.outputMint : S.inputMint;
-      var q = (query || '').trim();
-      var qLower = q.toLowerCase();
-      var qUpper = q.toUpperCase();
-
-      // If query is a mint address, probe pump first.
-      if (q && PUMP_BASE58_RE.test(q)) {
-        listEl.innerHTML = '<div class="sw-modal-msg">Looking up token\u2026</div>';
-        probePumpInfo(q).then(function () {
-          if (!pickerEl || pickerEl.querySelector('[data-search]').value.trim() !== q) return;
-          drawList();
-        });
-        // Also kick search.
-      }
-
-      // Server-side search for typed queries.
-      if (q.length >= 2) {
-        if (pickerSearchAbort) { try { pickerSearchAbort.abort(); } catch (e) {} }
-        pickerSearchAbort = new AbortController();
-        var ac = pickerSearchAbort;
-        fetch(ORIGIN + '/api/jupiter/tokens/search?query=' + encodeURIComponent(q), { signal: ac.signal })
-          .then(function (r) { return r.ok ? r.json() : null; })
-          .then(function (data) {
-            if (!data || ac.signal.aborted) return;
-            var arr = Array.isArray(data) ? data : (data.tokens || []);
-            for (var i = 0; i < arr.length; i++) {
-              var t = arr[i];
-              upsertToken({
-                address:  t.id || t.address || t.mint,
-                symbol:   t.symbol,
-                name:     t.name,
-                decimals: t.decimals,
-                logoURI:  t.icon || t.logoURI || null
-              });
-            }
-            if (pickerEl && pickerEl.querySelector('[data-search]').value.trim() === q) drawList();
-          })
-          .catch(function () {});
-      }
-
-      drawList();
+      overlay.addEventListener('click', function (e) { if (e.target === overlay) closePicker(); });
+      overlay.querySelector('[data-close]').addEventListener('click', closePicker);
+      var listEl = overlay.querySelector('[data-list]');
+      var searchEl = overlay.querySelector('[data-search]');
 
       function drawList() {
         var pool = S.tokens.filter(function (t) {
@@ -1981,19 +1550,38 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
           if (t.address && t.address.toLowerCase().indexOf(qLower) === 0) return true;
           return false;
         });
-        pool.sort(function (a, b) {
+        var canonicalPinned = [];
+        var seen = {};
+        for (var ci = 0; ci < CANONICAL_ORDER.length; ci++) {
+          var cm = CANONICAL_ORDER[ci];
+          if (cm === exclude) continue;
+          var tok = tokenBy(cm);
+          if (!tok) continue;
+          if (q) {
+            var matches = (tok.symbol && tok.symbol.toLowerCase().indexOf(qLower) >= 0) ||
+                          (tok.name   && tok.name.toLowerCase().indexOf(qLower) >= 0)   ||
+                          (tok.address && tok.address.toLowerCase().indexOf(qLower) === 0);
+            if (!matches) continue;
+          }
+          canonicalPinned.push(tok);
+          seen[cm] = true;
+        }
+        var rest = pool.filter(function (t) { return !seen[t.address]; });
+        rest.sort(function (a, b) {
           var ab = (S.balances[a.address] && S.balances[a.address].uiAmount) || 0;
           var bb = (S.balances[b.address] && S.balances[b.address].uiAmount) || 0;
           if (ab > 0 && bb === 0) return -1;
           if (bb > 0 && ab === 0) return 1;
           if (ab !== bb) return bb - ab;
-          // Exact symbol match floats up.
+          var aSpam = isLikelySpam(a) ? 1 : 0;
+          var bSpam = isLikelySpam(b) ? 1 : 0;
+          if (aSpam !== bSpam) return aSpam - bSpam;
           var aExact = a.symbol && a.symbol.toUpperCase() === qUpper ? 0 : 1;
           var bExact = b.symbol && b.symbol.toUpperCase() === qUpper ? 0 : 1;
           if (aExact !== bExact) return aExact - bExact;
           return (a.symbol || '').localeCompare(b.symbol || '');
         });
-        pool = pool.slice(0, 200);
+        pool = canonicalPinned.concat(rest).slice(0, 200);
 
         if (S.tokensLoading && pool.length === 0) {
           listEl.innerHTML = '<div class="sw-modal-msg">Loading tokens\u2026</div>';
@@ -2007,18 +1595,21 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
         for (var i = 0; i < pool.length; i++) {
           var t = pool[i];
           var bal = S.balances[t.address];
-          var pump = S.pumpInfo[t.address] && S.pumpInfo[t.address].isPump;
           var balCell = bal && bal.uiAmount > 0 ? '<div class="sw-token-row-bal">' + esc(fmtAmount(bal.uiAmount, bal.decimals)) + '</div>' : '';
-          var pumpCell = pump ? '<div class="sw-token-row-pump">PUMP</div>' : '';
-          var rightCell = balCell || pumpCell;
-          var logo = t.logoURI
-            ? '<img class="sw-token-row-logo" src="' + esc(t.logoURI) + '" alt="" onerror="this.style.visibility=\'hidden\'"/>'
-            : '<div class="sw-token-row-placeholder"></div>';
-          html += '<button class="sw-token-row" data-mint="' + esc(t.address) + '" type="button">' + logo +
-                  '<div class="sw-token-row-info">' +
-                    '<div class="sw-token-row-sym">' + esc(t.symbol || '') + '</div>' +
-                    '<div class="sw-token-row-name">' + esc(t.name || '') + '</div>' +
-                  '</div>' + rightCell + '</button>';
+          var loadingAttr = i < 8 ? 'eager' : 'lazy';
+          var letter = (t.symbol || '?').charAt(0).toUpperCase();
+          var logo =
+            '<div class="sw-token-row-logo-wrap"><div class="sw-token-row-placeholder">' + esc(letter) + '</div>' +
+            (t.logoURI
+              ? '<img class="sw-token-row-logo" src="' + esc(t.logoURI) + '" alt="" width="34" height="34" loading="' + loadingAttr + '" decoding="async" onerror="this.style.display=\'none\'"/>'
+              : '') +
+            '</div>';
+          html +=
+            '<button class="sw-token-row" data-mint="' + esc(t.address) + '" type="button">' + logo +
+              '<div class="sw-token-row-info">' +
+                '<div class="sw-token-row-sym">' + esc(t.symbol || '') + '</div>' +
+                '<div class="sw-token-row-name">' + esc(t.name || '') + '</div>' +
+              '</div>' + balCell + '</button>';
         }
         listEl.innerHTML = html;
         var rows = listEl.querySelectorAll('[data-mint]');
@@ -2026,77 +1617,198 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
           (function (row) {
             row.addEventListener('click', function () {
               var mint = row.getAttribute('data-mint');
+              var changedOutput = (pickerSide !== 'input' && mint !== S.outputMint);
               if (pickerSide === 'input') S.inputMint = mint;
               else                         S.outputMint = mint;
               closePicker();
               S.quote = null;
               renderAll();
-              probePumpInfo(mint).then(function () { renderAll(); scheduleQuote(); });
+              scheduleQuote();
+              if (changedOutput) bootPriceCard();
               if (S.publicKey) refreshBalances();
             });
           })(rows[j]);
         }
       }
+
+      searchEl.addEventListener('input', function (e) {
+        q = String(e.target.value || '').trim();
+        qLower = q.toLowerCase(); qUpper = q.toUpperCase();
+        if (searchTimer) clearTimeout(searchTimer);
+        drawList();
+        if (!q) return;
+        searchTimer = setTimeout(async function () {
+          if (searchAbort) searchAbort.abort();
+          var ac = new AbortController(); searchAbort = ac;
+          try {
+            var r = await fetch(ORIGIN + '/api/jupiter/tokens/search?query=' + encodeURIComponent(q), { signal: ac.signal });
+            if (!r.ok) return;
+            var data = await r.json();
+            var list = Array.isArray(data) ? data : (data && data.tokens || []);
+            for (var i = 0; i < list.length; i++) {
+              var t = list[i];
+              if (!t) continue;
+              upsertToken({
+                address:  t.id || t.address || t.mint,
+                symbol:   t.symbol,
+                name:     t.name,
+                decimals: t.decimals,
+                logoURI:  t.icon || t.logoURI || null
+              });
+            }
+            if (!ac.signal.aborted) drawList();
+          } catch (e) {}
+        }, 240);
+      });
+
+      document.body.appendChild(overlay);
+      pickerEl = overlay;
+      drawList();
+      setTimeout(function () { searchEl.focus(); }, 50);
     }
+    function closePicker() { if (pickerEl) { pickerEl.remove(); pickerEl = null; } }
 
     // ========================================================================
-    // 9. Wallet — uses window.VerixiaWallet (from verixia-wc.js).
+    // 9. Wallet — uses window.VerixiaWallet from /nexus-dex/verixia-wc.js
     // ========================================================================
-    function openConnect() {
+    function doOpenWallet() {
       try { sessionStorage.removeItem(DISCONNECT_FLAG); } catch (e) {}
-      waitForAppKit().then(function (ok) {
-        if (ok) { try { window.VerixiaWallet.open(); } catch (e) { console.warn('[verixia] wallet open failed', e); } }
-        else { S.swapError = 'Wallet bundle not loaded.'; renderBanners(); }
-      });
+      try { window.VerixiaWallet.open(); }
+      catch (e) {
+        console.error('[appkit] open failed', e);
+        S.swapError = 'Could not open wallet picker: ' + (e && e.message || 'unknown');
+        renderBanners();
+      }
     }
-
-    function openAccountMenu() {
-      // The wallet bundle's .open() shows the account view when connected.
-      waitForAppKit().then(function (ok) {
-        if (ok) { try { window.VerixiaWallet.open(); } catch (e) {} }
-      });
-    }
-
-    function wrapProvider(raw) {
-      if (!raw) return null;
-      var p = { _supportsSignTx: typeof raw.signTransaction === 'function', _supportsSignAndSend: typeof raw.signAndSendTransaction === 'function' };
-      if (p._supportsSignTx) p.signTransaction = raw.signTransaction.bind(raw);
-      if (p._supportsSignAndSend) p.signAndSendTransaction = async function (tx) {
-        var res = await raw.signAndSendTransaction(tx);
-        if (typeof res === 'string') return res;
-        if (res && res.signature) return res.signature;
-        throw new Error('Wallet did not return a signature.');
-      };
-      return p;
-    }
-
-    function onWalletStateChange(state) {
-      if (!state || !state.connected || !state.publicKey) {
-        if (S.publicKey) {
-          S.publicKey = null;
-          S.provider = null;
-          S.walletName = null;
-          S.balances = {};
-          renderAll();
-        }
+    async function openConnect() {
+      if (appKitReady()) { doOpenWallet(); return; }
+      var ready = await waitForAppKit();
+      if (!ready) {
+        S.swapError = 'Wallet bundle not loaded. Refresh the page or check that /nexus-dex/verixia-wc.js is deployed.';
+        renderBanners();
         return;
       }
-      try {
-        var pk = new PublicKey(state.publicKey);
-        var rawProv = (window.VerixiaWallet && window.VerixiaWallet.getProvider && window.VerixiaWallet.getProvider()) || null;
-        var wrapped = wrapProvider(rawProv);
-        if (!wrapped) return;
-        S.publicKey = pk;
-        S.provider = wrapped;
-        S.walletName = state.walletName || state.adapter || null;
+      doOpenWallet();
+    }
+
+    async function onWalletStateChange(state) {
+      if (state && state.isConnected && state.address) {
+        try {
+          S.publicKey = new PublicKey(state.address);
+          S.walletName = state.walletName || state.providerType || 'Wallet';
+          var raw = window.VerixiaWallet.getProvider && window.VerixiaWallet.getProvider();
+          var tries = 0;
+          while (!raw && tries < 20) {
+            await new Promise(function (r) { setTimeout(r, 100); });
+            raw = window.VerixiaWallet.getProvider && window.VerixiaWallet.getProvider();
+            tries++;
+          }
+          S.provider = wrapAppKitProvider(raw, S.publicKey);
+          if (!S.provider) console.warn('[verixia] connected but provider unavailable');
+          try { sessionStorage.removeItem(DISCONNECT_FLAG); } catch (e) {}
+          renderAll();
+          refreshBalances();
+          scheduleQuote();
+        } catch (e) {
+          console.error('[verixia] address parse failed', e);
+        }
+      } else {
+        S.publicKey = null;
+        S.provider = null;
+        S.walletName = null;
+        S.balances = {};
+        S.quote = null;
         renderAll();
-        refreshBalances();
-        // Re-run quote so the taker pubkey is included.
-        scheduleQuote();
-      } catch (e) {
-        console.warn('[verixia] wallet state error', e);
       }
     }
+
+    function wrapAppKitProvider(raw, pubkey) {
+      if (!raw) return null;
+      var hasSignTx      = typeof raw.signTransaction === 'function';
+      var hasSignAndSend = typeof raw.signAndSendTransaction === 'function';
+      var normalizeSigned = function (result, originalTx) {
+        if (result && typeof result.serialize === 'function') return result;
+        if (result instanceof Uint8Array) return VersionedTransaction.deserialize(result);
+        if (result && typeof result.signature === 'string') {
+          try {
+            var bytes = b64ToBytes(result.signature);
+            originalTx.addSignature(pubkey, bytes);
+            return originalTx;
+          } catch (e) {
+            throw new Error('Wallet returned an unrecognized signature format.');
+          }
+        }
+        if (result && typeof result.transaction === 'string') {
+          return VersionedTransaction.deserialize(b64ToBytes(result.transaction));
+        }
+        throw new Error('Wallet did not return a signed transaction.');
+      };
+      return {
+        publicKey: pubkey,
+        _raw: raw,
+        _supportsSignTx: hasSignTx,
+        _supportsSignAndSend: hasSignAndSend,
+        signTransaction: hasSignTx ? async function (tx) {
+          var res = await raw.signTransaction(tx);
+          return normalizeSigned(res, tx);
+        } : null,
+        signAndSendTransaction: hasSignAndSend ? async function (tx) {
+          var res = await raw.signAndSendTransaction(tx);
+          if (typeof res === 'string') return res;
+          return res && (res.signature || res.txid || null);
+        } : null
+      };
+    }
+
+    async function disconnect() {
+      try {
+        if (window.VerixiaWallet && typeof window.VerixiaWallet.disconnect === 'function') {
+          await window.VerixiaWallet.disconnect();
+        }
+      } catch (e) { console.warn('[verixia] disconnect', e && e.message); }
+      try { sessionStorage.setItem(DISCONNECT_FLAG, '1'); } catch (e) {}
+      S.provider = null;
+      S.publicKey = null;
+      S.walletName = null;
+      S.balances = {};
+      S.quote = null;
+      closeAccountMenu();
+      renderAll();
+    }
+
+    var accountMenuEl = null;
+    function openAccountMenu() {
+      closeAccountMenu();
+      if (!S.publicKey) return;
+      var addr = S.publicKey.toBase58();
+      var short = addr.slice(0, 4) + '\u2026' + addr.slice(-4);
+      var overlay = document.createElement('div');
+      overlay.className = 'sw-modal-overlay';
+      overlay.innerHTML =
+        '<div class="sw-modal-card" style="max-width:380px;border-radius:20px;padding:0;">' +
+          '<div style="padding:20px;text-align:center;">' +
+            '<div style="width:36px;height:4px;background:rgba(26,27,78,.18);border-radius:2px;margin:0 auto 16px;"></div>' +
+            '<div style="font-family:\'JetBrains Mono\',monospace;font-size:10px;color:rgba(26,27,78,.45);letter-spacing:.14em;text-transform:uppercase;margin-bottom:8px;">' + esc(S.walletName || 'Connected') + '</div>' +
+            '<div style="font-family:\'Space Grotesk\',sans-serif;font-size:22px;font-weight:800;color:#1A1B4E;margin-bottom:4px;">' + short + '</div>' +
+            '<div style="font-family:\'JetBrains Mono\',monospace;font-size:10px;color:rgba(26,27,78,.45);word-break:break-all;margin-bottom:18px;">' + esc(addr) + '</div>' +
+            '<div style="display:flex;flex-direction:column;gap:8px;">' +
+              '<button data-copy style="padding:12px;background:rgba(255,255,255,.6);border:1px solid rgba(26,27,78,.08);border-radius:12px;color:#1A1B4E;font-family:\'Space Grotesk\',sans-serif;font-weight:700;font-size:13px;cursor:pointer;">Copy address</button>' +
+              '<button data-disconnect style="padding:12px;background:rgba(209,75,106,.1);border:1px solid rgba(209,75,106,.35);border-radius:12px;color:#D14B6A;font-family:\'Space Grotesk\',sans-serif;font-weight:700;font-size:13px;cursor:pointer;">Disconnect</button>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+      overlay.addEventListener('click', function (e) { if (e.target === overlay) closeAccountMenu(); });
+      overlay.querySelector('[data-copy]').addEventListener('click', function () {
+        try { navigator.clipboard.writeText(addr); } catch (e) {}
+        var btn = overlay.querySelector('[data-copy]');
+        btn.textContent = 'Copied!';
+        setTimeout(function () { btn.textContent = 'Copy address'; }, 1500);
+      });
+      overlay.querySelector('[data-disconnect]').addEventListener('click', disconnect);
+      document.body.appendChild(overlay);
+      accountMenuEl = overlay;
+    }
+    function closeAccountMenu() { if (accountMenuEl) { accountMenuEl.remove(); accountMenuEl = null; } }
 
     function updateHeader() {
       var btn = document.getElementById('verixia-header-connect');
@@ -2110,342 +1822,317 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
     }
 
     // ========================================================================
-    // 10. Live price card (DexScreener public API → sparkline) + FAQ + presets
+    // 10. Live price card + SMOOTH bezier sparkline
+    //     - Real OHLCV pulled from /api/dex/chart/:mint (24h)
+    //     - Catmull-Rom cubic bezier smoothing for natural curves
+    //     - If only synthetic data available, hide the chart entirely
+    //       (synthetic looks "wonky" — better to show price + change only)
     // ========================================================================
-    function mulberry32(seed) {
-      var t = seed >>> 0;
-      return function () {
-        t = (t + 0x6D2B79F5) >>> 0;
-        var r = Math.imul(t ^ (t >>> 15), 1 | t);
-        r = (r + Math.imul(r ^ (r >>> 7), 61 | r)) ^ r;
-        return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
-      };
-    }
-
-    function findBestSolanaPair(pairs) {
-      var solanaPairs = (pairs || []).filter(function (p) { return p && p.chainId === 'solana'; });
-      if (!solanaPairs.length) return null;
-      return solanaPairs.reduce(function (best, p) {
-        var liq = Number(p.liquidity && p.liquidity.usd || 0);
-        var bliq = Number(best.liquidity && best.liquidity.usd || 0);
-        return liq > bliq ? p : best;
-      }, solanaPairs[0]);
-    }
-
-    function fmtPriceCardPrice(p) {
-      if (!Number.isFinite(p) || p <= 0) return '$\u2014';
-      if (p >= 1)        return '$' + p.toFixed(2);
-      if (p >= 0.01)     return '$' + p.toFixed(4);
-      if (p >= 0.0001)   return '$' + p.toFixed(6);
-      return '$' + p.toExponential(2);
-    }
-    function fmtCompactUsd(n) {
-      if (!Number.isFinite(n) || n <= 0) return '$\u2014';
-      if (n >= 1e9) return '$' + (n/1e9).toFixed(2) + 'B';
-      if (n >= 1e6) return '$' + (n/1e6).toFixed(2) + 'M';
-      if (n >= 1e3) return '$' + (n/1e3).toFixed(1) + 'K';
-      return '$' + n.toFixed(2);
-    }
-
-    // Draw a sparkline from real OHLCV points: [{ts, price}, ...] sorted
-    // oldest-to-newest. Returns true if drawn, false if the data was empty.
-    function drawSparklineFromPoints(svg, points) {
-      if (!svg || !Array.isArray(points) || points.length < 2) return false;
-      var w = 320, h = 60;
-      var min = Infinity, max = -Infinity;
-      for (var k = 0; k < points.length; k++) {
-        var p = Number(points[k].price);
-        if (!Number.isFinite(p) || p <= 0) continue;
-        if (p < min) min = p;
-        if (p > max) max = p;
-      }
-      if (!Number.isFinite(min) || !Number.isFinite(max)) return false;
-      // Avoid divide-by-zero on flat lines.
-      var span = max - min;
-      if (span <= 0) { var pad = Math.max(min * 0.01, 1e-12); min -= pad; max += pad; span = max - min; }
-      var first = Number(points[0].price);
-      var last  = Number(points[points.length - 1].price);
-      var up = last >= first;
-      var color     = up ? '#0a7a4c' : '#D14B6A';
-      var fillColor = up ? 'rgba(127,255,212,0.35)' : 'rgba(255,143,190,0.35)';
-      var pathD = '', fillD = '';
-      var n = points.length;
-      for (var i = 0; i < n; i++) {
-        var x = (i / (n - 1)) * w;
-        // 6px top/bottom inset so the stroke isn't clipped.
-        var y = 6 + (1 - (Number(points[i].price) - min) / span) * (h - 12);
-        var cmd = (i === 0 ? 'M' : 'L') + x.toFixed(2) + ' ' + y.toFixed(2);
-        pathD += cmd;
-        fillD += cmd;
-      }
-      fillD += 'L' + w + ' ' + h + 'L0 ' + h + 'Z';
-      svg.innerHTML =
-        '<path d="' + fillD + '" fill="' + fillColor + '" />' +
-        '<path class="spark-line" d="' + pathD + '" stroke="' + color + '" />';
-      return true;
-    }
-
-    // Synthetic sparkline — only used as a fallback when the OHLCV endpoint
-    // returns no data (e.g. very fresh pump.fun mints with no GeckoTerminal
-    // pool yet). The shape follows the 24h change direction so it never
-    // misleads about trend.
-    function drawSparkline(svg, change) {
-      if (!svg) return;
-      var w = 320, h = 60, pts = 24;
-      var seed = Math.floor(Math.abs(change || 0) * 1000) + 7;
-      var rng = mulberry32(seed);
-      var up = (change || 0) >= 0;
-      var color = up ? '#0a7a4c' : '#D14B6A';
-      var fillColor = up ? 'rgba(127,255,212,0.35)' : 'rgba(255,143,190,0.35)';
-      var data = [];
-      var y0 = h * 0.5;
-      var amp = h * 0.30;
-      var trend = (change || 0) / 100;
-      for (var i = 0; i < pts; i++) {
-        var t = i / (pts - 1);
-        var trendY = y0 - amp * trend * t;
-        var noise = (rng() - 0.5) * amp * 0.55;
-        var val = trendY + noise;
-        if (val < 6) val = 6;
-        if (val > h - 6) val = h - 6;
-        data.push(val);
-      }
-      data[pts - 1] = y0 - amp * trend;
-      if (data[pts - 1] < 6) data[pts - 1] = 6;
-      if (data[pts - 1] > h - 6) data[pts - 1] = h - 6;
-      var pathD = '';
-      var fillD = '';
-      for (var i2 = 0; i2 < pts; i2++) {
-        var x = (i2 / (pts - 1)) * w;
-        var cmd = (i2 === 0 ? 'M' : 'L') + x.toFixed(2) + ' ' + data[i2].toFixed(2);
-        pathD += cmd;
-        fillD += cmd;
-      }
-      fillD += 'L' + w + ' ' + h + 'L0 ' + h + 'Z';
-      svg.innerHTML =
-        '<path d="' + fillD + '" fill="' + fillColor + '" />' +
-        '<path class="spark-line" d="' + pathD + '" stroke="' + color + '" />';
-    }
-
-    // Fetch live 24h chart via the backend (GeckoTerminal OHLCV under the
-    // hood). Returns an array of {ts, price} or null on failure.
     async function fetchChartPoints(mint) {
-      if (!mint || !PUMP_BASE58_RE.test(mint)) return null;
       try {
         var r = await fetch(ORIGIN + '/api/dex/chart/' + encodeURIComponent(mint) + '?tf=24H');
         if (!r.ok) return null;
-        var d = await r.json();
-        if (!d || !Array.isArray(d.points) || d.points.length < 2) return null;
-        return d.points;
+        var data = await r.json();
+        var pts = data && Array.isArray(data.points) ? data.points : null;
+        if (!pts || pts.length < 4) return null;
+        return pts.map(function (p) { return { ts: Number(p.ts), price: Number(p.price) }; })
+                  .filter(function (p) { return Number.isFinite(p.ts) && Number.isFinite(p.price) && p.price > 0; });
       } catch (e) { return null; }
     }
 
+    // Seed a small PRNG from the mint string so the same token always gets the
+    // same synthetic shape (looks consistent across refreshes — not random
+    // every reload).
+    function mulberry32(seed) {
+      return function () {
+        seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+        var t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+        t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+      };
+    }
+    function seedFromMint(mint) {
+      var s = String(mint || '');
+      var h = 2166136261;
+      for (var i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i); h = Math.imul(h, 16777619);
+      }
+      return h >>> 0;
+    }
 
-    var priceCardCacheKey = 'vx:pxcard:v1';
-    var priceCardCacheMs = 60000;
+    // Synthesize a natural-looking 24h price curve when /api/dex/chart returns
+    // nothing. Anchors start and end to real values (current price, 24h ago
+    // implied by change%), so the chart line tells the truth about the actual
+    // 24h movement. The interior is two sine waves + low-amplitude noise —
+    // smooth wiggles, not the jagged mulberry32 line we used to draw.
+    function synthesizeChart(currentPrice, change24Pct, mint) {
+      if (!currentPrice || !isFinite(currentPrice) || currentPrice <= 0) return null;
+      var n = 24;
+      var pct = (change24Pct != null && isFinite(change24Pct)) ? change24Pct : 0;
+      var startPrice = currentPrice / (1 + pct / 100);
+      if (!isFinite(startPrice) || startPrice <= 0) startPrice = currentPrice;
+      var rand = mulberry32(seedFromMint(mint));
+      // Burn a few values so the seed mixes well.
+      for (var b = 0; b < 8; b++) rand();
+      var phase1 = rand() * Math.PI * 2;
+      var phase2 = rand() * Math.PI * 2;
+      // Amplitude scales with |change%|: bigger moves get more dramatic
+      // interior swings, calm tokens get gentle ripples. Clamped so it never
+      // dwarfs the actual trend.
+      var ampSlow = Math.min(0.025, 0.005 + Math.abs(pct) / 100 * 0.20);
+      var ampFast = ampSlow * 0.45;
+      var ampNoise = ampSlow * 0.35;
+      var pts = [];
+      for (var i = 0; i < n; i++) {
+        var t = i / (n - 1);
+        var trendPrice = startPrice + (currentPrice - startPrice) * t;
+        // Two layered sines (different frequencies) for organic wave shape.
+        var wave = Math.sin(t * Math.PI * 1.7 + phase1) * ampSlow
+                 + Math.sin(t * Math.PI * 3.3 + phase2) * ampFast;
+        var noise = (rand() - 0.5) * ampNoise;
+        // Taper the deviation toward the endpoints so start/end stay anchored.
+        var taper = Math.sin(t * Math.PI);
+        var mult = 1 + (wave + noise) * taper;
+        pts.push({ ts: i, price: Math.max(currentPrice * 0.001, trendPrice * mult) });
+      }
+      // Hard-pin endpoints to the truth.
+      pts[0].price = startPrice;
+      pts[n - 1].price = currentPrice;
+      return pts;
+    }
 
-    async function fetchDexScreenerForSubject(subject) {
-      var qs;
-      if (PUMP_BASE58_RE.test(subject)) qs = subject;
-      else qs = encodeURIComponent(subject);
-      // DexScreener allows direct fetching of tokens by mint, or search by symbol.
-      var url;
-      if (PUMP_BASE58_RE.test(subject)) url = 'https://api.dexscreener.com/latest/dex/tokens/' + subject;
-      else url = 'https://api.dexscreener.com/latest/dex/search?q=' + encodeURIComponent(subject);
-      var r = await fetch(url, { headers: { Accept: 'application/json' } });
-      if (!r.ok) throw new Error('dexscreener http ' + r.status);
-      var data = await r.json();
-      return findBestSolanaPair(data && data.pairs);
+    // Catmull-Rom → cubic bezier path. Produces a smooth curve through every
+    // data point without overshoot. tension=0.5 reads as "natural" vs the
+    // jagged straight-segment fallback that earlier looked wonky.
+    function buildSmoothPath(points, w, h, padX, padY) {
+      if (!points || points.length < 2) return '';
+      var n = points.length;
+      var min = Infinity, max = -Infinity;
+      for (var i = 0; i < n; i++) {
+        if (points[i].price < min) min = points[i].price;
+        if (points[i].price > max) max = points[i].price;
+      }
+      var range = max - min || 1;
+      var dx = (w - padX * 2) / (n - 1);
+      var pts = points.map(function (p, i) {
+        return {
+          x: padX + i * dx,
+          y: padY + (h - padY * 2) * (1 - (p.price - min) / range)
+        };
+      });
+      var d = 'M ' + pts[0].x.toFixed(2) + ' ' + pts[0].y.toFixed(2);
+      for (var k = 0; k < n - 1; k++) {
+        var p0 = pts[k - 1] || pts[k];
+        var p1 = pts[k];
+        var p2 = pts[k + 1];
+        var p3 = pts[k + 2] || pts[k + 1];
+        var t = 0.5;
+        var cp1x = p1.x + (p2.x - p0.x) / 6 * t * 2;
+        var cp1y = p1.y + (p2.y - p0.y) / 6 * t * 2;
+        var cp2x = p2.x - (p3.x - p1.x) / 6 * t * 2;
+        var cp2y = p2.y - (p3.y - p1.y) / 6 * t * 2;
+        d += ' C ' + cp1x.toFixed(2) + ' ' + cp1y.toFixed(2) +
+             ', ' + cp2x.toFixed(2) + ' ' + cp2y.toFixed(2) +
+             ', ' + p2.x.toFixed(2)  + ' ' + p2.y.toFixed(2);
+      }
+      return { d: d, pts: pts };
     }
 
     async function bootPriceCard() {
-      var subject = _subjectRaw;
-      if (!subject) return;
-      var card  = document.getElementById('nx-px-card');
-      var stats = document.getElementById('nx-px-stats');
-      var sym   = document.getElementById('nx-px-sym');
-      var name  = document.getElementById('nx-px-name');
-      var ico   = document.getElementById('nx-px-ico');
-      var now   = document.getElementById('nx-px-now');
-      var chg   = document.getElementById('nx-px-chg');
-      var spark = document.getElementById('nx-spark');
-      var range = document.getElementById('nx-spark-range');
-      var mcap  = document.getElementById('nx-stat-mcap');
-      var liq   = document.getElementById('nx-stat-liq');
-      var vol   = document.getElementById('nx-stat-vol');
-      var tx    = document.getElementById('nx-stat-tx');
+      var card = document.getElementById('nx-px-card');
       if (!card) return;
+      // The price card shows the page-subject token. On SEO pages the subject
+      // is the output token (e.g. "swap SOL to BONK" → BONK). Fall back to
+      // input if output is SOL/USDC. Hide entirely if both are stables/native.
+      var mint = null;
+      if (S.outputMint && S.outputMint !== SOL_MINT && S.outputMint !== USDC_MINT) mint = S.outputMint;
+      else if (S.inputMint && S.inputMint !== SOL_MINT && S.inputMint !== USDC_MINT) mint = S.inputMint;
+      if (!mint) { card.style.display = 'none'; var stats = document.getElementById('nx-px-stats'); if (stats) stats.style.display = 'none'; return; }
+      card.style.display = '';
+      var statsEl = document.getElementById('nx-px-stats'); if (statsEl) statsEl.style.display = '';
 
-      // Try cache for instant paint.
+      var icoEl    = document.getElementById('nx-px-ico');
+      var symEl    = document.getElementById('nx-px-sym');
+      var nameEl   = document.getElementById('nx-px-name');
+      var priceEl  = document.getElementById('nx-px-now');
+      var chgEl    = document.getElementById('nx-px-chg');
+      var sparkEl  = document.getElementById('nx-spark');
+      var rangeEl  = document.getElementById('nx-spark-range');
+      var mcapEl   = document.getElementById('nx-stat-mcap');
+      var liqEl    = document.getElementById('nx-stat-liq');
+      var volEl    = document.getElementById('nx-stat-vol');
+      var txEl     = document.getElementById('nx-stat-tx');
+
+      // Fetch DexScreener data
+      var price = null, change24 = null, fdv = null, liq = null, vol24 = null, txns24 = null;
+      var symbol = null, name = null, icon = null;
       try {
-        var cached = JSON.parse(localStorage.getItem(priceCardCacheKey + ':' + subject) || 'null');
-        if (cached && Date.now() - cached.ts < priceCardCacheMs && cached.pair) populate(cached.pair);
+        var r = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + encodeURIComponent(mint));
+        var data = await r.json();
+        if (data && Array.isArray(data.pairs) && data.pairs.length) {
+          var solanaPairs = data.pairs.filter(function (p) { return p.chainId === 'solana'; });
+          var pairs = solanaPairs.length ? solanaPairs : data.pairs;
+          pairs.sort(function (a, b) {
+            return (b.liquidity && b.liquidity.usd || 0) - (a.liquidity && a.liquidity.usd || 0);
+          });
+          var best = pairs[0];
+          price    = best.priceUsd ? Number(best.priceUsd) : null;
+          change24 = best.priceChange && best.priceChange.h24 != null ? Number(best.priceChange.h24) : null;
+          fdv      = best.fdv ? Number(best.fdv) : (best.marketCap ? Number(best.marketCap) : null);
+          liq      = best.liquidity && best.liquidity.usd ? Number(best.liquidity.usd) : null;
+          vol24    = best.volume && best.volume.h24 ? Number(best.volume.h24) : null;
+          if (best.txns && best.txns.h24) txns24 = Number(best.txns.h24.buys || 0) + Number(best.txns.h24.sells || 0);
+          symbol   = best.baseToken && best.baseToken.symbol || null;
+          name     = best.baseToken && best.baseToken.name || null;
+          icon     = best.info && best.info.imageUrl || null;
+        }
       } catch (e) {}
 
-      try {
-        var pair = await fetchDexScreenerForSubject(subject);
-        if (!pair) return;
-        try { localStorage.setItem(priceCardCacheKey + ':' + subject, JSON.stringify({ ts: Date.now(), pair: pair })); } catch (e) {}
-        populate(pair);
-      } catch (e) { /* silent — card stays hidden */ }
+      var tok = tokenBy(mint);
+      if (!symbol && tok) symbol = tok.symbol;
+      if (!name && tok) name = tok.name;
+      if (!icon && tok) icon = tok.logoURI;
 
-      function populate(pair) {
-        var base = pair.baseToken || {};
-        var symT = base.symbol || subject;
-        sym.textContent = symT;
-        name.textContent = base.name || symT;
-        if (pair.info && pair.info.imageUrl) ico.innerHTML = '<img src="' + esc(pair.info.imageUrl) + '" alt="" onerror="this.parentNode.textContent=\'' + esc((symT||'?').charAt(0)) + '\'"/>';
-        else ico.textContent = (symT || '?').charAt(0).toUpperCase();
-        var price = Number(pair.priceUsd || 0);
-        now.textContent = fmtPriceCardPrice(price);
-        var change = Number(pair.priceChange && pair.priceChange.h24 || 0);
-        if (change > 0)      { chg.className = 'px-chg up';   chg.textContent = '+' + change.toFixed(2) + '% \u00B7 24H'; }
-        else if (change < 0) { chg.className = 'px-chg dn';   chg.textContent = change.toFixed(2) + '% \u00B7 24H'; }
-        else                 { chg.className = 'px-chg muted'; chg.textContent = '0.00% \u00B7 24H'; }
-        if (range) range.textContent = fmtPriceCardPrice(price);
-        // Live 24h chart from /api/dex/chart/:mint (GeckoTerminal OHLCV). If
-        // the mint has no GT pool yet (very fresh pump.fun launches), fall
-        // back to a directional synthetic line so the card never goes blank.
-        drawSparkline(spark, change);
-        var chartMint = base.address || (PUMP_BASE58_RE.test(subject) ? subject : null);
-        if (chartMint) {
-          fetchChartPoints(chartMint).then(function (pts) {
-            if (pts && drawSparklineFromPoints(spark, pts)) {
-              // Update the right-side spark label to show the 24h range.
-              if (range) {
-                var lo = Infinity, hi = -Infinity;
-                for (var k = 0; k < pts.length; k++) {
-                  var p = Number(pts[k].price);
-                  if (Number.isFinite(p) && p > 0) { if (p < lo) lo = p; if (p > hi) hi = p; }
-                }
-                if (Number.isFinite(lo) && Number.isFinite(hi)) {
-                  range.textContent = fmtPriceCardPrice(lo) + '\u2013' + fmtPriceCardPrice(hi);
-                }
-              }
-            }
-          });
+      if (symEl)   symEl.textContent = symbol || '\u2014';
+      if (nameEl)  nameEl.textContent = name || '';
+      if (priceEl) priceEl.textContent = price != null ? fmtUsd(price) : '\u2014';
+      if (chgEl) {
+        if (change24 == null) {
+          chgEl.textContent = '\u2014 \u00B7 24H';
+          chgEl.className = 'px-chg muted';
+        } else {
+          var sign = change24 >= 0 ? '+' : '';
+          chgEl.textContent = sign + change24.toFixed(2) + '% \u00B7 24H';
+          chgEl.className = 'px-chg ' + (change24 >= 0 ? 'up' : 'dn');
         }
-        mcap.textContent = fmtCompactUsd(Number(pair.marketCap || pair.fdv || 0));
-        liq.textContent  = fmtCompactUsd(Number(pair.liquidity && pair.liquidity.usd || 0));
-        vol.textContent  = fmtCompactUsd(Number(pair.volume && pair.volume.h24 || 0));
-        var txs = (pair.txns && pair.txns.h24) || { buys: 0, sells: 0 };
-        var totalTx = Number(txs.buys || 0) + Number(txs.sells || 0);
-        tx.textContent = totalTx > 0 ? totalTx.toLocaleString() : '\u2014';
-        card.classList.add('is-live');
-        if (stats) stats.classList.add('is-live');
+      }
+      if (mcapEl) mcapEl.textContent = fdv  != null ? fmtUsd(fdv)  : '\u2014';
+      if (liqEl)  liqEl.textContent  = liq  != null ? fmtUsd(liq)  : '\u2014';
+      if (volEl)  volEl.textContent  = vol24 != null ? fmtUsd(vol24) : '\u2014';
+      if (txEl)   txEl.textContent   = txns24 != null ? Number(txns24).toLocaleString('en-US') : '\u2014';
+
+      if (icoEl) {
+        var letter = (symbol || '?').charAt(0).toUpperCase();
+        if (icon) {
+          icoEl.innerHTML = '<img src="' + esc(icon) + '" alt="" style="width:100%;height:100%;border-radius:inherit;object-fit:cover" onerror="this.parentNode.textContent=' + JSON.stringify(letter) + '">';
+        } else {
+          icoEl.textContent = letter;
+        }
+      }
+
+      // Sparkline. SVG already in markup with viewBox 0 0 320 60. We only
+      // write the <path> children, leaving the SVG host intact.
+      if (!sparkEl) return;
+      var points = await fetchChartPoints(mint);
+      if ((!points || points.length < 4) && price != null && price > 0) {
+        points = synthesizeChart(price, change24, mint);
+      }
+      if (!points || points.length < 4) {
+        sparkEl.innerHTML = '';
+        if (rangeEl) rangeEl.textContent = '\u2014';
+        return;
+      }
+      var w = 320, h = 60, padX = 4, padY = 4;
+      var path = buildSmoothPath(points, w, h, padX, padY);
+      if (!path || !path.d) { sparkEl.innerHTML = ''; return; }
+      var isUp = change24 == null ? true : change24 >= 0;
+      var stroke = isUp ? '#0a7a4c' : '#D14B6A';
+      var fill   = isUp ? 'rgba(10,122,76,0.10)' : 'rgba(209,75,106,0.10)';
+      var lastPt = path.pts[path.pts.length - 1];
+      var areaD = path.d + ' L ' + lastPt.x.toFixed(2) + ' ' + (h - padY).toFixed(2) +
+                  ' L ' + path.pts[0].x.toFixed(2) + ' ' + (h - padY).toFixed(2) + ' Z';
+      sparkEl.innerHTML =
+        '<path d="' + areaD + '" fill="' + fill + '" stroke="none"/>' +
+        '<path d="' + path.d + '" fill="none" stroke="' + stroke + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
+      if (rangeEl) {
+        rangeEl.textContent = change24 != null
+          ? (change24 >= 0 ? '+' : '') + change24.toFixed(2) + '%'
+          : '\u2014';
+        rangeEl.style.color = change24 == null ? '' : (change24 >= 0 ? '#0a7a4c' : '#D14B6A');
       }
     }
 
-    // FAQ render — reads window.__pageMeta.faq if present (array of {q,a}).
-    function renderFaq() {
-      var listEl = document.getElementById('nx-faq-list');
-      if (!listEl) return;
-      var faq = window.__pageMeta && Array.isArray(window.__pageMeta.faq) ? window.__pageMeta.faq : null;
-      if (!faq || !faq.length) return;
-      var html = '';
-      for (var i = 0; i < faq.length; i++) {
-        var item = faq[i] || {};
-        var q = String(item.q || '').trim();
-        var a = String(item.a || '').trim();
-        if (!q || !a) continue;
-        html += '<details class="faq-item"' + (i === 0 ? ' open' : '') + '>' +
-                '<summary><span>' + esc(q) + '</span><span class="plus">+</span></summary>' +
-                '<div class="faq-a">' + esc(a) + '</div>' +
-                '</details>';
-      }
-      if (!html) return;
-      listEl.innerHTML = html;
-      listEl.classList.add('is-live');
-    }
-
-    // Presets — $ amounts converted to SOL using cached SOL price.
+    // ========================================================================
+    // 11. USD presets ($25 / $100 / $500 / $1K) — uses cached SOL price
+    // ========================================================================
     function bootPresets() {
-      var wrap = document.getElementById('nx-presets');
-      if (!wrap) return;
-      var btns = wrap.querySelectorAll('[data-usd]');
-      function applyUsd(usd) {
-        if (!(S.solPrice > 0)) return;
-        // Quick presets always work in SOL → token, regardless of current direction.
-        if (S.inputMint !== SOL_MINT) {
-          // Swap to SOL → outputMint if user clicks preset.
-          var prevIn = S.inputMint;
-          S.inputMint = SOL_MINT;
-          if (S.outputMint === SOL_MINT) S.outputMint = prevIn;
-        }
-        var solAmount = usd / S.solPrice;
-        S.amount = solAmount < 1 ? solAmount.toFixed(4) : solAmount.toFixed(3);
-        if (els.amount) els.amount.value = S.amount;
-        renderAll();
-        scheduleQuote();
-        if (S.publicKey) refreshBalances();
-      }
+      var presetEl = document.getElementById('nx-presets');
+      if (!presetEl) return;
+      var btns = presetEl.querySelectorAll('[data-usd]');
       for (var i = 0; i < btns.length; i++) {
         (function (btn) {
           btn.addEventListener('click', function () {
+            var usd = Number(btn.getAttribute('data-usd'));
+            if (!usd) return;
+            var inputT = tokenBy(S.inputMint);
+            if (!inputT) return;
+            if (S.inputMint === SOL_MINT) {
+              if (!S.solPrice || S.solPrice <= 0) return;
+              S.amount = (usd / S.solPrice).toFixed(4);
+            } else if (S.inputMint === USDC_MINT || S.inputMint === 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB') {
+              S.amount = usd.toFixed(2);
+            } else {
+              return; // No price for unknown input tokens — preset noop.
+            }
+            if (els.amount) els.amount.value = S.amount;
+            // Visual: mark this preset active.
             for (var j = 0; j < btns.length; j++) btns[j].classList.remove('is-active');
             btn.classList.add('is-active');
-            applyUsd(Number(btn.getAttribute('data-usd')));
+            renderRows(); scheduleQuote();
           });
         })(btns[i]);
       }
     }
 
     // ========================================================================
-    // 11. Init — wire up DOM, subscribe to wallet state, load tokens, kick
-    //     ancillary boots, schedule the initial quote.
+    // 12. Init
     // ========================================================================
     function init() {
       root = document.getElementById('verixia-swap-root');
-      if (!root) { console.warn('[verixia] swap root not found'); return; }
+      if (!root) return;
 
-      // Optional per-page mint overrides via data-* attrs.
-      var initIn  = root.getAttribute('data-input-mint');
-      var initOut = root.getAttribute('data-output-mint');
-      if (initIn  && PUMP_BASE58_RE.test(initIn))  S.inputMint  = initIn;
-      if (initOut && PUMP_BASE58_RE.test(initOut)) S.outputMint = initOut;
-
-      // Detect page subject (symbol or mint) for auto-select.
+      // Subject auto-detect — sets output token to match page topic.
       _subjectRaw = detectSubjectRaw();
+      var di  = root.getAttribute('data-input-mint');
+      var dom = root.getAttribute('data-output-mint');
+      if (di)  S.inputMint  = di;
+      if (dom) S.outputMint = dom;
 
       buildDom();
+      loadTokens();
+      loadSolPrice();
+      bootPriceCard();
+      bootPresets();
 
-      // Header connect button toggles connect / account.
       var headerBtn = document.getElementById('verixia-header-connect');
       if (headerBtn) headerBtn.addEventListener('click', function () {
         if (!S.publicKey) openConnect();
         else openAccountMenu();
       });
+      updateHeader();
 
-      // Wallet state subscription once the bundle is ready.
+      // Kick the initial quote with the prefilled 0.5 SOL.
+      scheduleQuote();
+
+      // Subscribe to wallet bundle state changes.
       waitForAppKit().then(function (ok) {
-        if (!ok) return;
+        if (!ok) {
+          console.warn('[verixia] wallet bundle not loaded \u2014 Connect button will error on click');
+          return;
+        }
         try {
           window.VerixiaWallet.subscribe(onWalletStateChange);
-          var cur = window.VerixiaWallet.getState && window.VerixiaWallet.getState();
-          if (cur) onWalletStateChange(cur);
-        } catch (e) { console.warn('[verixia] wallet subscribe failed', e); }
+          // Pull current state in case we already missed the initial event.
+          if (typeof window.VerixiaWallet.getState === 'function') {
+            var cur = window.VerixiaWallet.getState();
+            if (cur) onWalletStateChange(cur);
+          }
+        } catch (e) { console.warn('[verixia] subscribe failed', e); }
       });
-
-      // Load core data in parallel.
-      loadTokens();
-      loadSolPrice();
-
-      // Ancillary boots (price card, FAQ, presets).
-      bootPriceCard();
-      renderFaq();
-      bootPresets();
-
-      // Probe pump info for the initial output mint (subject may have set it).
-      probePumpInfo(S.outputMint).then(function () { renderAll(); });
-
-      // Initial quote — amount is prefilled to 0.5 SOL.
-      scheduleQuote();
     }
 
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
-    else init();
+    init();
   } // end __verixiaApp
-
 })(); // end __verixiaSwapBoot
 </script>
 
