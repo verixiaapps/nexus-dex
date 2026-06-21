@@ -3,6 +3,7 @@ require('dotenv').config();
 const express   = require('express');
 const cors      = require('cors');
 const path      = require('path');
+const fs        = require('fs');
 
 const app      = express();
 const PORT     = process.env.PORT || 3001;
@@ -819,15 +820,6 @@ app.get('/api/whale-events', async (req, res) => {
 
 /* ========================================================================
  * Solana RPC — General path (everything except buy/sell trade execution)
- *
- * Used by /api/solana-rpc and /api/helius/das. Alchemy only. No fallback.
- * Per spec: Ankr is reserved exclusively for the buy/sell trade path
- * (/api/trade-rpc), nothing else.
- *
- * Solana RPC providers don't accept batched JSON-RPC arrays. The client
- * sends batched requests, so we unroll batches into parallel single
- * requests then reassemble the response as an array. Single requests
- * pass through untouched.
  * ===================================================================== */
 const RPC_TIMEOUT_MS = 10_000;
 
@@ -914,16 +906,8 @@ app.post('/api/solana-rpc', async (req, res) => {
 
 /* ------------------------------------------------------------------------
  * /api/trade-rpc — dedicated buy/sell trade-path proxy.
- *
- * Alchemy primary, Ankr fallback. This is the ONLY route that uses Ankr,
- * and Ankr is ONLY used as a fallback after Alchemy fails. Used by
- * Ape.jsx and pumpfun-trade.js for the buy/sell critical path:
- * sendRawTransaction, getSignatureStatus, getLatestBlockhash,
- * getMultipleAccountsInfo (ALT lookup), simulateTransaction.
  * ---------------------------------------------------------------------- */
 function _tradeUrlChain() {
-  // Devnet: devnet RPC only, no Ankr fallback (Ankr URL is mainnet).
-  // Mainnet: Alchemy primary, Ankr fallback. Dedup defensively.
   if (SOLANA_NETWORK === 'devnet') {
     return [DEVNET_RPC_URL].filter(Boolean);
   }
@@ -1034,7 +1018,6 @@ app.get('/api/health', (req, res) => {
     },
     chainflip: { network: 'mainnet', brokerCommissionBps: 0 },
     solanaRpc: {
-      // General path: primary only, no fallback.
       provider:   SOLANA_NETWORK === 'devnet' ? 'devnet' : 'alchemy',
       network:    SOLANA_NETWORK,
       urlSet:     Boolean(PRIMARY_RPC_URL),
@@ -1044,7 +1027,6 @@ app.get('/api/health', (req, res) => {
       batching:   'server-side unroll',
     },
     tradeRpc: {
-      // Buy/sell path. Mainnet: alchemy + ankr fallback. Devnet: devnet only.
       primaryProvider:  SOLANA_NETWORK === 'devnet' ? 'devnet' : 'alchemy',
       fallbackProvider: SOLANA_NETWORK === 'devnet' ? null : 'ankr',
       ankrSet:          Boolean(ANKR_RPC_URL),
@@ -1684,13 +1666,7 @@ app.get('/api/debug/wallet/:wallet', async (req, res) => {
 require('./referrals')(app, { rpcUrl: PRIMARY_RPC_URL });
 
 /* ========================================================================
- * Ape (burner page) — dedicated Pump.fun trade route   [ADDED SECTION]
- *
- * Mounts POST /api/ape/pump-trade via ape-pump-trade.js, using the same
- * require(...)-style call as ./referrals above. Must sit AFTER the
- * middleware and referrals mount, and BEFORE the /api/* 404 catch-all
- * below, or the catch-all would swallow it. Nothing else in this file is
- * changed by this section.
+ * Ape (burner page) — dedicated Pump.fun trade route
  * ===================================================================== */
 require('./ape-pump-trade').mountRoutes(app);
 
@@ -1717,7 +1693,18 @@ app.get('/embed/config.js', (req, res) => {
 });
 
 /* ========================================================================
- * Static SPA
+ * Static SPA + SEO slug pages
+ *
+ * Order matters:
+ *   1) express.static serves any matching file from build/ (favicon, JS
+ *      bundles, manifest.json, and nested files like
+ *      build/<slug>/index.html when accessed with explicit /index.html).
+ *   2) Explicit SEO slug handler — for URLs like /amazon-stock-token or
+ *      /amazon-stock-token/ (no /index.html), look for
+ *      build/<slug>/index.html and serve it directly. This is the
+ *      bulletproof fix for slug routing without relying on express.static's
+ *      directory-redirect behavior.
+ *   3) SPA catch-all — anything not handled above gets the React app.
  * ===================================================================== */
 app.use(express.static(path.join(__dirname, 'build'), {
   maxAge: '7d',
@@ -1725,6 +1712,22 @@ app.use(express.static(path.join(__dirname, 'build'), {
     if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   },
 }));
+
+// Explicit SEO slug handler — matches /slug and /slug/ but not deeper paths.
+// Looks for build/<slug>/index.html on disk; if found, serves it; otherwise
+// falls through to the SPA catch-all below.
+app.get(/^\/([a-z0-9][a-z0-9-]*)\/?$/i, (req, res, next) => {
+  const slug = req.params[0];
+  // Skip obvious non-slug paths so we don't shadow API or static asset names.
+  if (!slug || slug.startsWith('api') || slug === 'health' || slug === 'embed') return next();
+  const file = path.join(__dirname, 'build', slug, 'index.html');
+  fs.access(file, fs.constants.R_OK, (err) => {
+    if (err) return next();
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.sendFile(file);
+  });
+});
+
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'build', 'index.html')));
 
 /* ========================================================================
