@@ -7,6 +7,7 @@ amazon token chart
 amazon token price
 amazon token swap
 anonymous crypto exchange
+anonymous crypto swap
 anonymous crypto swapping
 apple stock token
 apple token
@@ -23,11 +24,13 @@ best route ton swap
 best route usdc swap
 best route usdt swap
 best route xrp swap
+best solana dex
 best solana meme coin dex
 best solana meme coin exchange
 best solana meme coin swap
 best solana meme coin trading
 best stablecoin bridge
+best wallets trading
 birdeye vs dexscreener fees
 birdeye vs dexscreener for beginners
 birdeye vs dexscreener for memecoins
@@ -102,6 +105,7 @@ cheaper alternative to photon
 contract risk analysis
 contract risk checker
 contract scanner
+copy whale trades
 cross border defi
 cross chain app
 cross chain bridge
@@ -162,6 +166,7 @@ crypto monitoring
 crypto opportunities
 crypto platform
 crypto project analysis
+crypto radar
 crypto research
 crypto risk checker
 crypto routing engine
@@ -178,6 +183,7 @@ crypto trends
 crypto trust score
 crypto wallet analytics
 crypto wallet swap
+crypto whale tracker
 crypto without id
 crypto without sign up
 crypto without verification
@@ -187,6 +193,7 @@ decentralized exchange
 decentralized exchange no kyc
 decentralized finance
 decentralized finance platform
+decentralized swap
 decentralized trading
 defi dex
 defi platform
@@ -203,8 +210,11 @@ dexscreener vs gmgn speed
 dexscreener vs gmgn which is better
 digital asset exchange
 digital assets
+discover meme coins
 dogecoin exchange
 early crypto projects
+early meme coins
+early token finder
 emerging crypto tokens
 exchange without account
 fast crypto swaps
@@ -219,6 +229,9 @@ fastest ton swap
 fastest usdc swap
 fastest usdt swap
 fastest xrp swap
+find crypto gems
+find new meme coins
+fresh token launches
 future of finance
 global crypto swap
 global defi exchange
@@ -242,6 +255,7 @@ honeypot checker
 honeypot scanner
 hot crypto tokens
 injective exchange
+instant crypto swap
 instant crypto swaps
 is slippage normal when swapping act
 is slippage normal when swapping ai16z
@@ -317,6 +331,7 @@ new meme coins
 new solana meme coins
 new solana tokens
 new token scanner
+no kyc crypto swap
 no kyc exchange
 non custodial exchange
 nvidia stock token
@@ -327,6 +342,7 @@ nvidia token swap
 on chain analytics
 on chain data
 on chain trading
+onchain wallet tracker
 open access crypto exchange
 open crypto exchange
 open financial system
@@ -343,6 +359,7 @@ photon vs bullx which is better
 privacy crypto exchange
 privacy first crypto
 private crypto exchange
+private crypto swap
 project transparency
 project verification
 pyth exchange
@@ -353,11 +370,13 @@ rug pull checker
 secure crypto trading
 security scanner crypto
 self custody crypto
+self custody exchange
 shiba inu exchange
 smart contract checker
 smart contract scanner
 smart contract trading
 smart money tracker
+smart money tracker solana
 solana blockchain
 solana bridge
 solana contract checker
@@ -370,6 +389,8 @@ solana defi platform
 solana dex
 solana ecosystem
 solana exchange
+solana gem finder
+solana launch tracker
 solana liquidity
 solana liquidity pools
 solana meme coin aggregator
@@ -381,8 +402,10 @@ solana meme coin swap
 solana meme coin trading
 solana meme coins
 solana rug checker
+solana swap platform
 solana token exchange
 solana token explorer
+solana token radar
 solana token risk
 solana token scanner
 solana token swaps
@@ -390,7 +413,9 @@ solana token tracker
 solana token trading
 solana trading
 solana trading platform
+solana trading terminal
 solana wallet swap
+solana wallet tracker
 solana web3
 spl token exchange
 spl token swap
@@ -1584,6 +1609,7 @@ token market data
 token marketplace
 token monitoring
 token opportunities
+token radar
 token research
 token risk checker
 token safety checker
@@ -1600,6 +1626,8 @@ token verification
 top meme coins
 top solana swaps
 top solana token swaps
+top wallets solana
+track profitable wallets
 trade altcoins
 trade crypto anonymously
 trade crypto globally
@@ -1668,6 +1696,7 @@ wallet swap app
 wallet to wallet bridge
 wallet to wallet swap
 wallet tracker
+wallet tracker solana
 web3 bridge
 web3 exchange
 web3 finance app
@@ -1676,6 +1705,7 @@ web3 trading
 web3 trading platform
 whale crypto swap
 whale tracker
+whale tracker solana
 what does price impact mean solana swap
 what does route not found mean solana
 what fee to swap act on solana
