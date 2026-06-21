@@ -1,16 +1,8 @@
 {
-  "keywords_loaded": 1,
+  "keywords_loaded": 52,
   "hubs_built": 11,
-  "validation_warnings": 11,
+  "validation_warnings": 7,
   "validation_details": [
-    {
-      "hub_slug": "wonderland-memes",
-      "matched_keywords": 0,
-      "linked_pages": 0,
-      "errors": [
-        "no linked child pages"
-      ]
-    },
     {
       "hub_slug": "live-signals",
       "matched_keywords": 0,
@@ -29,22 +21,6 @@
     },
     {
       "hub_slug": "solana-bridges",
-      "matched_keywords": 0,
-      "linked_pages": 0,
-      "errors": [
-        "no linked child pages"
-      ]
-    },
-    {
-      "hub_slug": "solana-swaps",
-      "matched_keywords": 0,
-      "linked_pages": 0,
-      "errors": [
-        "no linked child pages"
-      ]
-    },
-    {
-      "hub_slug": "no-kyc-trading",
       "matched_keywords": 0,
       "linked_pages": 0,
       "errors": [
@@ -77,14 +53,6 @@
     },
     {
       "hub_slug": "how-to-guides",
-      "matched_keywords": 0,
-      "linked_pages": 0,
-      "errors": [
-        "no linked child pages"
-      ]
-    },
-    {
-      "hub_slug": "crypto-markets",
       "matched_keywords": 0,
       "linked_pages": 0,
       "errors": [
