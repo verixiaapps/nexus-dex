@@ -1684,37 +1684,48 @@ app.get('/embed/config.js', (req, res) => {
  * Static SPA + SEO slug pages
  *
  * Order matters:
- *   1) SEO slug handler FIRST — for /wif-token-swap, /solana-swap, etc.
- *      Looks for public/<slug>/index.html on disk and serves it directly.
- *      This must run BEFORE express.static so that the SEO pages win over
- *      anything in the React build output.
- *   2) express.static for the React build — JS bundles, manifest, favicon.
- *   3) express.static for public/ — any other static SEO assets.
- *   4) SPA catch-all — anything else gets the React DEX app.
+ *   1) DEBUG endpoint — exposes what's on disk so we can verify the deploy.
+ *   2) express.static for public/ FIRST — auto-serves SEO pages at
+ *      /<slug>/ because express.static serves index.html for directory
+ *      requests by default. This must beat the React build's index.html.
+ *   3) express.static for build/ — React JS bundles, static assets.
+ *   4) SPA catch-all — DEX React app for any remaining route.
  * ===================================================================== */
 
-// (1) SEO slug handler — checks public/<slug>/index.html FIRST.
-app.get(/^\/([a-z0-9][a-z0-9-]*)\/?$/i, (req, res, next) => {
-  const slug = req.params[0];
-  if (!slug || slug.startsWith('api') || slug === 'health' || slug === 'embed') return next();
-  const file = path.join(__dirname, 'public', slug, 'index.html');
-  fs.access(file, fs.constants.R_OK, (err) => {
-    if (err) return next();
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    res.sendFile(file);
-  });
+// (1) Debug — visit /api/debug/seo-files to see what the server actually sees.
+app.get('/api/debug/seo-files', (req, res) => {
+  const publicDir = path.join(__dirname, 'public');
+  const buildDir  = path.join(__dirname, 'build');
+  const out = { __dirname, publicDir, buildDir, publicExists: false, buildExists: false, publicFolders: [], buildFolders: [] };
+  try {
+    out.publicExists = fs.existsSync(publicDir);
+    if (out.publicExists) {
+      out.publicFolders = fs.readdirSync(publicDir).filter(n => {
+        try { return fs.statSync(path.join(publicDir, n)).isDirectory(); } catch { return false; }
+      });
+    }
+  } catch (e) { out.publicError = e.message; }
+  try {
+    out.buildExists = fs.existsSync(buildDir);
+    if (out.buildExists) {
+      out.buildFolders = fs.readdirSync(buildDir).filter(n => {
+        try { return fs.statSync(path.join(buildDir, n)).isDirectory(); } catch { return false; }
+      });
+    }
+  } catch (e) { out.buildError = e.message; }
+  res.json(out);
 });
 
-// (2) Static files from the React build (DEX bundles).
-app.use(express.static(path.join(__dirname, 'build'), {
+// (2) Static files from public/ — auto-serves /<slug>/ → public/<slug>/index.html
+app.use(express.static(path.join(__dirname, 'public'), {
   maxAge: '7d',
   setHeaders: (res, filePath) => {
     if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   },
 }));
 
-// (3) Static files from public/ (SEO assets — images, css, etc.).
-app.use(express.static(path.join(__dirname, 'public'), {
+// (3) Static files from the React build (DEX bundles).
+app.use(express.static(path.join(__dirname, 'build'), {
   maxAge: '7d',
   setHeaders: (res, filePath) => {
     if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
