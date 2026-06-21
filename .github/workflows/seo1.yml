@@ -1,0 +1,170 @@
+name: SEO Slug Diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      slug:
+        description: 'Slug to test end-to-end'
+        required: false
+        default: 'amazon-stock-token'
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Phase 1 — Verify file exists in public/
+        id: phase1
+        run: |
+          SLUG="${{ github.event.inputs.slug || 'amazon-stock-token' }}"
+          echo "Testing slug: $SLUG"
+          echo "SLUG=$SLUG" >> $GITHUB_ENV
+          PUBLIC_FILE="public/$SLUG/index.html"
+          if [ -f "$PUBLIC_FILE" ]; then
+            SIZE=$(wc -c < "$PUBLIC_FILE")
+            echo "PUBLIC_EXISTS=true" >> $GITHUB_ENV
+            echo "PUBLIC_SIZE=$SIZE" >> $GITHUB_ENV
+            echo "✅ $PUBLIC_FILE exists ($SIZE bytes)"
+          else
+            echo "PUBLIC_EXISTS=false" >> $GITHUB_ENV
+            echo "❌ $PUBLIC_FILE does NOT exist"
+          fi
+          PUBLIC_TOTAL=$(find public -maxdepth 1 -mindepth 1 -type d | wc -l)
+          echo "PUBLIC_TOTAL=$PUBLIC_TOTAL" >> $GITHUB_ENV
+          echo "public/ has $PUBLIC_TOTAL subdirectories total"
+
+      - name: Phase 2 — npm install
+        run: npm install --legacy-peer-deps
+
+      - name: Phase 3 — Run actual Railway build command
+        run: npm run build:all
+        env:
+          CI: 'false'
+          NODE_OPTIONS: '--max-old-space-size=4096'
+
+      - name: Phase 4 — Verify build/ output
+        run: |
+          if [ ! -d build ]; then
+            echo "::error::build/ does not exist after build"
+            exit 1
+          fi
+          BUILD_FILE="build/$SLUG/index.html"
+          if [ -f "$BUILD_FILE" ]; then
+            SIZE=$(wc -c < "$BUILD_FILE")
+            echo "BUILD_EXISTS=true" >> $GITHUB_ENV
+            echo "BUILD_SIZE=$SIZE" >> $GITHUB_ENV
+            echo "✅ $BUILD_FILE exists ($SIZE bytes)"
+          else
+            echo "BUILD_EXISTS=false" >> $GITHUB_ENV
+            echo "❌ $BUILD_FILE does NOT exist after build"
+          fi
+          BUILD_TOTAL=$(find build -maxdepth 1 -mindepth 1 -type d | wc -l)
+          echo "BUILD_TOTAL=$BUILD_TOTAL" >> $GITHUB_ENV
+          echo "build/ has $BUILD_TOTAL subdirectories total"
+
+          # diff
+          comm -23 \
+            <(find public -maxdepth 1 -mindepth 1 -type d -printf "%f\n" | sort) \
+            <(find build  -maxdepth 1 -mindepth 1 -type d -printf "%f\n" | sort) \
+            > missing.txt
+          MISSING=$(wc -l < missing.txt)
+          echo "MISSING_COUNT=$MISSING" >> $GITHUB_ENV
+
+      - name: Phase 5 — Boot server.js & curl the slug
+        if: env.BUILD_EXISTS == 'true'
+        run: |
+          # Start server in background
+          PORT=3001 node server.js > server.log 2>&1 &
+          SERVER_PID=$!
+          echo "Server PID: $SERVER_PID"
+
+          # Wait for it to come up
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -s -o /dev/null http://localhost:3001/health; then
+              echo "✅ Server up after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+
+          # Curl the slug
+          echo ""
+          echo "=== curl /$SLUG ==="
+          RESP=$(curl -s http://localhost:3001/$SLUG | head -c 500)
+          echo "$RESP"
+          echo ""
+
+          # Check if response is SEO HTML or React shell
+          if echo "$RESP" | grep -q "$SLUG\|AMZNx\|Brand Token\|application/ld+json"; then
+            echo "SERVE_RESULT=seo" >> $GITHUB_ENV
+            echo "✅ Server returned SEO HTML"
+          elif echo "$RESP" | grep -q 'id="root"\|<div id="root">'; then
+            echo "SERVE_RESULT=react" >> $GITHUB_ENV
+            echo "❌ Server returned React shell (slug routing broken)"
+          else
+            echo "SERVE_RESULT=unknown" >> $GITHUB_ENV
+            echo "⚠️ Unknown response"
+          fi
+
+          echo ""
+          echo "=== server.log tail ==="
+          tail -50 server.log
+
+          kill $SERVER_PID 2>/dev/null || true
+        env:
+          PORT: '3001'
+
+      - name: Phase 6 — Summary
+        if: always()
+        run: |
+          {
+            echo "# SEO Slug Diagnostic — \`$SLUG\`"
+            echo ""
+            echo "## Pipeline trace"
+            echo "| Stage | Status |"
+            echo "|---|---|"
+            echo "| 1. File in \`public/$SLUG/index.html\` | ${PUBLIC_EXISTS:-?} (${PUBLIC_SIZE:-0} bytes) |"
+            echo "| 2. Total slug folders in \`public/\` | ${PUBLIC_TOTAL:-?} |"
+            echo "| 3. CRA build completed | ✅ |"
+            echo "| 4. File in \`build/$SLUG/index.html\` | ${BUILD_EXISTS:-?} (${BUILD_SIZE:-0} bytes) |"
+            echo "| 5. Total slug folders in \`build/\` | ${BUILD_TOTAL:-?} |"
+            echo "| 6. Slug folders dropped during build | ${MISSING_COUNT:-?} |"
+            echo "| 7. Server.js response for \`/$SLUG\` | ${SERVE_RESULT:-not-tested} |"
+            echo ""
+            echo "## Verdict"
+            if [ "$PUBLIC_EXISTS" != "true" ]; then
+              echo "🛑 **File not in repo.** Content engine never wrote this slug. Check Python generation scripts."
+            elif [ "$BUILD_EXISTS" != "true" ]; then
+              echo "🛑 **CRA dropped the file during build.** This is the bug. Add explicit copy step to \`build:all\`."
+              echo ""
+              echo "Suggested fix in \`package.json\`:"
+              echo '```json'
+              echo '"build:all": "react-app-rewired build && cp -r public/*/  build/ 2>/dev/null || true"'
+              echo '```'
+            elif [ "$SERVE_RESULT" = "react" ]; then
+              echo "🛑 **Server.js routes /\$SLUG to React app instead of static file.** Slug regex or middleware order is wrong."
+            elif [ "$SERVE_RESULT" = "seo" ]; then
+              echo "✅ **End-to-end works locally.** If it still fails on Railway, the bug is Railway-specific (cache, env, or build config in railway.toml/Nixpacks)."
+            else
+              echo "⚠️ Inconclusive. Check the artifact."
+            fi
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostic
+          path: |
+            missing.txt
+            server.log
+          retention-days: 7
