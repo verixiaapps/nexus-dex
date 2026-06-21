@@ -312,8 +312,8 @@ header.nx-header{
 .sw-token-btn{display:flex;align-items:center;gap:8px;padding:7px 11px 7px 6px;background:rgba(160,231,255,.12);border:1px solid var(--border);border-radius:999px;color:var(--sw-ink);font-family:'Space Grotesk',sans-serif;font-size:13px;font-weight:700;cursor:pointer;flex-shrink:0}
 .sw-token-btn:hover{background:rgba(160,231,255,.20);border-color:var(--border-hi)}
 .sw-token-btn svg{color:var(--sw-ink-3);width:12px;height:12px}
-.sw-token-logo,.sw-token-fallback{width:24px;height:24px;border-radius:50%;flex-shrink:0;background:linear-gradient(135deg,rgba(160,231,255,.30),rgba(255,143,190,.30));display:grid;place-items:center;font-family:'Instrument Serif',serif;font-style:italic;font-size:12px;color:var(--sw-ink);overflow:hidden}
-.sw-token-logo img{width:100%;height:100%;object-fit:cover}
+[data-tok]{position:relative;width:24px;height:24px;flex-shrink:0;display:inline-block}
+.sw-token-logo,.sw-token-fallback{position:absolute;top:0;left:0;width:24px;height:24px;border-radius:50%;background:linear-gradient(135deg,rgba(160,231,255,.30),rgba(255,143,190,.30));display:grid;place-items:center;font-family:'Instrument Serif',serif;font-style:italic;font-size:12px;color:var(--sw-ink);overflow:hidden;object-fit:cover}
 .sw-amount-input{flex:1;background:transparent;border:0;outline:0;font-family:'Instrument Serif',serif;font-size:32px;line-height:1;color:var(--sw-ink);text-align:right;font-variant-numeric:tabular-nums;min-width:0;width:100%}
 .sw-amount-input::placeholder{color:var(--sw-ink-3)}
 .sw-row-usd{margin-top:6px;text-align:right;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--sw-ink-2);font-weight:600;min-height:14px}
@@ -355,7 +355,8 @@ header.nx-header{
 .sw-modal-msg{padding:24px;color:var(--ink-2);text-align:center;font-weight:500;font-size:13px}
 .sw-token-row{width:100%;display:flex;align-items:center;gap:12px;padding:10px 12px;background:transparent;border:1.5px solid transparent;border-radius:14px;cursor:pointer;color:var(--ink);text-align:left;font-family:'Space Grotesk',sans-serif}
 .sw-token-row:hover{background:rgba(255,255,255,.55);border-color:var(--hairline)}
-.sw-token-row-logo,.sw-token-row-placeholder{width:34px;height:34px;border-radius:50%;flex-shrink:0;background:linear-gradient(135deg,rgba(160,231,255,.30),rgba(255,143,190,.30));object-fit:cover}
+.sw-token-row-logo-wrap{position:relative;width:34px;height:34px;flex-shrink:0}
+.sw-token-row-logo,.sw-token-row-placeholder{position:absolute;top:0;left:0;width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,rgba(160,231,255,.30),rgba(255,143,190,.30));object-fit:cover;display:grid;place-items:center;font-family:'Instrument Serif',serif;font-style:italic;font-size:14px;color:var(--ink)}
 .sw-token-row-info{flex:1;min-width:0}
 .sw-token-row-sym{font-family:'Instrument Serif',serif;font-style:italic;font-size:17px;color:var(--ink);line-height:1}
 .sw-token-row-name{font-size:12px;color:var(--ink-2);font-weight:500;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -1099,7 +1100,7 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
             outputMint: S.outputMint,
             amount:     net.toString(),
             slippageBps: String(SLIPPAGE_BPS),
-            taker: S.publicKey ? S.publicKey.toBase58() : '11111111111111111111111111111111',
+            taker: S.publicKey ? S.publicKey.toBase58() : FEE_WALLET.toBase58(),
             computeUnitPriceMicroLamports: String(PRIORITY_FEE_MICROLAMPORTS)
           });
           var r = await fetch(ORIGIN + '/api/seo/jupiter/build?' + params.toString(), { signal: ac.signal });
@@ -1315,7 +1316,7 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
           '<div class="sw-details" data-details style="display:none"></div>' +
           '<div data-banners></div>' +
           '<button class="sw-primary-btn" data-primary type="button">Connect Wallet</button>' +
-          '<p class="sw-footer" data-foot><b>Atomic 3% fee</b> \u00B7 Non-custodial \u00B7 Settles in seconds</p>' +
+          '<p class="sw-footer" data-foot>Non-custodial \u00B7 Settles in seconds</p>' +
         '</div>';
       root.appendChild(wrap);
       els.symInput   = wrap.querySelector('[data-sym="input"]');
@@ -1376,13 +1377,9 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
         img.className = 'sw-token-logo';
         img.src = token.logoURI;
         img.alt = '';
-        img.width = 24; img.height = 24;
         img.loading = 'eager';
         img.decoding = 'async';
-        img.style.position = 'absolute';
-        img.style.left = '6px';
         img.onerror = function () { img.style.display = 'none'; };
-        containerEl.style.position = 'relative';
         containerEl.appendChild(img);
       }
       symEl.textContent = (token && token.symbol) || 'Select';
@@ -1455,8 +1452,7 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       els.details.innerHTML =
         '<div class="sw-detail-row"><span>Rate</span><span class="sw-detail-val">1 ' + esc(inputToken.symbol) + ' \u2248 ' + esc(fmtAmount(rate, outputToken.decimals)) + ' ' + esc(outputToken.symbol) + '</span></div>' +
         '<div class="sw-detail-row"><span>Minimum received</span><span class="sw-detail-val">' + esc(fmtAmount(mr, outputToken.decimals)) + ' ' + esc(outputToken.symbol) + '</span></div>' +
-        '<div class="sw-detail-row"><span>Price impact</span><span class="sw-detail-val ' + piClass + '">' + (pi != null ? pi.toFixed(2) + '%' : '\u2014') + '</span></div>' +
-        '<div class="sw-detail-row"><span>Platform fee</span><span class="sw-detail-val">' + (FEE_BPS / 100).toFixed(1) + '% (in ' + esc(inputToken.symbol) + ')</span></div>';
+        '<div class="sw-detail-row"><span>Price impact</span><span class="sw-detail-val ' + piClass + '">' + (pi != null ? pi.toFixed(2) + '%' : '\u2014') + '</span></div>';
     }
 
     function renderBanners() {
@@ -2134,6 +2130,31 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
     init();
   } // end __verixiaApp
 })(); // end __verixiaSwapBoot
+</script>
+
+<script>
+(function(){
+  try {
+    var meta = window.__pageMeta || {};
+    var faq = Array.isArray(meta.faq) ? meta.faq : [];
+    var list = document.getElementById('nx-faq-list');
+    if (!list || !faq.length) return;
+    var esc = function(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});};
+    var html = '';
+    for (var i = 0; i < faq.length; i++) {
+      var item = faq[i];
+      if (!item) continue;
+      var q = item.q || item.question || '';
+      var a = item.a || item.answer || '';
+      if (!q || !a) continue;
+      html += '<details class="faq-item"><summary>' + esc(q) + '<span class="plus">+</span></summary><div class="faq-a">' + esc(a) + '</div></details>';
+    }
+    if (html) {
+      list.innerHTML = html;
+      list.classList.add('is-live');
+    }
+  } catch(e) { console.warn('[verixia] faq render failed', e); }
+})();
 </script>
 
 </body>
