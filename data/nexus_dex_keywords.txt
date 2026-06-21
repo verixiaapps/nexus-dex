@@ -42,7 +42,6 @@ swap sol to usdc
 swap sol to usdt
 token risk checker
 crypto scam checker
-new solana meme coins
 latest solana meme coins
 trending solana meme coins
 solana meme coin scanner
