@@ -375,6 +375,7 @@ solana-meme-coin-aggregator
 solana-meme-coin-dex
 solana-meme-coin-exchange
 solana-meme-coin-platform
+solana-meme-coin-scanner
 solana-meme-coin-swap
 solana-meme-coin-trading
 solana-meme-coins
