@@ -53,38 +53,8 @@ cross chain bridge
 solana bridge
 crypto bridge without kyc
 meme coin tracker
-solana trending tokens
-crypto watchlist
-meme coin watchlist
-solana gainers
-solana losers
-crypto movers
 token screener
-solana screener
-crypto scanner tool
-best token scanner
-token discovery tool
-crypto discovery platform
-find tokens early
-discover new crypto
-crypto alpha scanner
-solana alpha scanner
-meme coin alpha
-onchain alpha
-crypto research tool
-token research tool
-crypto trading signals
-onchain trading signals
-solana trading signals
-wallet activity tracker
-token holder tracker
-token holder analysis
-crypto risk analysis
-token liquidity analysis
 crypto market scanner
-dex analytics
-solana analytics
-cross chain analytics
 crypto dashboard
 solana dashboard
 meme coin dashboard

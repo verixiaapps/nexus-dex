@@ -32,6 +32,7 @@ best-solana-meme-coin-exchange
 best-solana-meme-coin-swap
 best-solana-meme-coin-trading
 best-stablecoin-bridge
+best-token-scanner
 best-wallets-trading
 birdeye-vs-dexscreener-fees
 birdeye-vs-dexscreener-for-beginners
@@ -118,6 +119,7 @@ contract-risk-checker
 contract-scanner
 copy-whale-trades
 cross-border-defi
+cross-chain-analytics
 cross-chain-app
 cross-chain-bridge
 cross-chain-bridge-aggregator
@@ -152,11 +154,13 @@ cross-chain-trading-platform
 cross-chain-transfer
 cross-chain-wallet
 crypto-aggregator
+crypto-alpha-scanner
 crypto-analytics
 crypto-assets
 crypto-bridge
 crypto-bridge-platform
 crypto-contract-checker
+crypto-discovery-platform
 crypto-due-diligence
 crypto-ecosystem
 crypto-exchange
@@ -175,6 +179,7 @@ crypto-liquidity-app
 crypto-market-scanner
 crypto-marketplace
 crypto-monitoring
+crypto-movers
 crypto-opportunities
 crypto-opportunity-scanner
 crypto-pair-scanner
@@ -182,11 +187,14 @@ crypto-platform
 crypto-project-analysis
 crypto-radar
 crypto-research
+crypto-research-tool
+crypto-risk-analysis
 crypto-risk-checker
 crypto-routing-engine
 crypto-safety-checker
 crypto-scam-checker
 crypto-scanner
+crypto-scanner-tool
 crypto-screener
 crypto-security-analysis
 crypto-sentiment-tracker
@@ -194,11 +202,13 @@ crypto-staking
 crypto-swaps
 crypto-tracker
 crypto-trading
+crypto-trading-signals
 crypto-trend-scanner
 crypto-trends
 crypto-trust-score
 crypto-wallet-analytics
 crypto-wallet-swap
+crypto-watchlist
 crypto-whale-tracker
 crypto-without-id
 crypto-without-sign-up
@@ -216,6 +226,7 @@ defi-platform
 defi-routing
 defi-trading
 dex-aggregator
+dex-analytics
 dexscreener-vs-gmgn-fees
 dexscreener-vs-gmgn-for-beginners
 dexscreener-vs-gmgn-for-memecoins
@@ -227,6 +238,7 @@ dexscreener-vs-gmgn-which-is-better
 digital-asset-exchange
 digital-assets
 discover-meme-coins
+discover-new-crypto
 dogecoin-exchange
 early-crypto-projects
 early-meme-coins
@@ -249,6 +261,7 @@ fastest-usdt-swap
 fastest-xrp-swap
 find-crypto-gems
 find-new-meme-coins
+find-tokens-early
 fresh-token-launches
 future-of-finance
 global-crypto-swap
@@ -306,6 +319,7 @@ lowest-fee-xrp-swap
 market-sentiment-crypto
 market-trends
 meme-coin-alerts
+meme-coin-alpha
 meme-coin-bridge
 meme-coin-discovery
 meme-coin-exchange
@@ -318,6 +332,7 @@ meme-coin-swap-no-kyc
 meme-coin-swaps
 meme-coin-tracker
 meme-coin-trading
+meme-coin-watchlist
 meme-token-exchange
 meme-token-swaps
 meta-stock-token
@@ -363,8 +378,10 @@ nvidia-token-swap
 on-chain-analytics
 on-chain-data
 on-chain-trading
+onchain-alpha
 onchain-analytics
 onchain-scanner
+onchain-trading-signals
 onchain-wallet-tracker
 open-access-crypto-exchange
 open-crypto-exchange
@@ -400,6 +417,8 @@ smart-contract-scanner
 smart-contract-trading
 smart-money-tracker
 smart-money-tracker-solana
+solana-alpha-scanner
+solana-analytics
 solana-blockchain
 solana-bridge
 solana-contract-checker
@@ -412,10 +431,12 @@ solana-defi-platform
 solana-dex
 solana-ecosystem
 solana-exchange
+solana-gainers
 solana-gem-finder
 solana-launch-tracker
 solana-liquidity
 solana-liquidity-pools
+solana-losers
 solana-market-tracker
 solana-meme-coin-aggregator
 solana-meme-coin-dex
@@ -426,6 +447,7 @@ solana-meme-coin-swap
 solana-meme-coin-trading
 solana-meme-coins
 solana-rug-checker
+solana-screener
 solana-swap-platform
 solana-token-exchange
 solana-token-explorer
@@ -438,7 +460,9 @@ solana-token-trading
 solana-tracker
 solana-trading
 solana-trading-platform
+solana-trading-signals
 solana-trading-terminal
+solana-trending-tokens
 solana-wallet-swap
 solana-wallet-tracker
 solana-web3
@@ -1621,15 +1645,19 @@ token-audit
 token-audit-checker
 token-credibility-checker
 token-discovery
+token-discovery-tool
 token-due-diligence
 token-exchange
 token-explorer
 token-finder
 token-fraud-detection
 token-health-checker
+token-holder-analysis
+token-holder-tracker
 token-launch-scanner
 token-launches
 token-legitimacy-checker
+token-liquidity-analysis
 token-liquidity-tracker
 token-market-data
 token-marketplace
@@ -1637,6 +1665,7 @@ token-monitoring
 token-opportunities
 token-radar
 token-research
+token-research-tool
 token-risk-checker
 token-safety-checker
 token-safety-score
@@ -1715,6 +1744,7 @@ usdt-trading
 verify-token-contract
 viral-meme-coins
 viral-meme-tokens
+wallet-activity-tracker
 wallet-based-crypto-exchange
 wallet-based-exchange
 wallet-connect-swap
