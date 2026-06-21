@@ -566,7 +566,7 @@ footer.nx-foot .non-custodial b{color:var(--ink);font-weight:800}
   </div>
 
   <div class="nx-refer-stack">
-    <a class="nx-refer pump-tier" href="https://verixiaapps.com/refer?source=swap">
+    <a class="nx-refer pump-tier" href="https://swap.verixiaapps.com">
       <span class="nx-refer-l">
         <span class="nx-refer-tag">PUMP.FUN TIER</span>
         <b>Earn <em>33%</em> of every pump.fun trade</b>
@@ -953,8 +953,13 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       var xMatch = combined.match(/\b[A-Z]{2,6}x\b/);
       if (xMatch) return xMatch[0];
       var noise = { USA:1,USD:1,DEX:1,CEX:1,API:1,SEO:1,FAQ:1,ETF:1,NFT:1,DAO:1,KYC:1,SPL:1,RPC:1,SDK:1,NEW:1,TOP:1,BEST:1,ALL:1 };
-      var upperMatch = combined.match(/\b[A-Z]{3,6}\b/);
-      if (upperMatch && !noise[upperMatch[0]]) return upperMatch[0];
+      var allMatches = combined.match(/\b[A-Z]{3,6}\b/g) || [];
+      var filtered = [];
+      for (var ii = 0; ii < allMatches.length; ii++) {
+        if (!noise[allMatches[ii]]) filtered.push(allMatches[ii]);
+      }
+      if (filtered.length >= 2) return filtered[1];
+      if (filtered.length === 1) return filtered[0];
       return null;
     }
 
