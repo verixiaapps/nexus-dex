@@ -11,7 +11,6 @@ transfer crypto across chains
 cross chain token exchange
 cross chain crypto exchange
 solana swap
-swap sol to bonk
 swap sol to fartcoin
 swap wif to sol
 swap sol to wif
@@ -44,7 +43,6 @@ swap sol to usdt
 token risk checker
 crypto scam checker
 meme coin scanner
-token launch scanner
 solana launch tracker
 new crypto launches
 fresh token launches

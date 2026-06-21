@@ -1577,6 +1577,7 @@ token explorer
 token finder
 token fraud detection
 token health checker
+token launch scanner
 token launches
 token legitimacy checker
 token market data
