@@ -49,40 +49,10 @@ crypto exchange without kyc
 wallet to wallet swap
 solana dex
 solana trading platform
-cross chain swap
 cross chain bridge
-bridge to solana
-bridge from solana
 solana bridge
-bridge ethereum to solana
-bridge bitcoin to solana
-bridge base to solana
-bridge arbitrum to solana
-bridge bnb to solana
-bridge avalanche to solana
 crypto bridge without kyc
-fast crypto bridge
-cheap crypto bridge
-best crypto bridge
-solana market tracker
-crypto sentiment tracker
-market sentiment crypto
-onchain analytics
-onchain scanner
-crypto opportunity scanner
-crypto trend scanner
-token trend tracker
 meme coin tracker
-solana tracker
-token volume tracker
-token liquidity tracker
-crypto pair scanner
-trending crypto pairs
-best meme coins today
-top solana tokens
-fastest growing meme coins
-highest volume meme coins
-newest solana tokens
 solana trending tokens
 crypto watchlist
 meme coin watchlist
