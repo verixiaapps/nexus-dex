@@ -373,6 +373,22 @@ header.nx-header{
 .nx-eco-ic{font-size:18px}
 .nx-eco-lbl{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;white-space:nowrap;color:var(--ink-2)}
 
+/* REFERRALS CALLOUT — small banner above footer, viral loop hook */
+.nx-refer{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  margin-top:24px;padding:14px 16px;border-radius:16px;
+  background:linear-gradient(135deg,rgba(127,255,212,.20),rgba(160,231,255,.20),rgba(255,143,190,.20));
+  border:1px solid var(--border-hi);
+  text-decoration:none;color:var(--ink);
+  transition:transform .15s,box-shadow .15s;
+}
+.nx-refer:hover{transform:translateY(-1px);box-shadow:0 10px 24px rgba(160,231,255,.20)}
+.nx-refer-l{display:flex;flex-direction:column;gap:2px;min-width:0}
+.nx-refer-l b{font-family:'Instrument Serif',serif;font-style:italic;font-size:20px;line-height:1;color:var(--ink);font-weight:400;letter-spacing:-0.01em}
+.nx-refer-l b em{background:linear-gradient(120deg,#A0E7FF,#FF8FBE);-webkit-background-clip:text;background-clip:text;color:transparent;font-style:italic}
+.nx-refer-l span{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:600;color:var(--ink-2);letter-spacing:0.06em;margin-top:4px}
+.nx-refer-r{flex-shrink:0;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;color:var(--cyan);letter-spacing:0.08em;text-transform:uppercase}
+
 /* AI ARTICLE */
 .ai-article{padding-top:8px}
 .ai-article p{background:var(--glass-strong);backdrop-filter:blur(10px);border:1px solid var(--hairline);border-left:3px solid var(--sky);border-radius:16px;padding:16px 18px;margin-bottom:10px;font-size:14px;line-height:1.6;color:var(--ink-2);position:relative;overflow:hidden}
@@ -517,9 +533,9 @@ footer.nx-foot .non-custodial b{color:var(--ink);font-weight:800}
     </div>
   </section>
 
-  <!-- Bridge link for non-Solana users -->
+  <!-- Bridge link — out from Solana to ETH, Base, Arbitrum, BTC, and more -->
   <a href="https://swap.verixiaapps.com/?tab=bridge" class="nx-bridge-link">
-    Funds on ETH, Base, or Arbitrum? <b>Bridge to Solana</b> <span class="arr">&rarr;</span>
+    <b>Bridge</b> from Solana to ETH, Base, Bitcoin &amp; more <span class="arr">&rarr;</span>
   </a>
 
   <!-- TRUST STRIP -->
@@ -527,12 +543,10 @@ footer.nx-foot .non-custodial b{color:var(--ink);font-weight:800}
     <span>Powered by</span>
     <b>JUPITER</b>
     <span class="sep">&middot;</span>
-    <b>LI.FI</b>
-    <span class="sep">&middot;</span>
     <b>CHAINALYSIS</b>
   </div>
 
-  <!-- ECO STRIP — non-sticky, below the fold -->
+  <!-- ECO STRIP — non-sticky, below the fold. Reflects real product surface. -->
   <div class="nx-eco-wrap">
     <div class="nx-eco-head">
       <span>Explore Verixia</span>
@@ -540,13 +554,24 @@ footer.nx-foot .non-custodial b{color:var(--ink);font-weight:800}
     </div>
     <div class="nx-eco">
       <a class="nx-eco-btn" href="https://swap.verixiaapps.com"><span class="nx-eco-ic">&#8645;</span><span class="nx-eco-lbl">Swap</span></a>
-      <a class="nx-eco-btn" href="https://swap.verixiaapps.com"><span class="nx-eco-ic">&#128640;</span><span class="nx-eco-lbl">Radar</span></a>
-      <a class="nx-eco-btn" href="https://swap.verixiaapps.com"><span class="nx-eco-ic">&#127753;</span><span class="nx-eco-lbl">Bridge</span></a>
+      <a class="nx-eco-btn" href="https://swap.verixiaapps.com"><span class="nx-eco-ic">&#129421;</span><span class="nx-eco-lbl">Ape</span></a>
       <a class="nx-eco-btn" href="https://swap.verixiaapps.com"><span class="nx-eco-ic">&#10024;</span><span class="nx-eco-lbl">Wonderland</span></a>
+      <a class="nx-eco-btn" href="https://swap.verixiaapps.com"><span class="nx-eco-ic">&#128640;</span><span class="nx-eco-lbl">Radar</span></a>
+      <a class="nx-eco-btn" href="https://swap.verixiaapps.com"><span class="nx-eco-ic">&#127753;</span><span class="nx-eco-lbl">Cross-Chain</span></a>
+      <a class="nx-eco-btn" href="https://swap.verixiaapps.com"><span class="nx-eco-ic">&#8383;</span><span class="nx-eco-lbl">SOL &rarr; BTC</span></a>
       <a class="nx-eco-btn" href="https://swap.verixiaapps.com"><span class="nx-eco-ic">&#128200;</span><span class="nx-eco-lbl">Markets</span></a>
       <a class="nx-eco-btn" href="https://swap.verixiaapps.com"><span class="nx-eco-ic">&#127919;</span><span class="nx-eco-lbl">Flipsy</span></a>
     </div>
   </div>
+
+  <!-- REFERRALS — viral loop hook, compounds across 50k pages -->
+  <a class="nx-refer" href="https://swap.verixiaapps.com/referrals/">
+    <span class="nx-refer-l">
+      <b>Earn <em>30%</em> of swap fees</b>
+      <span>FROM EVERYONE YOU REFER &middot; FOREVER</span>
+    </span>
+    <span class="nx-refer-r">Join &rarr;</span>
+  </a>
 
   <!-- AI CONTENT — engine emits paragraphs into [data-ai-content]. -->
   <section class="section">
