@@ -1376,7 +1376,7 @@ export default function Ape({ mainWalletPubkey }) {
     let cancelled = false;
     const load = async () => {
       try {
-        const r = await fetch('/api/dex/recent');
+        const r = await fetch('/api/dex/launches');
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const d = await r.json();
         if (cancelled) return;
