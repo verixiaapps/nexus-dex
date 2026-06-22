@@ -1,33 +1,3 @@
-swap tnsr for wif solana
-swap tnsr on solana
-swap tnsr to act
-swap tnsr to ai16z
-swap tnsr to bonk
-swap tnsr to cloud
-swap tnsr to drift
-swap tnsr to fartcoin
-swap tnsr to goat
-swap tnsr to grass
-swap tnsr to hnt
-swap tnsr to io
-swap tnsr to jitosol
-swap tnsr to jto
-swap tnsr to jup
-swap tnsr to kmno
-swap tnsr to mew
-swap tnsr to mnde
-swap tnsr to msol
-swap tnsr to pengu
-swap tnsr to pnut
-swap tnsr to popcat
-swap tnsr to pyth
-swap tnsr to ray
-swap tnsr to render
-swap tnsr to sol
-swap tnsr to sol solana
-swap tnsr to usdc solana
-swap tnsr to usdt solana
-swap tnsr to w
 swap tnsr to wen
 swap tnsr to wif
 swap tokens
