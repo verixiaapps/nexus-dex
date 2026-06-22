@@ -1332,7 +1332,7 @@ export default function Ape({ mainWalletPubkey }) {
   const [recent, setRecent] = useState([]);
   const [feedError, setFeedError] = useState(null);
   const [now, setNow] = useState(Date.now());
-  const [activeTab, setActiveTab] = useState('feed');           // 'feed' | 'owned'
+  const [activeTab, setActiveTab] = useState('feed');
   const [activeQuickIdx, setActiveQuickIdx] = useState(0);
   const [wildOnly, setWildOnly] = useState(false);
   const [minLiq, setMinLiq] = useState(0);
@@ -1341,6 +1341,11 @@ export default function Ape({ mainWalletPubkey }) {
   const [solPrice, setSolPrice] = useState(0);
   const [balances, setBalances] = useState({});
   const [tokenIndex, setTokenIndex] = useState({});
+
+  // FIX 2: tokenMeta for owned tokens not in the live feed, plus tradeConnection
+  const [tokenMeta, setTokenMeta] = useState({});
+  const tradeConnection = useMemo(() => getTradeConn('confirmed'), []);
+  const metaPendingRef = useRef(new Set());
 
   const [tradeToken, setTradeToken] = useState(null);
   const [tradeMode, setTradeMode] = useState('buy');
@@ -1366,9 +1371,6 @@ export default function Ape({ mainWalletPubkey }) {
     setTimeout(() => setToasts(prev => prev.filter(x => x.id !== id)), t.duration || 6500);
   }, []);
 
-  // Referral attribution
-  // refRegister handles its own errors internally (try/catch + .catch on the
-  // fetch). Don't chain .catch() on the result — it doesn't return a promise.
   useEffect(() => { if (walletStr) refRegister(walletStr); }, [walletStr]);
 
   // Feed
@@ -1391,20 +1393,19 @@ export default function Ape({ mainWalletPubkey }) {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  // Age tick (5s — matches the row memo bucket)
   useEffect(() => { const id = setInterval(() => setNow(Date.now()), 5000); return () => clearInterval(id); }, []);
 
-  // SOL balance + price (diffed)
+  // FIX 3: balRpcRace called with a function (its real signature)
   const refreshSol = useCallback(async () => {
     try {
-      const lamps = await balRpcRace(walletStr);
+      const lamps = await balRpcRace(conn => conn.getBalance(wallet.publicKey, BAL_COMMITMENT));
       setSolBalance(prev => { const ui = Number(lamps) / 1e9; if (prev && Math.abs(prev.uiAmount - ui) < 1e-9) return prev; return { lamports: lamps, uiAmount: ui }; });
     } catch (e) {}
     try {
       const r = await fetch('/api/dex/sol-price');
       if (r.ok) { const d = await r.json(); if (Number.isFinite(d?.price)) setSolPrice(p => Math.abs(p - d.price) < 0.01 ? p : d.price); }
     } catch (e) {}
-  }, [walletStr]);
+  }, [wallet.publicKey]);
   useEffect(() => { refreshSol(); const id = setInterval(refreshSol, POLL_SOL); return () => clearInterval(id); }, [refreshSol]);
 
   // Balances — diffed before set
@@ -1458,19 +1459,60 @@ export default function Ape({ mainWalletPubkey }) {
     } catch (e) {}
   }, [walletStr]);
 
-  const resolveToken = useCallback((mint) => tokenIndex[mint] || { mint, sym: '???', name: 'Unknown', price: 0 }, [tokenIndex]);
+  // FIX 4: fetchTokenMeta + resolveToken that includes owned-token metadata
+  const fetchTokenMeta = useCallback((mint) => {
+    if (!mint || mint === SOL_MINT) return;
+    if (tokenIndex[mint] || tokenMeta[mint] || metaPendingRef.current.has(mint)) return;
+    metaPendingRef.current.add(mint);
+    fetch('/api/dex/token/' + encodeURIComponent(mint))
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => {
+        const t = d && d.token;
+        if (!t) return;
+        setTokenMeta(prev => (prev[mint] ? prev : {
+          ...prev,
+          [mint]: { mint, sym: t.sym || '???', name: t.name || t.sym || 'Unknown', icon: t.icon || null, price: Number(t.price || 0) },
+        }));
+      })
+      .catch(() => {})
+      .finally(() => { metaPendingRef.current.delete(mint); });
+  }, [tokenIndex, tokenMeta]);
 
+  const resolveToken = useCallback(
+    (mint) => tokenIndex[mint] || tokenMeta[mint] || { mint, sym: '???', name: 'Unknown', price: 0, icon: null },
+    [tokenIndex, tokenMeta]
+  );
+
+  // Fetch metadata for owned tokens not in the live feed
+  useEffect(() => {
+    for (const mint of Object.keys(balances)) {
+      if (mint === SOL_MINT) continue;
+      if ((balances[mint].uiAmount || 0) > 0) fetchTokenMeta(mint);
+    }
+  }, [balances, fetchTokenMeta]);
+
+  // FIX 1: executeSwap wrapper with correct arg shape for ape-helpers.executeSwap
   const executeSwap = useCallback(async ({ mode, token, swapParams, tradeLamports, feeLamports, totalLamports, tradeTokensRaw, tradeTokensUi }) => {
     const params = swapParams || (mode === 'buy'
       ? { mode: 'buy', tradeLamports, feeLamports, totalLamports }
-      : { mode: 'sell', tradeTokensRaw, tradeTokensUi, feeLamports: feeLamports || 0n });
-    const result = await apeExecuteSwap({ keypair: wallet.keypair, mainWalletPubkey: mainWalletPubkey || null, token, params });
+      : { mode: 'sell', tradeTokens: tradeTokensRaw, tradeTokensUi, feeLamports: feeLamports != null ? String(feeLamports) : '0' });
+    const result = await apeExecuteSwap({
+      mode: params.mode,
+      swapParams: params,
+      token,
+      keypair: wallet.keypair,
+      userPk: wallet.publicKey,
+      tradeConnection,
+      walletStr,
+      solPrice,
+    });
     try { localStorage.setItem(HAS_TRADED_KEY, '1'); } catch (e) {}
     setShowLure(false);
     setTimeout(() => { refreshSol(); refreshOneToken(token.mint); }, 800);
     return result;
-  }, [wallet.keypair, mainWalletPubkey, refreshSol, refreshOneToken]);
+  }, [wallet.keypair, wallet.publicKey, tradeConnection, walletStr, solPrice, refreshSol, refreshOneToken]);
 
+  // FIX 5: result.sig (ape-helpers returns { confirmed, sig })
   const onApe = useCallback(async (token) => {
     if (busyMints[token.mint]) return;
     setBusyMints(prev => ({ ...prev, [token.mint]: true }));
@@ -1481,8 +1523,8 @@ export default function Ape({ mainWalletPubkey }) {
       pushToast({
         type: 'success', em: '✓',
         body: <>Bought <b>{quickAmount} SOL</b> of <b>${token.sym}</b></>,
-        actions: result?.signature ? [
-          { type: 'link', href: 'https://solscan.io/tx/' + result.signature, label: 'TX' },
+        actions: result?.sig ? [
+          { type: 'link', href: 'https://solscan.io/tx/' + result.sig, label: 'TX' },
           { type: 'tweet', text: 'Just aped ' + quickAmount + ' SOL into $' + token.sym + ' on Nexus 🚀\n\n', url: shareUrlPath(walletStr), label: 'Share' },
         ] : [],
       });
@@ -1492,6 +1534,8 @@ export default function Ape({ mainWalletPubkey }) {
 
   const onSell = useCallback((token) => { setTradeToken(token); setTradeMode('sell'); }, []);
   const onRowClick = useCallback((token) => { setTradeToken(token); setTradeMode('buy'); }, []);
+
+  // FIX 6: result.sig
   const onTradeConfirm = useCallback(async ({ mode, swapParams, token }) => {
     const result = await executeSwap({ mode, token, swapParams });
     setConfettiAt(Date.now());
@@ -1499,8 +1543,8 @@ export default function Ape({ mainWalletPubkey }) {
     pushToast({
       type: 'success', em: '✓',
       body: <>{mode === 'buy' ? 'Bought' : 'Sold'} <b>${token.sym}</b></>,
-      actions: result?.signature ? [
-        { type: 'link', href: 'https://solscan.io/tx/' + result.signature, label: 'TX' },
+      actions: result?.sig ? [
+        { type: 'link', href: 'https://solscan.io/tx/' + result.sig, label: 'TX' },
         { type: 'tweet', text: (mode === 'buy' ? 'Just aped into $' : 'Just sold $') + token.sym + ' on Nexus\n\n', url: shareUrlPath(walletStr), label: 'Share' },
       ] : [],
     });
@@ -1525,19 +1569,16 @@ export default function Ape({ mainWalletPubkey }) {
     finally { setWithdrawBusy(false); }
   }, [wallet, refreshSol, pushToast]);
 
-  // Auto-trade state machine
   const auto = useAutoTrade({
     recentTokens: recent, solBalance, solPrice, balances, executeSwap, pushToast,
   });
 
-  // Filter feed
   const filtered = useMemo(() => {
     let list = recent;
     if (wildOnly) list = list.filter(t => riskRead(t).tier === 'high');
     if (minLiq > 0) list = list.filter(t => (t.liquidity || 0) >= minLiq);
     if (activeTab === 'owned') {
       list = list.filter(t => balances[t.mint] && balances[t.mint].uiAmount > 0);
-      // Also surface tokens you own that aren't currently in the feed
       const inFeed = new Set(list.map(t => t.mint));
       for (const mint of Object.keys(balances)) {
         if (mint === SOL_MINT) continue;
@@ -1556,7 +1597,6 @@ export default function Ape({ mainWalletPubkey }) {
       .slice(0, 6);
   }, [recent]);
 
-  // Fresh-row flash detection
   useEffect(() => {
     if (recent.length === 0) return;
     const first = recent[0];
@@ -1571,7 +1611,6 @@ export default function Ape({ mainWalletPubkey }) {
 
   return (
     <div className="ap-root">
-      {/* NAV */}
       <div className="ap-app">
         <nav className="ap-nav">
           <div className="ap-brand" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
@@ -1589,7 +1628,6 @@ export default function Ape({ mainWalletPubkey }) {
           </button>
         </nav>
 
-        {/* QUICK-AMOUNT BAR */}
         <div className="ap-qbar">
           <span className="ap-qlabel"><span className="b">⚡</span>Quick buy</span>
           {buyPresets.map((v, i) => (
@@ -1602,19 +1640,18 @@ export default function Ape({ mainWalletPubkey }) {
         </div>
 
         <div className="ap-page">
-          {/* HERO */}
           <div className="ap-hero">
             <h1>Fresh launches, <span className="it">caught at first light.</span></h1>
             <div className="ap-hero-cta">
               <span className="ap-pill-no-connect">● Burner ready · no signup</span>
+              {/* FIX 7: Updated referral banner copy */}
               <button className="ap-hero-ref" onClick={() => { setStatsTab('referrals'); setShowStats(true); }}>
-                Pass it <span className="it">forward</span>
-                <span className="pct">50% FEE</span>
+                Invite friends, <span className="it">earn 50% of their fees</span>
+                <span className="pct">FOREVER</span>
               </button>
             </div>
           </div>
 
-          {/* LURE — first-time funding prompt */}
           {showLure && burnerHasNoSol ? (
             <div className="ap-lure">
               <div className="ap-lure-text">
@@ -1626,10 +1663,8 @@ export default function Ape({ mainWalletPubkey }) {
             </div>
           ) : null}
 
-          {/* OPEN POSITIONS STRIP */}
           <OpenPositionsStrip walletStr={walletStr} solPrice={solPrice} onOpenStats={() => { setStatsTab('yourtrades'); setShowStats(true); }} />
 
-          {/* TRENDING RAIL */}
           {trending.length > 0 ? (
             <div className="ap-trending">
               <div className="ap-trending-head">
@@ -1654,7 +1689,6 @@ export default function Ape({ mainWalletPubkey }) {
             </div>
           ) : null}
 
-          {/* FEED */}
           <div className="ap-list-frame">
             <div className="ap-list-head">
               <div className="ap-list-title">
@@ -1713,7 +1747,6 @@ export default function Ape({ mainWalletPubkey }) {
         </div>
       </div>
 
-      {/* MODALS */}
       {tradeToken && (
         <TradeSheet
           token={tradeToken}
@@ -1733,7 +1766,6 @@ export default function Ape({ mainWalletPubkey }) {
       <StatsPanel open={showStats} onClose={() => setShowStats(false)} wallet={wallet} mainWalletPubkey={mainWalletPubkey} solPrice={solPrice} initialTab={statsTab} />
       <AutoPanel open={showAuto} onClose={() => setShowAuto(false)} auto={auto} solBalance={solBalance} solPrice={solPrice} />
 
-      {/* TOASTS */}
       <div className="ap-toasts">
         {toasts.map(t => (
           <div className={'ap-toast ' + (t.type || 'info')} key={t.id}>
@@ -1750,7 +1782,6 @@ export default function Ape({ mainWalletPubkey }) {
         ))}
       </div>
 
-      {/* CONFETTI */}
       {confettiAt > 0 && Date.now() - confettiAt < 2000 ? (
         <div className="ap-confetti" key={confettiAt}>
           {Array.from({ length: 28 }).map((_, i) => {
@@ -1765,10 +1796,10 @@ export default function Ape({ mainWalletPubkey }) {
     </div>
   );
 }
+
 /* ============================================================
    STATS PANEL — Referrals, Your trades, Standings
    ============================================================ */
-
 function ReferralsTab({ walletStr, stats, statsLoading, statsError }) {
   const link = inviteUrl(walletStr);
   const [copied, setCopied] = useState(false);
@@ -2037,7 +2068,6 @@ function StatsPanel({ open, onClose, wallet, mainWalletPubkey, solPrice, initial
 /* ============================================================
    AUTO-TRADE
    ============================================================ */
-
 const BALANCED_SETTINGS = {
   perTradeSol: 0.2, takeProfitPct: 150, stopLossPct: 30,
   minAgeMin: 3, maxAgeMin: 30, minLiqUsd: 10000, minHolders: 30,
@@ -2114,7 +2144,7 @@ function useAutoTrade(deps) {
     }
   }, [dailyPnlSol, paused, pushLog, pushToast]);
 
-  // Discovery loop
+  // Discovery loop — buy via executeSwap (which now forwards correctly to ape-helpers)
   useEffect(() => {
     if (!enabled || paused) return;
     if (!Array.isArray(recentTokens) || recentTokens.length === 0) return;
@@ -2144,14 +2174,17 @@ function useAutoTrade(deps) {
 
       (async () => {
         try {
-          const result = await executeSwap({
-            mode: 'buy', token: tk, tradeLamports: BigInt(Math.round(effective.perTradeSol * 1e9)),
-            feeLamports: BigInt(Math.round(effective.perTradeSol * 0.03 * 1e9)),
-            totalLamports: BigInt(Math.round(effective.perTradeSol * 1.03 * 1e9)),
-          });
-          if (!result || !result.signature) throw new Error('No signature');
+          // FIX 5/8: use buildBuyParams and read result.sig
+          const buyParams = buildBuyParams(effective.perTradeSol);
+          if (!buyParams) throw new Error('Bad buy size');
+          const result = await executeSwap({ mode: 'buy', token: tk, swapParams: buyParams });
+          if (!result || !result.sig) throw new Error('No signature');
           const entryPriceUsd = tk.price;
-          setPositions(prev => [...prev, { mint: tk.mint, sym: tk.sym, name: tk.name, icon: tk.icon, ts: Date.now(), entryPriceUsd, entrySol: effective.perTradeSol, currentPriceUsd: entryPriceUsd, signature: result.signature, exiting: false }]);
+          setPositions(prev => [...prev, {
+            mint: tk.mint, sym: tk.sym, name: tk.name, icon: tk.icon, ts: Date.now(),
+            entryPriceUsd, entrySol: effective.perTradeSol, currentPriceUsd: entryPriceUsd,
+            signature: result.sig, exiting: false,
+          }]);
           tradeStampsRef.current.push(Date.now());
           setTradesToday(n => n + 1);
           pushLog('buy', 'Bought $' + tk.sym + ' · ' + effective.perTradeSol.toFixed(2) + ' SOL');
@@ -2197,6 +2230,7 @@ function useAutoTrade(deps) {
               continue;
             }
             const tk = { mint: p.mint, sym: p.sym, name: p.name, icon: p.icon, price: px };
+            // FIX 6: use tradeTokensRaw which the wrapper maps to tradeTokens for ape-helpers
             await executeSwap({ mode: 'sell', token: tk, tradeTokensRaw: BigInt(owned.amount || '0'), tradeTokensUi: owned.uiAmount, feeLamports: 0n });
             const exitSol = (owned.uiAmount * px) / (solPrice || 150);
             const pnlSol = exitSol - (p.entrySol || 0);
@@ -2389,4 +2423,3 @@ function AutoPanel({ open, onClose, auto, solBalance, solPrice }) {
     </div>
   );
 }
- 
