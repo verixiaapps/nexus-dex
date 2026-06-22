@@ -1,5 +1,5 @@
 require('dotenv').config();
-  
+
 const express   = require('express');
 const cors      = require('cors');
 const path      = require('path');
@@ -1374,6 +1374,36 @@ function _cfErrMsg(e) {
   return m.length > 160 ? m.slice(0, 160) + '…' : m;
 }
 
+/* ─── Chainflip slippage policy ─────────────────────────────────────
+ * Goal: keep txs landing. Honor Chainflip's recommendation but add
+ * headroom so we don't refund on small price drift.
+ *
+ *   effective = clamp( max(client, chainflipRec × BUFFER, FLOOR), FLOOR, CAP )
+ *
+ *   - FLOOR (3%) protects against too-tight slippage on calm pools.
+ *   - BUFFER (1.5×) gives us headroom over Chainflip's recommendation.
+ *   - CAP (15%)  protects users from absurd slippage even if the SDK or
+ *                client asks for it.
+ *
+ * Examples:
+ *   calm pool, rec 1%  → 3%  (floor)
+ *   normal,    rec 3%  → 4.5% (rec × 1.5)
+ *   volatile,  rec 8%  → 12%  (rec × 1.5)
+ *   wild,      rec 12% → 15%  (cap)
+ * ───────────────────────────────────────────────────────────────── */
+const CF_SLIP_FLOOR  = 3;
+const CF_SLIP_CAP    = 15;
+const CF_SLIP_BUFFER = 1.5;
+
+function resolveCfSlippage(clientSlip, recommended, { floor = CF_SLIP_FLOOR, cap = CF_SLIP_CAP } = {}) {
+  const client = Number.isFinite(Number(clientSlip))  ? Number(clientSlip)  : null;
+  const rec    = Number.isFinite(Number(recommended)) ? Number(recommended) : null;
+  const bumped = rec != null ? rec * CF_SLIP_BUFFER : null;
+  const candidates = [client, bumped, floor].filter(v => Number.isFinite(v) && v > 0);
+  const picked = candidates.length ? Math.max(...candidates) : floor;
+  return Math.min(cap, Math.max(floor, picked));
+}
+
 app.get('/api/chainflip/quote', async (req, res) => {
   try {
     const amount = String(req.query.amount || '');
@@ -1398,11 +1428,15 @@ app.get('/api/chainflip/quote', async (req, res) => {
 
 app.post('/api/chainflip/channel', async (req, res) => {
   try {
-    const { quote, destAddress, refundAddress } = req.body || {};
+    const { quote, destAddress, refundAddress, slippagePct } = req.body || {};
     if (!quote || typeof quote !== 'object')                 return res.status(400).json({ error: 'quote required' });
     if (!destAddress   || typeof destAddress   !== 'string') return res.status(400).json({ error: 'destAddress required'   });
     if (!refundAddress || typeof refundAddress !== 'string') return res.status(400).json({ error: 'refundAddress required' });
     if (quote.type !== 'REGULAR')                            return res.status(400).json({ error: 'REGULAR quote required' });
+
+    const slip = resolveCfSlippage(slippagePct, quote.recommendedSlippageTolerancePercent);
+    const liveRec  = quote.recommendedLivePriceSlippageTolerancePercent;
+    const liveSlip = (liveRec != null) ? resolveCfSlippage(undefined, liveRec) : undefined;
 
     const channel = await chainflipSdk.requestDepositAddressV2({
       quote,
@@ -1410,8 +1444,8 @@ app.post('/api/chainflip/channel', async (req, res) => {
       fillOrKillParams: {
         refundAddress,
         retryDurationBlocks: 150,
-        slippageTolerancePercent: Number(quote.recommendedSlippageTolerancePercent ?? 3),
-        livePriceSlippageTolerancePercent: quote.recommendedLivePriceSlippageTolerancePercent,
+        slippageTolerancePercent: slip,
+        livePriceSlippageTolerancePercent: liveSlip,
       },
     });
 
@@ -1423,6 +1457,8 @@ app.post('/api/chainflip/channel', async (req, res) => {
         channelOpeningFee:       String(channel.channelOpeningFee),
         estimatedExpiryTime:     channel.estimatedDepositChannelExpiryTime ?? null,
         brokerCommissionBps:     channel.brokerCommissionBps,
+        slippagePctUsed:         slip,
+        livePriceSlippagePctUsed: liveSlip ?? null,
       },
     });
   } catch (e) {
@@ -1547,11 +1583,15 @@ app.get('/api/cf/quote', async (req, res) => {
 
 app.post('/api/cf/channel', async (req, res) => {
   try {
-    const { quote, destAddress, refundAddress } = req.body || {};
+    const { quote, destAddress, refundAddress, slippagePct } = req.body || {};
     if (!quote || typeof quote !== 'object')                 return res.status(400).json({ error: 'quote required' });
     if (!destAddress   || typeof destAddress   !== 'string') return res.status(400).json({ error: 'destAddress required'   });
     if (!refundAddress || typeof refundAddress !== 'string') return res.status(400).json({ error: 'refundAddress required' });
     if (quote.type !== 'REGULAR')                            return res.status(400).json({ error: 'REGULAR quote required' });
+
+    const slip = resolveCfSlippage(slippagePct, quote.recommendedSlippageTolerancePercent);
+    const liveRec  = quote.recommendedLivePriceSlippageTolerancePercent;
+    const liveSlip = (liveRec != null) ? resolveCfSlippage(undefined, liveRec) : undefined;
 
     const channel = await _cfMulti.requestDepositAddressV2({
       quote,
@@ -1559,23 +1599,25 @@ app.post('/api/cf/channel', async (req, res) => {
       fillOrKillParams: {
         refundAddress,
         retryDurationBlocks: 150,
-        slippageTolerancePercent: Number(quote.recommendedSlippageTolerancePercent ?? 1),
-        livePriceSlippageTolerancePercent: quote.recommendedLivePriceSlippageTolerancePercent,
+        slippageTolerancePercent: slip,
+        livePriceSlippageTolerancePercent: liveSlip,
       },
     });
 
     return res.json({
       channel: {
-        depositChannelId:    channel.depositChannelId,
-        depositAddress:      channel.depositAddress,
-        srcChain:            channel.srcChain,
-        srcAsset:            channel.srcAsset,
-        destChain:           channel.destChain,
-        destAsset:           channel.destAsset,
-        srcChainExpiryBlock: String(channel.depositChannelExpiryBlock),
-        channelOpeningFee:   String(channel.channelOpeningFee),
-        estimatedExpiryTime: channel.estimatedDepositChannelExpiryTime ?? null,
-        brokerCommissionBps: channel.brokerCommissionBps,
+        depositChannelId:        channel.depositChannelId,
+        depositAddress:          channel.depositAddress,
+        srcChain:                channel.srcChain,
+        srcAsset:                channel.srcAsset,
+        destChain:               channel.destChain,
+        destAsset:               channel.destAsset,
+        srcChainExpiryBlock:     String(channel.depositChannelExpiryBlock),
+        channelOpeningFee:       String(channel.channelOpeningFee),
+        estimatedExpiryTime:     channel.estimatedDepositChannelExpiryTime ?? null,
+        brokerCommissionBps:     channel.brokerCommissionBps,
+        slippagePctUsed:         slip,
+        livePriceSlippagePctUsed: liveSlip ?? null,
       },
     });
   } catch (e) {
