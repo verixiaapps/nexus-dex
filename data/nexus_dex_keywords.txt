@@ -1,33 +1,3 @@
-swap wen to usdc solana
-swap wen to usdt solana
-swap wen to w
-swap wen to wif
-swap when solana network is busy
-swap wif for act solana
-swap wif for ai16z solana
-swap wif for bonk solana
-swap wif for cloud solana
-swap wif for drift solana
-swap wif for fartcoin solana
-swap wif for goat solana
-swap wif for grass solana
-swap wif for hnt solana
-swap wif for io solana
-swap wif for jitosol solana
-swap wif for jto solana
-swap wif for jup solana
-swap wif for kmno solana
-swap wif for mew solana
-swap wif for mnde solana
-swap wif for msol solana
-swap wif for pengu solana
-swap wif for pnut solana
-swap wif for popcat solana
-swap wif for pyth solana
-swap wif for ray solana
-swap wif for render solana
-swap wif for sol solana
-swap wif for tnsr solana
 swap wif for w solana
 swap wif for wen solana
 swap wif on solana
