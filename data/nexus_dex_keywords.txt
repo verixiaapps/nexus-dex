@@ -1,36 +1,6 @@
 crypto exchange
 crypto liquidity
 decentralized exchange
-solana meme coin scanner
-solana meme coin swap
-solana meme coin trading
-solana meme coins
-solana rug checker
-solana screener
-solana swap platform
-solana token exchange
-solana token explorer
-solana token radar
-solana token risk
-solana token scanner
-solana token swaps
-solana token tracker
-solana token trading
-solana tracker
-solana trading
-solana trading platform
-solana trading signals
-solana trading terminal
-solana trending tokens
-solana wallet swap
-solana wallet tracker
-solana web3
-spl token exchange
-spl token swap
-stablecoin liquidity bridge
-swap across blockchains
-swap aggregator
-swap ai16z to sol
 swap any token to any token
 swap arb to sol
 swap avax to sol
