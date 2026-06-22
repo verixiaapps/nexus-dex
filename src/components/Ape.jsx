@@ -1367,7 +1367,9 @@ export default function Ape({ mainWalletPubkey }) {
   }, []);
 
   // Referral attribution
-  useEffect(() => { if (walletStr) refRegister(walletStr).catch(() => {}); }, [walletStr]);
+  // refRegister handles its own errors internally (try/catch + .catch on the
+  // fetch). Don't chain .catch() on the result — it doesn't return a promise.
+  useEffect(() => { if (walletStr) refRegister(walletStr); }, [walletStr]);
 
   // Feed
   useEffect(() => {
@@ -2387,4 +2389,3 @@ function AutoPanel({ open, onClose, auto, solBalance, solPrice }) {
     </div>
   );
 }
- 
