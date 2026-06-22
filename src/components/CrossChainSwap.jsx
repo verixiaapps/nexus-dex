@@ -1,7 +1,7 @@
-/** 
+/**
  * NEXUS DEX — CrossChainSwap.jsx
- * Chainflip native, two-tx atomic, fee in SOL.
- *   
+ * Chainflip native, single-tx (fee + bridge), fee in SOL.
+ *
  * SOLANA-SIDE
  *   • RPC: same-origin server proxy at /api/solana-rpc — the Alchemy key
  *     stays server-side and never reaches the browser bundle.
@@ -13,13 +13,22 @@
  * requires a registered on-chain broker (1000 FLIP bond + tx signing).
  * That cannot be done purely client-side without leaking broker keys.
  *
- * Flow (unchanged):
+ * Flow:
  *   1. /api/cf/quote    → REGULAR quote (egressAmount in dest atomic units)
  *   2. /api/cf/channel  → server opens deposit channel via SDK
- *   3. Two txs, signed atomically:
- *        Tx-A: 3% input-USD platform fee in SOL → FEE_WALLET
- *        Tx-B: bridge transfer to channel.depositAddress
- *   4. Send Tx-A, await confirm, then Tx-B. Status polls on depositChannelId.
+ *                         (slippage hardcoded to 3%)
+ *   3. SINGLE combined transaction:
+ *        ix-1: 3% input-USD platform fee in SOL → FEE_WALLET
+ *        ix-2: bridge transfer to channel.depositAddress
+ *      → simulate → user signs that exact tx → send → poll status by sig.
+ *   4. Status polls on depositChannelId.
+ *
+ * Why one tx?
+ *   The old two-tx flow signed both txs against ONE blockhash, then awaited
+ *   the fee tx confirmation before sending the bridge tx. By the time the
+ *   fee confirmed (10–30s), the shared blockhash had often expired, giving
+ *   "transaction expired" on the bridge. One tx = one blockhash = no race,
+ *   and the fee can't be collected without the bridge also executing.
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -65,6 +74,31 @@ async function sendRawTx(rawTx, sendOpts) {
     console.warn('[cc-rpc] sendRawTransaction failed:', e?.message);
     throw e;
   }
+}
+
+// Poll signature status — decoupled from blockhash validity window.
+// Returns { ok: true } on confirmation, throws on error or hard timeout.
+async function pollSignatureStatus(signature, { timeoutMs = 90_000, intervalMs = 1_500 } = {}) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const res = await rpcCall(
+        'getSignatureStatuses',
+        c => c.getSignatureStatuses([signature], { searchTransactionHistory: true }),
+      );
+      const s = res?.value?.[0];
+      if (s) {
+        if (s.err) throw new Error('Transaction failed on-chain: ' + JSON.stringify(s.err));
+        const cs = s.confirmationStatus;
+        if (cs === 'confirmed' || cs === 'finalized') return { ok: true };
+      }
+    } catch (e) {
+      // Transient RPC errors — keep polling until timeout.
+      if (String(e?.message || '').includes('Transaction failed on-chain')) throw e;
+    }
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+  throw new Error('Confirmation timed out — check Solscan for tx ' + signature);
 }
 
 // =====================================================================
@@ -279,6 +313,9 @@ const FEE_BPS          = 300;            // 3% of input USD value, paid in SOL
 const MIN_FEE_LAMPORTS = 1_000_000;      // floor: 0.001 SOL
 const SOL_RESERVE      = 1_500_000;      // ~0.0015 SOL kept for tx fees
 const QUOTE_DEBOUNCE   = 500;
+const SLIPPAGE_PCT     = 3;              // hardcoded slippage tolerance (%)
+const PRIORITY_MICROLAMPORTS = 100_000;  // doubled from 50k
+const COMPUTE_UNIT_LIMIT     = 200_000;
 
 const SOL_NATIVE_MINT  = 'So11111111111111111111111111111111111111112';
 const USDC_SOL_MINT    = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
@@ -472,6 +509,7 @@ const deriveStatusLabel = (status) => {
 
 const friendlyError = err => {
   const m = String(err?.message || err || '').toLowerCase();
+  if (m.includes('simulation')) return 'Pre-flight simulation failed: ' + (err?.message || 'unknown reason');
   if (m.includes('rpc') && (m.includes('failed') || m.includes('unreachable'))) return 'Solana RPC unreachable. Try again in a moment.';
   if (m.includes('below') && m.includes('minimum'))     return 'Amount below Chainflip minimum for this asset.';
   if (m.includes('above') && m.includes('maximum'))     return 'Amount above Chainflip maximum for this asset.';
@@ -504,11 +542,11 @@ async function cfQuote({ src, dest, atomicAmount, signal }) {
   return j.quote;
 }
 
-async function cfChannel({ quote, destAddress, refundAddress }) {
+async function cfChannel({ quote, destAddress, refundAddress, slippagePct }) {
   const r = await fetch('/api/cf/channel', {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ quote, destAddress, refundAddress }),
+    body:    JSON.stringify({ quote, destAddress, refundAddress, slippagePct }),
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j?.error || `Channel open failed (${r.status})`);
@@ -899,7 +937,7 @@ export default function CrossChainSwap({ onConnectWallet }) {
         egressUi,
         egressDisplay: fmtTok(egressUi),
         durationSec:  Number(q.estimatedDurationSeconds) || null,
-        slippagePct:  Number(q.recommendedSlippageTolerancePercent ?? 1),
+        slippagePct:  SLIPPAGE_PCT, // hardcoded — UI + channel both use this
         atomicAmount,
         inputUsd,
         feeLamports,
@@ -980,7 +1018,7 @@ export default function CrossChainSwap({ onConnectWallet }) {
     if (addrError) { setAddrErr(addrError); setDestAddrTouched(true); return; }
     if (!quote)    { setSwapErr('No route. Wait for routing.'); return; }
     if (!signAllTransactions) {
-      setSwapErr('Wallet does not support signing multiple transactions. Use Phantom or Solflare.');
+      setSwapErr('Wallet does not support signing transactions. Use Phantom or Solflare.');
       return;
     }
     if (solShortfall && solShortfall > 0) {
@@ -990,7 +1028,7 @@ export default function CrossChainSwap({ onConnectWallet }) {
 
     setStep(1);
     setSwapErr('');
-    setStatusMsg('Refreshing route…');
+    setStatusMsg('Opening Chainflip deposit channel…');
     setTxSig(null);
     setChannelId(null);
     setBridgeStatus(null);
@@ -998,46 +1036,28 @@ export default function CrossChainSwap({ onConnectWallet }) {
     setBridgeMeta(null);
 
     try {
-      // Fresh quote — stale quotes can drift past slippage tolerance.
-      const freshQuote = await cfQuote({
-        src:          fromToken,
-        dest:         toToken,
-        atomicAmount: quote.atomicAmount,
-      });
-
-      setStatusMsg('Opening Chainflip deposit channel…');
+      // Reuse the existing quote (no refetch, no requote). Pass hardcoded 3%
+      // slippage to the channel — server can also read it off the quote if it
+      // needs it there.
+      const quoteForChannel = {
+        ...quote.cf,
+        recommendedSlippageTolerancePercent: SLIPPAGE_PCT,
+      };
       const channel = await cfChannel({
-        quote:         freshQuote,
+        quote:         quoteForChannel,
         destAddress:   destAddr.trim(),
         refundAddress: pubkey.toString(),
+        slippagePct:   SLIPPAGE_PCT,
       });
       const depositAddress = new PublicKey(channel.depositAddress);
 
-      setStatusMsg('Building transactions…');
+      setStatusMsg('Building transaction…');
       const { blockhash, lastValidBlockHeight } = await rpcCall(
         'getLatestBlockhash',
-        c => c.getLatestBlockhash('confirmed'),
+        c => c.getLatestBlockhash('finalized'),
       );
 
-      const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 });
-      const priorityIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 });
-
-      // Tx A: platform fee in SOL → FEE_WALLET.
-      const feeMsg = new TransactionMessage({
-        payerKey:        pubkey,
-        recentBlockhash: blockhash,
-        instructions: [
-          cuLimitIx, priorityIx,
-          SystemProgram.transfer({
-            fromPubkey: pubkey,
-            toPubkey:   FEE_WALLET,
-            lamports:   Number(quote.feeLamports),
-          }),
-        ],
-      }).compileToV0Message();
-      const feeTx = new VersionedTransaction(feeMsg);
-
-      // Tx B: bridge transfer to Chainflip deposit address.
+      // ── Build the bridge instruction ────────────────────────────────────
       let bridgeIx;
       if (fromToken.isNative) {
         bridgeIx = SystemProgram.transfer({
@@ -1083,38 +1103,56 @@ export default function CrossChainSwap({ onConnectWallet }) {
           TOKEN_PROGRAM_ID,
         );
       }
-      const bridgeMsg = new TransactionMessage({
+
+      // ── Build ONE transaction with fee + bridge ─────────────────────────
+      // fee first so the user has paid for service before the bridge IX
+      // touches Chainflip's deposit account; both succeed-or-fail atomically.
+      const cuLimitIx  = ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_UNIT_LIMIT });
+      const priorityIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_MICROLAMPORTS });
+      const feeIx = SystemProgram.transfer({
+        fromPubkey: pubkey,
+        toPubkey:   FEE_WALLET,
+        lamports:   Number(quote.feeLamports),
+      });
+
+      const msg = new TransactionMessage({
         payerKey:        pubkey,
         recentBlockhash: blockhash,
-        instructions: [cuLimitIx, priorityIx, bridgeIx],
+        instructions:    [cuLimitIx, priorityIx, feeIx, bridgeIx],
       }).compileToV0Message();
-      const bridgeTx = new VersionedTransaction(bridgeMsg);
+      const tx = new VersionedTransaction(msg);
 
+      // ── Simulate the EXACT transaction we're about to sign ──────────────
+      // Don't replace blockhash, don't rebuild — same bytes, sim-then-sign.
+      setStatusMsg('Simulating transaction…');
+      const sim = await rpcCall('simulateTransaction', c => c.simulateTransaction(tx, {
+        commitment:            'confirmed',
+        sigVerify:             false,
+        replaceRecentBlockhash: false,
+      }));
+      if (sim?.value?.err) {
+        const logs = (sim.value.logs || []).slice(-6).join(' | ');
+        throw new Error('Simulation failed: ' + JSON.stringify(sim.value.err) + (logs ? ' — ' + logs : ''));
+      }
+
+      // ── Sign the SAME tx that simulated cleanly ─────────────────────────
       setStep(2);
       setStatusMsg('Confirm in your wallet…');
-      const [signedFee, signedBridge] = await signAllTransactions([feeTx, bridgeTx]);
+      const [signedTx] = await signAllTransactions([tx]);
 
+      // ── Send and poll status (decoupled from blockhash validity) ────────
       setStep(3);
-      setStatusMsg('Sending fee transaction…');
-      const feeSig = await sendRawTx(signedFee.serialize(), {
-        skipPreflight: false, maxRetries: 3,
+      setStatusMsg('Sending transaction…');
+      const sig = await sendRawTx(signedTx.serialize(), {
+        skipPreflight: false,
+        maxRetries:    5,
       });
+      setTxSig(sig);
 
-      setStatusMsg('Confirming fee…');
-      const feeConfirm = await rpcCall(
-        'confirmTransaction(fee)',
-        c => c.confirmTransaction({ signature: feeSig, blockhash, lastValidBlockHeight }, 'confirmed'),
-      );
-      if (feeConfirm?.value?.err) throw new Error('Fee transaction failed — bridge not sent.');
+      setStatusMsg('Confirming on Solana…');
+      await pollSignatureStatus(sig, { timeoutMs: 90_000, intervalMs: 1_500 });
 
-      setStatusMsg('Sending bridge transaction…');
-      const bridgeSig = await sendRawTx(signedBridge.serialize(), {
-        skipPreflight: false, maxRetries: 3,
-      });
-      setTxSig(bridgeSig);
-
-      // Don't wait for full bridge confirmation — Chainflip status polling
-      // takes over from here.
+      // Hand off to Chainflip status polling.
       setChannelId(channel.depositChannelId);
       setBridgeMeta({
         chain:     toToken.chain,
@@ -1122,7 +1160,7 @@ export default function CrossChainSwap({ onConnectWallet }) {
         color:     toToken.color,
         symbol:    toToken.symbol,
       });
-      setBridgeStatus({ label: 'Bridge tx submitted · Chainflip observing…', done: false, failed: false });
+      setBridgeStatus({ label: 'Bridge tx confirmed · Chainflip observing…', done: false, failed: false });
 
       setStep(4);
       setStatusMsg('');
@@ -1164,7 +1202,7 @@ export default function CrossChainSwap({ onConnectWallet }) {
 
   const btnLabel = () => {
     if (!wcon) return 'Connect Wallet';
-    if (step === 1)   return 'Refreshing…';
+    if (step === 1)   return 'Preparing…';
     if (step === 2)   return 'Sign in Wallet…';
     if (step === 3)   return 'Bridging…';
     if (isSuccess)    return 'Submitted ✓';
@@ -1295,7 +1333,7 @@ export default function CrossChainSwap({ onConnectWallet }) {
               <div className="cc-route-meta">
                 <span className="cc-route-via">via <span className="cc-route-tag">Chainflip</span></span>
                 <span>
-                  <b>{quote.slippagePct.toFixed(2)}%</b> slip
+                  <b>{SLIPPAGE_PCT.toFixed(2)}%</b> slip
                   {quote.durationSec ? <> · <b>~{Math.max(1, Math.ceil(quote.durationSec / 60))} min</b></> : null}
                 </span>
               </div>
