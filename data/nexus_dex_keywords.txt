@@ -2,36 +2,6 @@ crypto exchange
 crypto liquidity
 decentralized exchange
 swap crypto
-swap ray to popcat
-swap ray to pyth
-swap ray to render
-swap ray to sol
-swap ray to sol solana
-swap ray to tnsr
-swap ray to usdc solana
-swap ray to usdt solana
-swap ray to w
-swap ray to wen
-swap ray to wif
-swap render for act solana
-swap render for ai16z solana
-swap render for bonk solana
-swap render for cloud solana
-swap render for drift solana
-swap render for fartcoin solana
-swap render for goat solana
-swap render for grass solana
-swap render for hnt solana
-swap render for io solana
-swap render for jitosol solana
-swap render for jto solana
-swap render for jup solana
-swap render for kmno solana
-swap render for mew solana
-swap render for mnde solana
-swap render for msol solana
-swap render for pengu solana
-swap render for pnut solana
 swap render for popcat solana
 swap render for pyth solana
 swap render for ray solana
