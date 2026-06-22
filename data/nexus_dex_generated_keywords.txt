@@ -1888,3 +1888,33 @@ why did my sol swap fail
 why did my swap give me less than quoted
 why did my wen swap fail
 why did my wif swap fail
+why do solana swaps fail at high volume
+why does my solana swap need so much sol
+why is act price impact so high
+why is act swap slow
+why is ai16z price impact so high
+why is ai16z swap slow
+why is bonk price impact so high
+why is bonk swap slow
+why is fartcoin price impact so high
+why is fartcoin swap slow
+why is goat price impact so high
+why is goat swap slow
+why is jitosol price impact so high
+why is jitosol swap slow
+why is jto price impact so high
+why is jto swap slow
+why is jup price impact so high
+why is jup swap slow
+why is mew price impact so high
+why is mew swap slow
+why is msol price impact so high
+why is msol swap slow
+why is my act swap stuck
+why is my ai16z swap stuck
+why is my bonk swap stuck
+why is my fartcoin swap stuck
+why is my goat swap stuck
+why is my jitosol swap stuck
+why is my jto swap stuck
+why is my jup swap stuck
