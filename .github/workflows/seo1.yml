@@ -1,178 +1,200 @@
 name: React #130 Render Error Diagnostic
 
 on:
- workflow_dispatch:
+  workflow_dispatch:
 
 jobs:
- diagnose:
-   runs-on: ubuntu-latest
-   timeout-minutes: 20
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
 
-   steps:
-     - name: Checkout
-       uses: actions/checkout@v4
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-     - name: Setup Node 22
-       uses: actions/setup-node@v4
-       with:
-         node-version: '22'
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
-     - name: Phase 1 — npm install
-       run: npm install --legacy-peer-deps
+      - name: Phase 1 — npm install
+        run: npm install --legacy-peer-deps
 
-     - name: Phase 2 — Install Puppeteer
-       run: npm install --no-save puppeteer
+      - name: Phase 2 — Install Puppeteer
+        run: npm install --no-save puppeteer
 
-     - name: Phase 3 — Start React dev server (unminified errors)
-       run: |
-         npm start > dev-server.log 2>&1 &
-         echo "DEV_PID=$!" >> $GITHUB_ENV
-         echo "Dev server PID: $!"
-       env:
-         CI: 'false'
-         BROWSER: 'none'
-         PORT: '3000'
-         NODE_OPTIONS: '--max-old-space-size=4096'
+      - name: Phase 3 — Start CRA dev server directly (unminified errors)
+        run: |
+          # Bypass server.js — go straight to react-scripts so errors are unminified
+          if [ -f node_modules/.bin/react-app-rewired ]; then
+            echo "Using react-app-rewired"
+            npx react-app-rewired start > dev-server.log 2>&1 &
+          else
+            echo "Using react-scripts"
+            npx react-scripts start > dev-server.log 2>&1 &
+          fi
+          echo "DEV_PID=$!" >> $GITHUB_ENV
+          echo "Dev server PID: $!"
+        env:
+          CI: 'false'
+          BROWSER: 'none'
+          PORT: '3000'
+          NODE_OPTIONS: '--max-old-space-size=4096'
+          FAST_REFRESH: 'false'
 
-     - name: Phase 4 — Wait for webpack compile
-       run: |
-         echo "Waiting for dev server..."
-         for i in $(seq 1 60); do
-           STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000 || echo "000")
-           if echo "$STATUS" | grep -q "200\|304"; then
-             echo "DEV_READY=true" >> $GITHUB_ENV
-             echo "✅ Dev server ready after ${i}s (HTTP $STATUS)"
-             break
-           fi
-           if [ "$i" = "60" ]; then
-             echo "DEV_READY=false" >> $GITHUB_ENV
-             echo "❌ Dev server never came up"
-           fi
-           sleep 2
-         done
+      - name: Phase 4 — Wait for webpack compile
+        run: |
+          echo "Waiting for dev server..."
+          for i in $(seq 1 90); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000 || echo "000")
+            if echo "$STATUS" | grep -q "200\|304"; then
+              echo "DEV_READY=true" >> $GITHUB_ENV
+              echo "✅ Dev server ready after ${i}s (HTTP $STATUS)"
+              break
+            fi
+            if [ "$i" = "90" ]; then
+              echo "DEV_READY=false" >> $GITHUB_ENV
+              echo "❌ Dev server never came up"
+              echo "=== dev-server.log so far ==="
+              tail -60 dev-server.log
+            fi
+            sleep 2
+          done
 
-     - name: Phase 5 — Capture React error with Puppeteer
-       if: env.DEV_READY == 'true'
-       run: |
-         node << 'SCRIPT'
-         const puppeteer = require('puppeteer');
+      - name: Phase 5 — Capture React error with Puppeteer
+        if: env.DEV_READY == 'true'
+        run: |
+          set +e
+          node << 'SCRIPT'
+          const puppeteer = require('puppeteer');
 
-         (async () => {
-           const browser = await puppeteer.launch({
-             args: ['--no-sandbox', '--disable-setuid-sandbox'],
-             headless: 'new',
-           });
+          (async () => {
+            const browser = await puppeteer.launch({
+              args: ['--no-sandbox', '--disable-setuid-sandbox'],
+              headless: 'new',
+            });
 
-           const page = await browser.newPage();
-           const errors = [];
-           const logs  = [];
+            const page = await browser.newPage();
+            const errors = [];
+            const logs  = [];
 
-           page.on('console', msg => {
-             const t = msg.text();
-             logs.push('[' + msg.type().toUpperCase() + '] ' + t);
-             if (msg.type() === 'error' || msg.type() === 'warning') errors.push({ type: msg.type(), text: t });
-           });
-           page.on('pageerror', err => {
-             errors.push({ type: 'pageerror', text: err.message });
-             logs.push('[PAGEERROR] ' + err.message);
-           });
+            page.on('console', msg => {
+              const t = msg.text();
+              logs.push('[' + msg.type().toUpperCase() + '] ' + t);
+              if (msg.type() === 'error' || msg.type() === 'warning') errors.push({ type: msg.type(), text: t });
+            });
+            page.on('pageerror', err => {
+              errors.push({ type: 'pageerror', text: err.message + '\n' + (err.stack || '') });
+              logs.push('[PAGEERROR] ' + err.message);
+            });
 
-           try {
-             await page.goto('http://localhost:3000', { waitUntil: 'networkidle2', timeout: 30000 });
-           } catch (e) { console.log('Nav note:', e.message); }
+            try {
+              await page.goto('http://localhost:3000', { waitUntil: 'networkidle2', timeout: 45000 });
+            } catch (e) { console.log('Nav note:', e.message); }
 
-           await new Promise(r => setTimeout(r, 4000));
+            await new Promise(r => setTimeout(r, 5000));
 
-           // CRA dev overlay lives in an iframe
-           let overlayText = '';
-           try {
-             const frames = page.frames();
-             for (const f of frames) {
-               const txt = await f.evaluate(() => document.body && document.body.innerText).catch(() => '');
-               if (txt && (txt.includes('Element type') || txt.includes('invariant'))) {
-                 overlayText = txt;
-               }
-             }
-           } catch (_) {}
+            // CRA error overlay lives in an iframe — scan all frames for it
+            let overlayText = '';
+            try {
+              const frames = page.frames();
+              for (const f of frames) {
+                const txt = await f.evaluate(() => document.body && document.body.innerText).catch(() => '');
+                if (txt && (txt.includes('Element type') || txt.includes('invariant') || txt.includes('undefined'))) {
+                  overlayText = txt;
+                  break;
+                }
+              }
+            } catch (_) {}
 
-           console.log('\n=== CONSOLE ERRORS ===');
-           if (errors.length === 0) console.log('None');
-           else errors.forEach(e => console.log('[' + e.type + ']', e.text));
+            // Also grab whatever's on the main body
+            const bodyText = await page.evaluate(() => document.body && document.body.innerText).catch(() => '');
 
-           if (overlayText) {
-             console.log('\n=== CRA ERROR OVERLAY ===');
-             console.log(overlayText.slice(0, 4000));
-           }
+            console.log('\n=== PAGE ERRORS (unminified) ===');
+            if (errors.length === 0) console.log('None');
+            else errors.forEach(e => console.log('[' + e.type + ']\n' + e.text + '\n---'));
 
-           console.log('\n=== ALL CONSOLE OUTPUT ===');
-           logs.forEach(l => console.log(l));
+            if (overlayText) {
+              console.log('\n=== CRA ERROR OVERLAY ===');
+              console.log(overlayText.slice(0, 5000));
+            }
 
-           const react130 = errors.some(e =>
-             e.text.includes('Element type is invalid') ||
-             e.text.includes('#130') ||
-             e.text.includes('invariant')
-           );
+            if (bodyText && bodyText.length < 3000) {
+              console.log('\n=== MAIN PAGE BODY ===');
+              console.log(bodyText);
+            }
 
-           await browser.close();
+            console.log('\n=== ALL CONSOLE OUTPUT ===');
+            logs.forEach(l => console.log(l));
 
-           if (react130) {
-             console.log('\n❌ React #130 confirmed — component name is in the overlay above');
-             process.exit(1);
-           } else if (errors.length > 0) {
-             console.log('\n⚠️  Other errors found — see above');
-             process.exit(1);
-           } else {
-             console.log('\n✅ No errors — rendered clean');
-           }
-         })();
-         SCRIPT
+            const react130 = errors.some(e =>
+              e.text.includes('Element type is invalid') ||
+              e.text.includes('#130') ||
+              e.text.includes('invariant')
+            );
 
-         EXIT=$?
-         if [ $EXIT -eq 0 ]; then
-           echo "RENDER_RESULT=clean" >> $GITHUB_ENV
-         else
-           echo "RENDER_RESULT=error" >> $GITHUB_ENV
-         fi
-         exit $EXIT
+            await browser.close();
 
-     - name: Phase 6 — Print dev server log
-       if: always()
-       run: |
-         echo "=== dev-server.log (last 80 lines) ==="
-         tail -80 dev-server.log
+            if (react130) {
+              console.log('\n❌ React #130 reproduced — component name should be in the overlay above');
+              process.exit(1);
+            } else if (errors.length > 0) {
+              console.log('\n⚠️  Other errors found — see above');
+              process.exit(1);
+            } else {
+              console.log('\n✅ No errors — rendered clean');
+              process.exit(0);
+            }
+          })().catch(e => { console.error('Script error:', e); process.exit(2); });
+          SCRIPT
 
-     - name: Phase 7 — Summary
-       if: always()
-       run: |
-         {
-           echo "# React #130 Diagnostic"
-           echo ""
-           echo "## Pipeline trace"
-           echo "| Stage | Status |"
-           echo "|---|---|"
-           echo "| Dev server compiled | ${DEV_READY:-false} |"
-           echo "| Render result | ${RENDER_RESULT:-not-tested} |"
-           echo ""
-           echo "## Verdict"
-           if [ "${DEV_READY}" != "true" ]; then
-             echo "🛑 **Dev server never started.** Check dev-server.log artifact — likely a build error or missing env var."
-           elif [ "${RENDER_RESULT}" = "error" ]; then
-             echo "🛑 **React #130 reproduced.** The component name is in the Puppeteer step log above — search for \`Element type is invalid\`."
-           elif [ "${RENDER_RESULT}" = "clean" ]; then
-             echo "✅ **No error in dev build.** The crash is likely environment-specific (missing env var in Railway, or a prod-only import path)."
-           else
-             echo "⚠️ Inconclusive. Check the artifact."
-           fi
-         } >> $GITHUB_STEP_SUMMARY
+          EXIT=$?
+          if [ $EXIT -eq 0 ]; then
+            echo "RENDER_RESULT=clean" >> $GITHUB_ENV
+          else
+            echo "RENDER_RESULT=error" >> $GITHUB_ENV
+          fi
+          # Don't fail the step — let Phase 7 summarize
+          exit 0
 
-     - name: Kill dev server
-       if: always()
-       run: kill $DEV_PID 2>/dev/null || true
+      - name: Phase 6 — Print dev server log
+        if: always()
+        run: |
+          echo "=== dev-server.log (last 100 lines) ==="
+          tail -100 dev-server.log || true
 
-     - name: Upload artifacts
-       if: always()
-       uses: actions/upload-artifact@v4
-       with:
-         name: react-130-diagnostic
-         path: dev-server.log
-         retention-days: 3
+      - name: Phase 7 — Summary
+        if: always()
+        run: |
+          {
+            echo "# React #130 Diagnostic"
+            echo ""
+            echo "## Pipeline trace"
+            echo "| Stage | Status |"
+            echo "|---|---|"
+            echo "| Dev server compiled | ${DEV_READY:-false} |"
+            echo "| Render result | ${RENDER_RESULT:-not-tested} |"
+            echo ""
+            echo "## Verdict"
+            if [ "${DEV_READY}" != "true" ]; then
+              echo "🛑 **Dev server never started.** Check dev-server.log artifact — likely a compile error."
+            elif [ "${RENDER_RESULT}" = "error" ]; then
+              echo "🛑 **React #130 reproduced.** The component name is in Phase 5 above — search the log for \`Element type is invalid\`."
+            elif [ "${RENDER_RESULT}" = "clean" ]; then
+              echo "✅ **No error in dev build.** The crash is environment-specific (likely a prod-only import path or missing Railway env var)."
+            else
+              echo "⚠️ Inconclusive. Check the artifact."
+            fi
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Kill dev server
+        if: always()
+        run: kill $DEV_PID 2>/dev/null || true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: react-130-diagnostic
+          path: dev-server.log
+          retention-days: 3
