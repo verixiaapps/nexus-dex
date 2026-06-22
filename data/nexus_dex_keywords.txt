@@ -1,36 +1,6 @@
 crypto exchange
 crypto liquidity
 decentralized exchange
-meme coin marketplace
-meme coin risk checker
-meme coin scanner
-meme coin swap no kyc
-meme coin swaps
-meme coin tracker
-meme coin trading
-meme coin watchlist
-meme token exchange
-meme token swaps
-meta stock token
-meta token
-meta token chart
-meta token price
-meta token swap
-micro cap crypto tokens
-microsoft stock token
-microsoft token
-microsoft token chart
-microsoft token price
-microsoft token swap
-mkr exchange
-move crypto between chains
-multi chain token exchange
-multichain dex
-multichain exchange
-multichain liquidity
-multichain swaps
-multichain trading
-near exchange
 netflix stock token
 netflix token
 netflix token chart
