@@ -2,36 +2,6 @@ crypto exchange
 crypto liquidity
 decentralized exchange
 swap crypto
-swap sol for fartcoin solana
-swap sol for goat solana
-swap sol for grass solana
-swap sol for hnt
-swap sol for hnt solana
-swap sol for inj
-swap sol for io solana
-swap sol for jitosol solana
-swap sol for jto solana
-swap sol for jup
-swap sol for jup solana
-swap sol for kaspa
-swap sol for kmno solana
-swap sol for link
-swap sol for mew solana
-swap sol for mkr
-swap sol for mnde solana
-swap sol for msol solana
-swap sol for near
-swap sol for pengu solana
-swap sol for pepe
-swap sol for pnut solana
-swap sol for popcat
-swap sol for popcat solana
-swap sol for pyth
-swap sol for pyth solana
-swap sol for ray solana
-swap sol for render
-swap sol for render solana
-swap sol for shib
 swap sol for tnsr solana
 swap sol for uni
 swap sol for usdt
