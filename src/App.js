@@ -12,9 +12,12 @@ import Ape                 from './components/Ape.jsx';
 import Flipsy              from './components/Flipsy.jsx';
 import GetStarted          from './components/GetStarted.jsx';
 import Holdings            from './components/Holdings.jsx';
+import ReferralsPage       from './components/ReferralsPage.jsx';
+import WhyNexus            from './components/WhyNexus.jsx';
+import AdminPage           from './components/AdminPage.jsx';
 
 // =====================================================================
-// Wonderland-light design tokens (used across the shell)
+// Wonderland-light design tokens
 // =====================================================================
 const C = {
   ink:    '#1A1B4E',
@@ -37,16 +40,16 @@ const C = {
 };
 
 // ═════════════════════════════════════════════════════════════════════
-// ADMIN_WALLETS — these wallets bypass every page-level gate.
-// Exported so Stocks.jsx and any other page can import.
+// ADMIN_WALLETS — bypass every page-level gate.
 // ═════════════════════════════════════════════════════════════════════
 export const ADMIN_WALLETS = new Set([
   'GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA',
   'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV',
 ]);
 
-// Private page — only this wallet can open "Ape" (the instant one-tap radar).
-const APE_ACCESS_WALLET = 'GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA';
+// Private pages — only this wallet can open them.
+const APE_ACCESS_WALLET    = 'GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA';
+const FLIPSY_ACCESS_WALLET = 'GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA';
 
 const GLOBAL_STYLES = `
 @import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap');
@@ -122,15 +125,16 @@ input[type="text"],input[type="number"],input[type="email"],input[type="password
 `;
 
 // =====================================================================
-// Common ecosystem strip — light glass
+// Common ecosystem strip — used at top of Swap + Bridge pages
+// (matches the 5 primary nav tabs)
 // =====================================================================
 function EcoStrip({ active, onGo }) {
   const items = [
-    { ic: '⇅',  lbl: 'Swap',       tab: 'swap' },
-    { ic: '🚀', lbl: 'Radar',      tab: 'launchradar' },
-    { ic: '✨', lbl: 'Wonderland', tab: 'wonderland' },
-    { ic: '📈', lbl: 'Markets',    tab: 'markets' },
-    { ic: '🎯', lbl: 'Flipsy',     tab: 'flipsy' },
+    { ic: '⇅',  lbl: 'Swap',    tab: 'swap' },
+    { ic: '⚡', lbl: 'Ape',     tab: 'ape' },
+    { ic: '✨', lbl: 'Wonder',  tab: 'wonderland' },
+    { ic: '📈', lbl: 'Markets', tab: 'markets' },
+    { ic: '👜', lbl: 'Bags',    tab: 'holdings' },
   ];
   return (
     <div className="hide-scrollbar" style={{ display: 'flex', gap: 8, overflowX: 'auto', padding: '0 0 4px' }}>
@@ -174,7 +178,6 @@ function SwapHero({ onStartTrading }) {
     <div style={{ maxWidth: 520, margin: '0 auto', width: '100%' }}>
       <EcoStrip active="swap" onGo={onStartTrading} />
 
-      {/* Tight hero — eyebrow, headline, sub, trust pill */}
       <div style={{ padding: '18px 4px 12px', textAlign: 'center' }}>
         <div style={{
           display: 'inline-flex', alignItems: 'center', gap: 6,
@@ -213,9 +216,7 @@ function SwapHero({ onStartTrading }) {
           background: C.glass, backdropFilter: 'blur(10px)',
           border: `1px solid ${C.border}`,
         }}>
-          {[
-            'No KYC', 'No Account', 'No Limits',
-          ].map((label, i) => (
+          {['No KYC', 'No Account', 'No Limits'].map((label, i) => (
             <React.Fragment key={label}>
               {i > 0 && <span style={{ color: C.ink3, opacity: 0.5 }}>·</span>}
               <span style={{
@@ -230,7 +231,6 @@ function SwapHero({ onStartTrading }) {
         </div>
       </div>
 
-      {/* Widget title strip just above the actual widget (rendered by parent) */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 4px 6px' }}>
         <div style={{
           fontFamily: "'Instrument Serif', serif", fontWeight: 400, fontSize: 22, color: C.ink, letterSpacing: '-0.015em', lineHeight: 1,
@@ -250,11 +250,11 @@ function SwapHero({ onStartTrading }) {
 }
 
 // =====================================================================
-// Below-the-fold homepage sections — trust strip, cross-chain cards,
-// live ticker, product breadth, footer.
+// HomeBelow — below-the-fold homepage sections.
+// EXPANDED card grid: now includes Bridge, Sol→BTC, Radar, Referrals,
+// Why Nexus, and (gated to Flipsy access wallet only) Flipsy.
 // =====================================================================
-function HomeBelow({ onSwitchTab }) {
-  // Mock live trades — replace with real feed when available.
+function HomeBelow({ onSwitchTab, walletAddress }) {
   const trades = [
     ['SOL → USDC',   '+$1,420', '2s'],
     ['JUP → SOL',    '+$340',   '4s'],
@@ -266,15 +266,28 @@ function HomeBelow({ onSwitchTab }) {
     ['SOL → USDC',   '+$2,950', '31s'],
   ];
 
-  // All products in one grid — ordered by expected popularity.
+  const canSeeFlipsy = walletAddress === FLIPSY_ACCESS_WALLET;
+
+  // Build the card list. Order: primary products first, then utility, then meta.
   const products = [
-    { tab: 'swap',        icon: '⇅',  name: 'Swap',             desc: '12,000+ Solana tokens, best price via Jupiter.',                 live: '$48M / 24H', grad: 'linear-gradient(135deg,#A0E7FF,#FF8FBE)' },
-    { tab: 'wonderland',  icon: '✨', name: 'Wonderland',       desc: 'Discover the meme tokens going up.',                             live: 'TRENDING',   grad: 'linear-gradient(135deg,#B794F6,#FFD46B)' },
-    { tab: 'bridge',      icon: '🌉', name: 'Cross-Chain Swap', desc: 'Move any token to Ethereum, Base, Arbitrum & 68 more — ~2 min.', live: '71 CHAINS',  grad: 'linear-gradient(135deg,#A0E7FF,#B794F6)' },
-    { tab: 'launchradar', icon: '🚀', name: 'Radar',            desc: 'New token launches, before they pump.',                          live: 'FRESH',      grad: 'linear-gradient(135deg,#FFD46B,#FFB088)' },
-    { tab: 'solbtc',      icon: '₿',  name: 'SOL → Native BTC', desc: 'Swap Solana straight to real Bitcoin on the BTC network.',       live: 'NATIVE BTC', grad: 'linear-gradient(135deg,#FFD46B,#FFB088)' },
-    { tab: 'markets',     icon: '📈', name: 'Markets',          desc: 'Tokenized Tesla, Apple, NVIDIA — trade 24/7.',                   live: '18 STOCKS',  grad: 'linear-gradient(135deg,#FF8FBE,#B794F6)' },
+    { tab: 'wonderland',  icon: '✨', name: 'Wonderland',     desc: 'Meme signal scanner. Catch runners before the herd.',           live: 'TRENDING',  grad: 'linear-gradient(135deg,#B794F6,#FFD46B)' },
+    { tab: 'markets',     icon: '📈', name: 'Markets',         desc: 'Tokenized Tesla, Apple, NVIDIA — trade 24/7 in USDC.',          live: '18 STOCKS', grad: 'linear-gradient(135deg,#FF8FBE,#B794F6)' },
+    { tab: 'ape',         icon: '⚡', name: 'Ape',             desc: 'Fresh pump.fun launches with burner-wallet one-tap trades.',    live: 'EARLY',     grad: 'linear-gradient(135deg,#FF8FBE,#FFB088)' },
+    { tab: 'holdings',    icon: '👜', name: 'Bags',            desc: 'Every token you own. Live prices. Buy SOL with USD.',           live: 'PORTFOLIO', grad: 'linear-gradient(135deg,#A0E7FF,#7FFFD4)' },
+    { tab: 'bridge',      icon: '🌉', name: 'Cross-Chain',     desc: 'Move any token across 71 chains. Native, ~2 min.',              live: '71 CHAINS', grad: 'linear-gradient(135deg,#A0E7FF,#B794F6)' },
+    { tab: 'solbtc',      icon: '₿',  name: 'SOL → BTC',       desc: 'Swap Solana straight to real Bitcoin on the BTC network.',      live: 'NATIVE',    grad: 'linear-gradient(135deg,#FFD46B,#FFB088)' },
+    { tab: 'launchradar', icon: '🚀', name: 'Radar',           desc: 'Every new token, the moment it lands on Solana.',               live: 'FRESH',     grad: 'linear-gradient(135deg,#FFD46B,#FFB088)' },
+    { tab: 'referrals',   icon: '§',  name: 'Referrals',       desc: '50% of every fee, on-chain, same block. Forever.',              live: '50% RATE',  grad: 'linear-gradient(135deg,#FF8FBE,#A0E7FF)' },
+    { tab: 'why',         icon: '◌',  name: 'Why Nexus',       desc: 'No email, no KYC, no limits. The three things we never do.',   live: 'READ',      grad: 'linear-gradient(135deg,#B794F6,#A0E7FF)' },
   ];
+
+  if (canSeeFlipsy) {
+    products.splice(4, 0, {
+      tab: 'flipsy', icon: '🎯', name: 'Flipsy',
+      desc: 'Predictions market. Currently in development.',
+      live: 'BETA · YOU', grad: 'linear-gradient(135deg,#7FFFD4,#A0E7FF)',
+    });
+  }
 
   const sectionHead = (title, italic, meta, liveDot = false) => (
     <div style={{ padding: '24px 4px 10px', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10 }}>
@@ -301,7 +314,7 @@ function HomeBelow({ onSwitchTab }) {
   return (
     <div style={{ maxWidth: 520, margin: '0 auto', width: '100%' }}>
 
-      {/* TRUST STRIP — borrowed credibility, honestly attributed */}
+      {/* TRUST STRIP */}
       <div style={{
         marginTop: 16, padding: '12px 14px', borderRadius: 14,
         background: C.glass, backdropFilter: 'blur(10px)',
@@ -347,7 +360,7 @@ function HomeBelow({ onSwitchTab }) {
         </div>
       </div>
 
-      {/* PRODUCT BREADTH — the moat */}
+      {/* EXPANDED PRODUCT GRID */}
       {sectionHead('All products.', 'One wallet.', 'SUPER-APP')}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
         {products.map((p, i) => (
@@ -409,13 +422,7 @@ function HomeBelow({ onSwitchTab }) {
 }
 
 // =====================================================================
-// BridgeHero — compact intro for the Bridge tab.
-//
-// NOTE: The redesigned CrossChainSwap.jsx ships with its own mini-hero
-// ("Move it anywhere."). If you keep both, you'll have two headers
-// stacked. To remove this one, just delete <BridgeHero/> from the
-// bridge case in <AppInner>. To remove the widget's own, delete the
-// .cc-mini-hero block inside CrossChainSwap.jsx.
+// BridgeHero — compact intro for the Bridge page
 // =====================================================================
 function BridgeHero({ onSwitchTab }) {
   const chains = [
@@ -427,9 +434,8 @@ function BridgeHero({ onSwitchTab }) {
 
   return (
     <div style={{ maxWidth: 520, margin: '0 auto', width: '100%' }}>
-      <EcoStrip active="bridge" onGo={onSwitchTab} />
+      <EcoStrip active="" onGo={onSwitchTab} />
 
-      {/* Animated chain-flow strip */}
       <div style={{
         marginTop: 14, padding: '18px 16px', borderRadius: 22, position: 'relative', overflow: 'hidden',
         background: C.glassStrong, backdropFilter: 'blur(12px)',
@@ -488,7 +494,7 @@ function BridgeHero({ onSwitchTab }) {
 }
 
 // =====================================================================
-// Inline sanctions screening — UNCHANGED
+// Inline sanctions screening
 // =====================================================================
 const SANCTIONS_URL          = 'https://public.chainalysis.com/api/v1/address/';
 const SANCTIONS_CACHE_PREFIX = 'nx_sanctions_';
@@ -526,6 +532,9 @@ async function screenAddress(address) {
   }
 }
 
+// =====================================================================
+// ROUTING TABLES
+// =====================================================================
 const PATH_TO_TAB = {
   '/': 'swap', '/swap': 'swap', '/bridge': 'bridge',
   '/sol-btc': 'solbtc', '/btc': 'solbtc', '/bitcoin': 'solbtc',
@@ -535,13 +544,16 @@ const PATH_TO_TAB = {
   '/flipsy': 'flipsy', '/predict': 'flipsy',
   '/get-started': 'getstarted', '/wallet': 'getstarted',
   '/holdings': 'holdings', '/portfolio': 'holdings', '/bags': 'holdings',
+  '/referrals': 'referrals', '/refer': 'referrals',
+  '/why': 'why', '/why-nexus': 'why', '/about': 'why',
+  '/admin': 'admin', '/dashboard': 'admin',
   '/stack': 'swap', '/vip': 'swap', '/perps': 'swap', '/call': 'swap',
 };
 const TAB_TO_PATH = {
   swap: '/swap', bridge: '/bridge', solbtc: '/sol-btc',
   wonderland: '/wonderland', launchradar: '/radar', ape: '/ape', markets: '/markets', flipsy: '/flipsy',
-  getstarted: '/get-started',
-  holdings: '/holdings',
+  getstarted: '/get-started', holdings: '/holdings',
+  referrals: '/referrals', why: '/why', admin: '/admin',
 };
 function tabFromPathname(pathname) { return PATH_TO_TAB[pathname] || 'swap'; }
 export function useAppWallet() { return useNexusWallet(); }
@@ -584,7 +596,7 @@ function walletModalReducer(state, action) {
 }
 
 // =====================================================================
-// TermsGate — light Wonderland sheet
+// TermsGate
 // =====================================================================
 function TermsGate({ onAccept }) {
   const scrollRef = useRef(null);
@@ -676,7 +688,7 @@ function TermsGate({ onAccept }) {
 }
 
 // =====================================================================
-// WalletModal — light Wonderland sheet
+// WalletModal
 // =====================================================================
 function WalletModal({ open, onClose }) {
   const [mState, dispatch] = useReducer(walletModalReducer, WM_INITIAL);
@@ -891,36 +903,41 @@ function WalletModal({ open, onClose }) {
 }
 
 // =====================================================================
-// Nav icons — unchanged
+// Nav icons — only the 5 primary tabs are exposed in the nav
 // =====================================================================
 function IconSwap()       { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><path d="M7 16V4m0 0L3 8m4-4l4 4"/><path d="M17 8v12m0 0l4-4m-4 4l-4-4"/></svg>; }
-function IconMarkets()    { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg>; }
-function IconBridge()     { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12 Q12 4 20 12"/><path d="M4 12v4"/><path d="M20 12v4"/><path d="M4 16h16"/><path d="M9 12v4"/><path d="M15 12v4"/></svg>; }
-function IconWonderland() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l2.4 6.4L21 10l-5.4 4 1.8 7L12 17.5 6.6 21l1.8-7L3 10l6.6-1.6L12 2z"/></svg>; }
-function IconFlipsy()     { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 10l4-4 4 4"/><path d="M8 14l4 4 4-4"/></svg>; }
-function IconLaunchRadar() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><path d="M12 3v3"/><path d="M12 18v3"/><path d="M3 12h3"/><path d="M18 12h3"/></svg>; }
-function IconGetStarted() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="7" width="18" height="13" rx="2.5"/><path d="M3 10h18"/><path d="M7 7V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v2"/><circle cx="17" cy="15" r="1.5" fill="currentColor" stroke="none"/></svg>; }
-function IconHoldings()   { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7h18l-2 13H5L3 7z"/><path d="M8 7V5a4 4 0 0 1 8 0v2"/><circle cx="12" cy="13" r="1.5" fill="currentColor" stroke="none"/></svg>; }
 function IconApe()        { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L4 14h6l-1 8 9-12h-6l1-8z"/></svg>; }
+function IconWonderland() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l2.4 6.4L21 10l-5.4 4 1.8 7L12 17.5 6.6 21l1.8-7L3 10l6.6-1.6L12 2z"/></svg>; }
+function IconMarkets()    { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg>; }
+function IconHoldings()   { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7h18l-2 13H5L3 7z"/><path d="M8 7V5a4 4 0 0 1 8 0v2"/><circle cx="12" cy="13" r="1.5" fill="currentColor" stroke="none"/></svg>; }
 
-const NAV_ICONS = { swap: IconSwap, launchradar: IconLaunchRadar, ape: IconApe, bridge: IconBridge, wonderland: IconWonderland, markets: IconMarkets, flipsy: IconFlipsy, holdings: IconHoldings, getstarted: IconGetStarted };
-const NAV_TABS = [
-  { id: 'swap', label: 'Swap' }, { id: 'launchradar', label: 'Radar' }, { id: 'ape', label: 'Ape' },
-  { id: 'wonderland', label: 'Wonder' }, { id: 'markets', label: 'Markets' }, { id: 'flipsy', label: 'Flipsy' },
-  { id: 'holdings', label: 'Bags' },
+const NAV_ICONS = { swap: IconSwap, ape: IconApe, wonderland: IconWonderland, markets: IconMarkets, holdings: IconHoldings };
+
+// Primary nav: exactly five tabs.
+// Note: Ape is conditionally shown only to the authorized wallet.
+const PRIMARY_NAV_TABS = [
+  { id: 'swap',       label: 'Swap' },
+  { id: 'ape',        label: 'Ape' },
+  { id: 'wonderland', label: 'Wonder' },
+  { id: 'markets',    label: 'Markets' },
+  { id: 'holdings',   label: 'Bags' },
 ];
 
 // =====================================================================
-// ApeLocked — shown on the private "Ape" page to non-authorized wallets
+// ApeLocked / FlipsyLocked — shown to non-authorized wallets
 // =====================================================================
 function ApeLocked({ connected, onConnectWallet }) {
+  return <PageLocked title="Private beta" body="This page is locked to one wallet for now. Connect the authorized wallet to open it." connected={connected} onConnectWallet={onConnectWallet} />;
+}
+function FlipsyLocked({ connected, onConnectWallet }) {
+  return <PageLocked title="In development" body="Flipsy (predictions) is still being built. Connect the dev wallet to preview, or check back soon." connected={connected} onConnectWallet={onConnectWallet} />;
+}
+function PageLocked({ title, body, connected, onConnectWallet }) {
   return (
     <div style={{ maxWidth: 520, margin: '0 auto', width: '100%', padding: '64px 16px', textAlign: 'center' }}>
       <div style={{ fontSize: 46, marginBottom: 14 }}>🔒</div>
-      <h2 style={{ fontFamily: "'Instrument Serif', serif", fontSize: 28, color: C.ink, margin: '0 0 8px', letterSpacing: '-0.015em' }}>Private beta</h2>
-      <p style={{ color: C.ink2, fontSize: 14, fontWeight: 500, lineHeight: 1.5, maxWidth: 340, margin: '0 auto 18px' }}>
-        This page is locked to one wallet for now. Connect the authorized wallet to open it.
-      </p>
+      <h2 style={{ fontFamily: "'Instrument Serif', serif", fontSize: 28, color: C.ink, margin: '0 0 8px', letterSpacing: '-0.015em' }}>{title}</h2>
+      <p style={{ color: C.ink2, fontSize: 14, fontWeight: 500, lineHeight: 1.5, maxWidth: 340, margin: '0 auto 18px' }}>{body}</p>
       <button onClick={onConnectWallet} style={{
         padding: '13px 22px', borderRadius: 14, border: 'none', cursor: 'pointer',
         background: 'linear-gradient(135deg,#A0E7FF,#FF8FBE)', color: C.ink,
@@ -950,6 +967,25 @@ function AppInner() {
     return () => { if (el.parentNode) el.parentNode.removeChild(el); };
   }, []);
 
+  // Visit tracking — fires once per page navigation. Anonymous per-browser
+  // visitor_id stored in localStorage. No IP, no cookies, no PII.
+  useEffect(() => {
+    try {
+      let vid;
+      try { vid = localStorage.getItem('nx_vid'); } catch { vid = null; }
+      if (!vid) {
+        vid = Math.random().toString(36).slice(2) + Date.now().toString(36);
+        try { localStorage.setItem('nx_vid', vid); } catch {}
+      }
+      const ref = new URLSearchParams(window.location.search).get('ref') || null;
+      fetch('/api/visit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ visitor_id: vid, path: location.pathname, ref }),
+      }).catch(() => {});
+    } catch (e) {}
+  }, [location.pathname]);
+
   useEffect(() => {
     const newTab = tabFromPathname(location.pathname);
     if (newTab !== tab) setTab(newTab);
@@ -963,7 +999,6 @@ function AppInner() {
   }, [tab, navigate]);
   const openWallet = useCallback(() => setWalletModalOpen(true), []);
 
-  // Legacy fallback — widget is now above the fold so no scroll is needed.
   const scrollToSwapWidget = useCallback(() => {
     const el = swapWidgetRef.current;
     if (!el) return;
@@ -983,24 +1018,22 @@ function AppInner() {
     ? wallet.walletAddress.slice(0, 4) + '…' + wallet.walletAddress.slice(-4)
     : null;
 
-  // "Ape" is a private page — only the authorized wallet sees the tab or can open it.
-  const canApe  = wallet.walletAddress === APE_ACCESS_WALLET;
-  const navTabs = NAV_TABS.filter(t => t.id !== 'ape' || canApe);
+  // Gates
+  const canApe    = wallet.walletAddress === APE_ACCESS_WALLET;
+  const canFlipsy = wallet.walletAddress === FLIPSY_ACCESS_WALLET;
+  // Primary nav: filter Ape out if non-authorized.
+  const navTabs = PRIMARY_NAV_TABS.filter(t => t.id !== 'ape' || canApe);
 
-  // Full-bleed pages: run edge-to-edge inside the global header (no inset frame).
-  // Anything in this list gets no horizontal padding and no maxWidth on <main>,
-  // so the page can render its own background and design system without a
-  // visible "card within a card" feel.
-  const isFullBleed = tab === 'ape' || tab === 'launchradar';
+  // Full-bleed pages — Ape is full-bleed by design.
+  const isFullBleed = tab === 'ape';
 
   return (
     <div style={{ minHeight: '100dvh', color: C.ink, fontFamily: "'Space Grotesk', sans-serif", overscrollBehavior: 'none', overflowX: 'hidden', width: '100%', position: 'relative' }}>
-      {/* Ambient background blobs — rendered globally so they show on every tab */}
       <div className="nx-fixed-blob" style={{ width: 380, height: 380, background: C.sky, top: -100, right: -120 }} />
       <div className="nx-fixed-blob" style={{ width: 420, height: 420, background: C.pink, top: '35%', left: -160, animationDelay: '3s' }} />
       <div className="nx-fixed-blob" style={{ width: 300, height: 300, background: C.gold, bottom: '15%', right: -80, animationDelay: '6s' }} />
 
-      {/* HEADER — light glass */}
+      {/* HEADER */}
       <header style={{
         position: 'sticky', top: 0, zIndex: 100,
         background: 'rgba(251,245,255,0.72)',
@@ -1075,24 +1108,30 @@ function AppInner() {
             <div ref={swapWidgetRef}>
               <SwapWidget {...sharedProps} />
             </div>
-            <HomeBelow onSwitchTab={switchTab} />
+            <HomeBelow onSwitchTab={switchTab} walletAddress={wallet.walletAddress} />
           </>
         )}
         {tab === 'launchradar' && <LaunchRadar onConnectWallet={openWallet} />}
         {tab === 'ape' && (canApe
-          ? <Ape onConnectWallet={openWallet} mainWalletPubkey={wallet.walletAddress} />
+          ? <Ape onConnectWallet={openWallet} mainWalletPubkey={wallet.walletAddress} onSwitchTab={switchTab} />
           : <ApeLocked connected={wallet.isConnected} onConnectWallet={openWallet} />
         )}
         {tab === 'bridge'      && <><BridgeHero onSwitchTab={switchTab} /><CrossChainSwap onConnectWallet={openWallet} /></>}
         {tab === 'solbtc'      && <SolToBtcChainflip onConnectWallet={openWallet} />}
         {tab === 'wonderland'  && <MemeWonderland onConnectWallet={openWallet} />}
         {tab === 'markets'     && <Stocks {...sharedProps} />}
-        {tab === 'flipsy'      && <Flipsy onConnectWallet={openWallet} />}
+        {tab === 'flipsy'      && (canFlipsy
+          ? <Flipsy onConnectWallet={openWallet} />
+          : <FlipsyLocked connected={wallet.isConnected} onConnectWallet={openWallet} />
+        )}
         {tab === 'holdings'    && <Holdings {...sharedProps} />}
         {tab === 'getstarted'  && <GetStarted onConnectWallet={openWallet} onSwitchTab={switchTab} />}
+        {tab === 'referrals'   && <ReferralsPage onConnectWallet={openWallet} />}
+        {tab === 'why'         && <WhyNexus onSwitchTab={switchTab} />}
+        {tab === 'admin'       && <AdminPage onConnectWallet={openWallet} walletAddress={wallet.walletAddress} isConnected={wallet.isConnected} onSwitchTab={switchTab} />}
       </main>
 
-      {/* MOBILE BOTTOM NAV — light glass */}
+      {/* MOBILE BOTTOM NAV — exactly 5 tabs */}
       <nav className="mobile-nav" style={{
         position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100,
         background: 'rgba(251,245,255,0.85)',
