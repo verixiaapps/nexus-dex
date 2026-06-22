@@ -478,3 +478,33 @@ stablecoin liquidity bridge
 swap across blockchains
 swap aggregator
 swap ai16z to sol
+swap any token to any token
+swap arb to sol
+swap avax to sol
+swap base to sol
+swap bnb to sol
+swap bonk to sol
+swap btc to sol
+swap crypto without account
+swap crypto without kyc
+swap crypto without limits
+swap crypto without login
+swap crypto without registration
+swap crypto without restrictions
+swap dogwifhat to sol
+swap drift to sol
+swap eth to sol
+swap fartcoin to sol
+swap fwog to sol
+swap giga to sol
+swap goat to sol
+swap grass to sol
+swap hnt to sol
+swap hype to sol
+swap io to sol
+swap jup for wen solana
+swap jup for wif solana
+swap jup on solana
+swap jup to act
+swap jup to ai16z
+swap jup to bonk
