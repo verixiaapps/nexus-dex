@@ -1948,3 +1948,9 @@ why-is-wen-swap-slow
 why-is-wif-price-impact-so-high
 why-is-wif-swap-slow
 wif-exchange
+wif-token-swap
+world-crypto-exchange
+worldwide-crypto-exchange
+worldwide-defi
+worldwide-token-exchange
+yield-farming
