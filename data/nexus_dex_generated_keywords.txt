@@ -1528,3 +1528,33 @@ swap w to pyth
 swap w to ray
 swap w to render
 swap w to sol
+swap w to sol solana
+swap w to tnsr
+swap w to usdc solana
+swap w to usdt solana
+swap w to wen
+swap w to wif
+swap wen for act solana
+swap wen for ai16z solana
+swap wen for bonk solana
+swap wen for cloud solana
+swap wen for drift solana
+swap wen for fartcoin solana
+swap wen for goat solana
+swap wen for grass solana
+swap wen for hnt solana
+swap wen for io solana
+swap wen for jitosol solana
+swap wen for jto solana
+swap wen for jup solana
+swap wen for kmno solana
+swap wen for mew solana
+swap wen for mnde solana
+swap wen for msol solana
+swap wen for pengu solana
+swap wen for pnut solana
+swap wen for popcat solana
+swap wen for pyth solana
+swap wen for ray solana
+swap wen for render solana
+swap wen for sol solana
