@@ -913,14 +913,15 @@ function IconHoldings()   { return <svg width="18" height="18" viewBox="0 0 24 2
 
 const NAV_ICONS = { swap: IconSwap, ape: IconApe, wonderland: IconWonderland, markets: IconMarkets, holdings: IconHoldings };
 
-// Primary nav: exactly five tabs.
-// Note: Ape is conditionally shown only to the authorized wallet.
+// Primary nav: five tabs by default, plus Admin which is only visible
+// to wallets in ADMIN_WALLETS. The filter in AppInner handles the gating.
 const PRIMARY_NAV_TABS = [
   { id: 'swap',       label: 'Swap' },
   { id: 'ape',        label: 'Ape' },
   { id: 'wonderland', label: 'Wonder' },
   { id: 'markets',    label: 'Markets' },
   { id: 'holdings',   label: 'Bags' },
+  { id: 'admin',      label: 'Admin' },
 ];
 
 // =====================================================================
@@ -1174,4 +1175,3 @@ function AppInner() {
 }
 
 export default function App() { return (<BrowserRouter><AppInner /></BrowserRouter>); }
- 
