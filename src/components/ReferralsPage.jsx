@@ -18,7 +18,7 @@
 // No server.js changes needed.
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useNexusWallet } from './WalletContext.js';
+import { useNexusWallet } from '../WalletContext.js';
 
 // Inherit the same design tokens used in App.js / MemeWonderland.
 const C = {
