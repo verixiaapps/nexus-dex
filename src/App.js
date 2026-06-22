@@ -903,15 +903,16 @@ function WalletModal({ open, onClose }) {
 }
 
 // =====================================================================
-// Nav icons — only the 5 primary tabs are exposed in the nav
+// Nav icons — one icon per tab (including Admin, which is gated by wallet)
 // =====================================================================
 function IconSwap()       { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><path d="M7 16V4m0 0L3 8m4-4l4 4"/><path d="M17 8v12m0 0l4-4m-4 4l-4-4"/></svg>; }
 function IconApe()        { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L4 14h6l-1 8 9-12h-6l1-8z"/></svg>; }
 function IconWonderland() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l2.4 6.4L21 10l-5.4 4 1.8 7L12 17.5 6.6 21l1.8-7L3 10l6.6-1.6L12 2z"/></svg>; }
 function IconMarkets()    { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg>; }
 function IconHoldings()   { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7h18l-2 13H5L3 7z"/><path d="M8 7V5a4 4 0 0 1 8 0v2"/><circle cx="12" cy="13" r="1.5" fill="currentColor" stroke="none"/></svg>; }
+function IconAdmin()      { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a8 8 0 0 1 16 0v1"/></svg>; }
 
-const NAV_ICONS = { swap: IconSwap, ape: IconApe, wonderland: IconWonderland, markets: IconMarkets, holdings: IconHoldings };
+const NAV_ICONS = { swap: IconSwap, ape: IconApe, wonderland: IconWonderland, markets: IconMarkets, holdings: IconHoldings, admin: IconAdmin };
 
 // Primary nav: five tabs by default, plus Admin which is only visible
 // to wallets in ADMIN_WALLETS. The filter in AppInner handles the gating.
@@ -1022,8 +1023,13 @@ function AppInner() {
   // Gates
   const canApe    = wallet.walletAddress === APE_ACCESS_WALLET;
   const canFlipsy = wallet.walletAddress === FLIPSY_ACCESS_WALLET;
-  // Primary nav: filter Ape out if non-authorized.
-  const navTabs = PRIMARY_NAV_TABS.filter(t => t.id !== 'ape' || canApe);
+  const isAdmin   = ADMIN_WALLETS.has(wallet.walletAddress);
+  // Primary nav: filter Ape out if non-authorized; filter Admin out unless admin wallet.
+  const navTabs = PRIMARY_NAV_TABS.filter(t => {
+    if (t.id === 'ape' && !canApe) return false;
+    if (t.id === 'admin' && !isAdmin) return false;
+    return true;
+  });
 
   // Full-bleed pages — Ape is full-bleed by design.
   const isFullBleed = tab === 'ape';
@@ -1132,7 +1138,7 @@ function AppInner() {
         {tab === 'admin'       && <AdminPage onConnectWallet={openWallet} walletAddress={wallet.walletAddress} isConnected={wallet.isConnected} onSwitchTab={switchTab} />}
       </main>
 
-      {/* MOBILE BOTTOM NAV — exactly 5 tabs */}
+      {/* MOBILE BOTTOM NAV */}
       <nav className="mobile-nav" style={{
         position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100,
         background: 'rgba(251,245,255,0.85)',
@@ -1142,7 +1148,10 @@ function AppInner() {
         paddingBottom: 'env(safe-area-inset-bottom)',
       }}>
         {navTabs.map(t => {
-          const Icon = NAV_ICONS[t.id];
+          // FIX 2: fallback to IconSwap if the tab has no icon registered.
+          // Belt-and-suspenders: NAV_ICONS now has admin, but this prevents
+          // future tabs from crashing the whole app with React #130.
+          const Icon = NAV_ICONS[t.id] || IconSwap;
           const isActive = tab === t.id;
           return (
             <button key={t.id} onClick={() => switchTab(t.id)} style={{
