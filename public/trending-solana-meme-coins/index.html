@@ -27,7 +27,7 @@
   "url": "https://swap.verixiaapps.com/trending-solana-meme-coins/",
   "name": "Trending Solana MEME Coins — Solana DEX Layer Live | Verixia",
   "description": "Trending Solana MEME Coins on Verixia — live from Jupiter, continuously updated. Tap-to-trade flow. Solana DeFi, no sign-up.",
-  "dateModified": "2026-06-21T13:21:35Z",
+  "dateModified": "2026-06-22T15:17:33Z",
   "aggregateRating": {"@type":"AggregateRating","ratingValue":"4.8","reviewCount":"2847","bestRating":"5","worstRating":"1"},
   "isPartOf": { "@type": "WebSite", "url": "https://verixiaapps.com/", "name": "Verixia" },
   "publisher": { "@type": "Organization", "name": "Verixia", "url": "https://verixiaapps.com/" }
@@ -312,8 +312,8 @@ header.nx-header{
 .sw-token-btn{display:flex;align-items:center;gap:8px;padding:7px 11px 7px 6px;background:rgba(160,231,255,.12);border:1px solid var(--border);border-radius:999px;color:var(--sw-ink);font-family:'Space Grotesk',sans-serif;font-size:13px;font-weight:700;cursor:pointer;flex-shrink:0}
 .sw-token-btn:hover{background:rgba(160,231,255,.20);border-color:var(--border-hi)}
 .sw-token-btn svg{color:var(--sw-ink-3);width:12px;height:12px}
-.sw-token-logo,.sw-token-fallback{width:24px;height:24px;border-radius:50%;flex-shrink:0;background:linear-gradient(135deg,rgba(160,231,255,.30),rgba(255,143,190,.30));display:grid;place-items:center;font-family:'Instrument Serif',serif;font-style:italic;font-size:12px;color:var(--sw-ink);overflow:hidden}
-.sw-token-logo img{width:100%;height:100%;object-fit:cover}
+[data-tok]{position:relative;width:24px;height:24px;flex-shrink:0;display:inline-block}
+.sw-token-logo,.sw-token-fallback{position:absolute;top:0;left:0;width:24px;height:24px;border-radius:50%;background:linear-gradient(135deg,rgba(160,231,255,.30),rgba(255,143,190,.30));display:grid;place-items:center;font-family:'Instrument Serif',serif;font-style:italic;font-size:12px;color:var(--sw-ink);overflow:hidden;object-fit:cover}
 .sw-amount-input{flex:1;background:transparent;border:0;outline:0;font-family:'Instrument Serif',serif;font-size:32px;line-height:1;color:var(--sw-ink);text-align:right;font-variant-numeric:tabular-nums;min-width:0;width:100%}
 .sw-amount-input::placeholder{color:var(--sw-ink-3)}
 .sw-row-usd{margin-top:6px;text-align:right;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--sw-ink-2);font-weight:600;min-height:14px}
@@ -355,7 +355,8 @@ header.nx-header{
 .sw-modal-msg{padding:24px;color:var(--ink-2);text-align:center;font-weight:500;font-size:13px}
 .sw-token-row{width:100%;display:flex;align-items:center;gap:12px;padding:10px 12px;background:transparent;border:1.5px solid transparent;border-radius:14px;cursor:pointer;color:var(--ink);text-align:left;font-family:'Space Grotesk',sans-serif}
 .sw-token-row:hover{background:rgba(255,255,255,.55);border-color:var(--hairline)}
-.sw-token-row-logo,.sw-token-row-placeholder{width:34px;height:34px;border-radius:50%;flex-shrink:0;background:linear-gradient(135deg,rgba(160,231,255,.30),rgba(255,143,190,.30));object-fit:cover}
+.sw-token-row-logo-wrap{position:relative;width:34px;height:34px;flex-shrink:0}
+.sw-token-row-logo,.sw-token-row-placeholder{position:absolute;top:0;left:0;width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,rgba(160,231,255,.30),rgba(255,143,190,.30));object-fit:cover;display:grid;place-items:center;font-family:'Instrument Serif',serif;font-style:italic;font-size:14px;color:var(--ink)}
 .sw-token-row-info{flex:1;min-width:0}
 .sw-token-row-sym{font-family:'Instrument Serif',serif;font-style:italic;font-size:17px;color:var(--ink);line-height:1}
 .sw-token-row-name{font-size:12px;color:var(--ink-2);font-weight:500;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -442,7 +443,7 @@ footer.nx-foot .non-custodial b{color:var(--ink);font-weight:800}
 </style>
 </head>
 <body>
-<a class="nx-promo" href="https://verixiaapps.com">
+<a class="nx-promo" href="https://swap.verixiaapps.com">
   <span class="badge">NEW</span>
   <b>Verixia</b>: Swap, Bridge, Stocks &amp; Prediction Markets all in one app
   <span class="arr">&rarr;</span>
@@ -565,19 +566,11 @@ footer.nx-foot .non-custodial b{color:var(--ink);font-weight:800}
   </div>
 
   <div class="nx-refer-stack">
-    <a class="nx-refer pump-tier" href="https://verixiaapps.com/refer?source=swap">
+    <a class="nx-refer pump-tier" href="https://swap.verixiaapps.com">
       <span class="nx-refer-l">
         <span class="nx-refer-tag">PUMP.FUN TIER</span>
-        <b>Earn <em>33%</em> of every pump.fun trade</b>
+        <b>Earn <em>50%</em> of every pump.fun trade</b>
         <span>FROM EVERYONE YOU REFER &middot; FOREVER &middot; PAID DAILY IN SOL</span>
-      </span>
-      <span class="nx-refer-r">Join &rarr;</span>
-    </a>
-    <a class="nx-refer swap-tier" href="https://verixiaapps.com/refer?source=swap">
-      <span class="nx-refer-l">
-        <span class="nx-refer-tag">SWAP TIER</span>
-        <b>Earn <em>30%</em> on every swap</b>
-        <span>FROM EVERYONE YOU REFER &middot; FOREVER</span>
       </span>
       <span class="nx-refer-r">Join &rarr;</span>
     </a>
@@ -586,10 +579,10 @@ footer.nx-foot .non-custodial b{color:var(--ink);font-weight:800}
   <section class="section">
     <div class="section-tag">Why Verixia</div>
     <h2 class="section-title">DeFi on Solana means the wallet is the account, the smart contract is the only intermediary, and the network does the rest in under a second.</h2>
-    <div class="ai-article" data-ai-content><p>You’re on Verixia, ready to swap any Solana token, and you want the freshest meme vibes. You hit the trending Solana meme coins list and see FRICTIONMA and PACT flashing in the fresh launches feed. These tokens just dropped their first pools in the last 24 hours, ripe for apes hunting moonshots. No digging through Discord or Twitter—just live, real-time action pulled straight from Jupiter Tokens API. The Wonderland tab is your playground, but the trending signals keep you locked on what’s actually moving.</p>
-<p>Verixia’s Signals break down discovery into four power lists. Trending tracks meme coins with sustained volume, showing what’s got legs beyond hype. Fresh launches spotlight the newest pools like FRICTIONMA, PACT, and 250—high risk, high upside. Volume leaders rank tokens by real 24-hour swap activity, not just chart shapes. And top gainers catch price moves over 1 and 24 hours, perfect for spotting early breakouts or steady climbs. Each list serves a different playstyle, letting you rotate your ape tactics with precision.</p>
-<p>Solana moves fast, and so do these signals. The lists update continuously, not on some stale daily cron. That JUP volume spike during a routing fee event? The volume leaders signal lit up about 40 minutes before the price jumped. Timing is everything. When fresh launches pop, or trending meme coins catch fire, you want to be in before the crowd. Verixia’s live feed means you’re always on the pulse, ready to send it without delay.</p>
-<p>From signal to swap is one tap. Spot a meme coin on the trending list? Tap it, and the swap screen loads with that token pre-selected. No menus, no contract checks, no copy-paste drama. You’re landing right on the trade, ready to ape or rotate bags fast. Whether you’re chasing fresh launches or riding volume leaders, Verixia makes discovery and execution seamless. The Wonderland tab and brand tokens are cool, but trending Solana meme coins are where the vibes hit hardest right now.</p></div>
+    <div class="ai-article" data-ai-content><p>You just spotted CAT lighting up the fresh launches feed on Signals. One tap, and the swap screen loads with CAT pre-selected, ready to ape in or out. No fuss, no copy-pasting contracts, just pure Solana speed. That’s how trending Solana meme coins hit your radar—live juice from Jupiter Tokens API, showing what’s actually moving on-chain right now. It’s not editorial hype, just raw, real-time action from the DEX layer.</p>
+<p>Signals breaks discovery into four plays: trending, fresh launches, volume leaders, and top gainers. Trending tracks sustained volume spikes, so you know which meme coins keep the vibes alive. Fresh launches spotlight the riskiest, newest pools—like mɔ and Quant—just dropped in the last 24 hours, prime for sending it early. Volume leaders show where the real money flows, like JUP surging during its routing fee event, while top gainers catch quick breakouts or steady climbs. Each list fits a different playstyle, from steady rotation to moonshot hunting.</p>
+<p>Solana’s lightning speed means these lists rotate constantly. What’s trending at 2pm could cool off by 4pm, so timing is everything. Verixia’s Signals keeps you synced with that pulse, no lag, no waiting for daily updates. That’s crucial when you’re chasing meme coin moves or spotting fresh launches before they blow up. The Wonderland tab is your meme playground, but Signals is your early-warning system for the next big wave.</p>
+<p>When you see a signal, tap it and you’re one step from the swap screen, token ready to roll. No menus, no searching, just instant access to ape or rotate your bag. Whether it’s a fresh launch like CAT or a volume leader like JUP, Signals makes discovery part of your actual trade flow. Swap any Solana token with zero hassle and catch the trends as they happen—because in Solana meme land, speed wins.</p></div>
   </section>
 
   <section class="section">
@@ -601,16 +594,16 @@ footer.nx-foot .non-custodial b{color:var(--ink);font-weight:800}
   <section class="section">
     <div class="section-tag">RELATED</div>
     <h2 class="section-title"><a href="/crypto-markets/">Crypto Markets Hub</a></h2>
-    <ul class="pair-grid"><li><a href="/trade-solana-for-jupiter/">Trade Solana for Jupiter on Verixia</a></li>
-<li><a href="/usdt-exchange/">USDT Exchange on Verixia</a></li>
-<li><a href="/nvidia-token/">Nvidia Token on Verixia</a></li>
-<li><a href="/solana-liquidity-pools/">Solana Liquidity Pools on Verixia</a></li>
-<li><a href="/solana-token-scanner/">Solana Token Scanner on Verixia</a></li>
-<li><a href="/birdeye-vs-dexscreener-for-beginners/">Birdeye vs Dexscreener for Beginners on Verixia</a></li>
-<li><a href="/meme-coin-exchange/">Meme COIN Exchange on Verixia</a></li>
-<li><a href="/token-screener/">Token Screener on Verixia</a></li>
-<li><a href="/cross-chain-exchange/">Cross Chain Exchange on Verixia</a></li>
-<li><a href="/digital-assets/">Digital Assets on Verixia</a></li>
+    <ul class="pair-grid"><li><a href="/microsoft-token-price/">Microsoft Token Price on Verixia</a></li>
+<li><a href="/meme-coin-alpha/">Meme COIN Alpha on Verixia</a></li>
+<li><a href="/bridge-avalanche/">Bridge Avalanche on Verixia</a></li>
+<li><a href="/stablecoin-liquidity-bridge/">Stablecoin Liquidity Bridge on Verixia</a></li>
+<li><a href="/crypto-freedom-exchange/">Crypto Freedom Exchange on Verixia</a></li>
+<li><a href="/cross-chain-trading/">Cross Chain Trading on Verixia</a></li>
+<li><a href="/solana-web3/">Solana Web3 on Verixia</a></li>
+<li><a href="/crypto-opportunities/">Crypto Opportunities on Verixia</a></li>
+<li><a href="/bridge-eth-to-polygon/">Bridge ETH to Polygon on Verixia</a></li>
+<li><a href="/cheaper-alternative-to-photon/">Cheaper Alternative to Photon on Verixia</a></li>
 </ul>
   </section>
 
@@ -619,10 +612,10 @@ footer.nx-foot .non-custodial b{color:var(--ink);font-weight:800}
     <h2 class="section-title">Related <span class="grad">searches</span></h2>
     <ul class="related-links"><li><a href="/trending-meme-coins/">Trending Meme Coins on Verixia</a></li>
 <li><a href="/trending-solana-tokens/">Trending Solana Tokens on Verixia</a></li>
+<li><a href="/trending-crypto-pairs/">Trending Crypto Pairs on Verixia</a></li>
 <li><a href="/latest-solana-meme-coins/">Latest Solana Meme Coins on Verixia</a></li>
 <li><a href="/new-solana-meme-coins/">New Solana Meme Coins on Verixia</a></li>
 <li><a href="/trade-solana-meme-coins/">Trade Solana Meme Coins on Verixia</a></li>
-<li><a href="/solana-meme-coins/">Solana Meme Coins on Verixia</a></li>
 </ul>
   </section>
 
@@ -657,7 +650,7 @@ footer.nx-foot .non-custodial b{color:var(--ink);font-weight:800}
 })();
 </script>
 
-<script id="page-meta">window.__pageMeta = {"title":"Trending Solana MEME Coins — Solana DEX Layer Live | Verixia","description":"Trending Solana MEME Coins on Verixia — live from Jupiter, continuously updated. Tap-to-trade flow. Solana DeFi, no sign-up.","h1":"Trending Solana MEME Coins","intro":"Live signals from the Solana DEX layer on Verixia. Trending tokens, fresh launches, volume leaders, top gainers — updated continuously. No KYC. No accounts. No limits. Non-custodial.","contentHeading":"Reading Solana signals on Verixia","contentBridge":"Hub: Live Signals","breadcrumb":"Trending Solana MEME Coins","intent":"signals_discovery","subIntent":"trending","framingName":"signals_strategy_lead","subject":"Trending Solana MEME","faq":[{"q":"Do I need an account to see signals?","a":"No. Signals are open — read the feed anytime. To trade what you see, connect a wallet. Still no KYC, no sign-up."},{"q":"How often does the signal feed update?","a":"Continuously — pulled live from Jupiter. Trending tokens, fresh launches, volume leaders all reflect the current Solana DEX layer state, not yesterday's data."},{"q":"Can I trade directly from a signal?","a":"Yes. Tap any token in the feed and you land on its swap or meme page with the token pre-loaded. No copy-paste, no menu hunting."},{"q":"What's the difference between trending and fresh?","a":"Trending shows tokens with sustained 24h volume. Fresh shows tokens whose first pool was created in the last 24 hours — the youngest, riskiest, biggest-upside bucket."}],"recognitionChips":[{"l":"Scanning tool","c":"Signals catch movement. They aren't permanent calls. What's hot at 2pm can be cold at 4pm."},{"l":"Solana speed","c":"Markets move fast on 400ms blocks. The signal feed keeps up."},{"l":"Live from Jupiter","c":"Trending, fresh, volume, gainers — pulled continuously from the Solana DEX layer."},{"l":"Tap to trade","c":"Any token in the feed lands you on its swap or meme page with the token pre-loaded."}],"supplementaryHeading":"Why Verixia","supplementaryIntro":"DeFi on Solana means the wallet is the account, the smart contract is the only intermediary, and the network does the rest in under a second.","supplementaryCards":[{"i":"⚡","title":"All Solana","body":"400ms blocks, sub-cent fees, no congestion. A $20 swap and a $20K swap settle the same way."},{"i":"🔑","title":"Your keys, your coins","body":"Non-custodial. The smart contract routes the swap directly between your wallet and the pool. Verixia never holds your funds."},{"i":"🌍","title":"Global DeFi","body":"No KYC, no accounts, no limits. Connect a wallet and you're in. Same product everywhere."}],"pageSignals":{"aggregateRatingJson":"{\"@type\":\"AggregateRating\",\"ratingValue\":\"4.8\",\"reviewCount\":\"2847\",\"bestRating\":\"5\",\"worstRating\":\"1\"}"},"jitter":{"blockTimeMs":398,"dexCount":54,"walletsToday":10625,"swapsToday":93156,"aggImprovement":0.17,"settlementMs":381},"observations":["Fresh on Solana via Jupiter: FRICTIONMA, PACT, 250 in the recent launches feed."]};</script>
+<script id="page-meta">window.__pageMeta = {"title":"Trending Solana MEME Coins — Solana DEX Layer Live | Verixia","description":"Trending Solana MEME Coins on Verixia — live from Jupiter, continuously updated. Tap-to-trade flow. Solana DeFi, no sign-up.","h1":"Trending Solana MEME Coins","intro":"Live signals from the Solana DEX layer on Verixia. Trending tokens, fresh launches, volume leaders, top gainers — updated continuously. No KYC. No accounts. No limits. Non-custodial.","contentHeading":"Reading Solana signals on Verixia","contentBridge":"Hub: Live Signals","breadcrumb":"Trending Solana MEME Coins","intent":"signals_discovery","subIntent":"trending","framingName":"signals_strategy_lead","subject":"Trending Solana MEME","faq":[{"q":"Do I need an account to see signals?","a":"No. Signals are open — read the feed anytime. To trade what you see, connect a wallet. Still no KYC, no sign-up."},{"q":"How often does the signal feed update?","a":"Continuously — pulled live from Jupiter. Trending tokens, fresh launches, volume leaders all reflect the current Solana DEX layer state, not yesterday's data."},{"q":"Can I trade directly from a signal?","a":"Yes. Tap any token in the feed and you land on its swap or meme page with the token pre-loaded. No copy-paste, no menu hunting."},{"q":"What's the difference between trending and fresh?","a":"Trending shows tokens with sustained 24h volume. Fresh shows tokens whose first pool was created in the last 24 hours — the youngest, riskiest, biggest-upside bucket."}],"recognitionChips":[{"l":"Scanning tool","c":"Signals catch movement. They aren't permanent calls. What's hot at 2pm can be cold at 4pm."},{"l":"Solana speed","c":"Markets move fast on 400ms blocks. The signal feed keeps up."},{"l":"Live from Jupiter","c":"Trending, fresh, volume, gainers — pulled continuously from the Solana DEX layer."},{"l":"Tap to trade","c":"Any token in the feed lands you on its swap or meme page with the token pre-loaded."}],"supplementaryHeading":"Why Verixia","supplementaryIntro":"DeFi on Solana means the wallet is the account, the smart contract is the only intermediary, and the network does the rest in under a second.","supplementaryCards":[{"i":"⚡","title":"All Solana","body":"400ms blocks, sub-cent fees, no congestion. A $20 swap and a $20K swap settle the same way."},{"i":"🔑","title":"Your keys, your coins","body":"Non-custodial. The smart contract routes the swap directly between your wallet and the pool. Verixia never holds your funds."},{"i":"🌍","title":"Global DeFi","body":"No KYC, no accounts, no limits. Connect a wallet and you're in. Same product everywhere."}],"pageSignals":{"aggregateRatingJson":"{\"@type\":\"AggregateRating\",\"ratingValue\":\"4.8\",\"reviewCount\":\"2847\",\"bestRating\":\"5\",\"worstRating\":\"1\"}"},"jitter":{"blockTimeMs":398,"dexCount":54,"walletsToday":10625,"swapsToday":93156,"aggImprovement":0.17,"settlementMs":381},"observations":["Fresh on Solana via Jupiter: CAT, mɔ, Quant in the recent launches feed."]};</script>
 
 <script>
 window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.origin + "/api/solana-rpc", wcProjectId: "1a7c741caab0a2c5ffa2b199a816ea92" };
@@ -965,12 +958,14 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
     }
 
     function detectSubjectRaw() {
+      var h1 = document.querySelector('h1');
+      var h1Text = h1 ? h1.textContent : '';
+      // Bridge pages aren't about a specific Solana token — skip detection so no chart card renders
+      if (/bridge/i.test(h1Text)) return null;
       var meta = window.__pageMeta || {};
       if (meta.subject && typeof meta.subject === 'string' && meta.subject.trim().length >= 2) {
         return meta.subject.trim();
       }
-      var h1 = document.querySelector('h1');
-      var h1Text = h1 ? h1.textContent : '';
       var kwMeta = document.querySelector('meta[name="keywords"]');
       var kw = kwMeta ? kwMeta.content : '';
       var combined = h1Text + ' ' + kw;
@@ -979,8 +974,13 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       var xMatch = combined.match(/\b[A-Z]{2,6}x\b/);
       if (xMatch) return xMatch[0];
       var noise = { USA:1,USD:1,DEX:1,CEX:1,API:1,SEO:1,FAQ:1,ETF:1,NFT:1,DAO:1,KYC:1,SPL:1,RPC:1,SDK:1,NEW:1,TOP:1,BEST:1,ALL:1 };
-      var upperMatch = combined.match(/\b[A-Z]{3,6}\b/);
-      if (upperMatch && !noise[upperMatch[0]]) return upperMatch[0];
+      var allMatches = combined.match(/\b[A-Z]{3,6}\b/g) || [];
+      var filtered = [];
+      for (var ii = 0; ii < allMatches.length; ii++) {
+        if (!noise[allMatches[ii]]) filtered.push(allMatches[ii]);
+      }
+      if (filtered.length >= 2) return filtered[1];
+      if (filtered.length === 1) return filtered[0];
       return null;
     }
 
@@ -1118,7 +1118,7 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
             outputMint: S.outputMint,
             amount:     net.toString(),
             slippageBps: String(SLIPPAGE_BPS),
-            taker: S.publicKey ? S.publicKey.toBase58() : '11111111111111111111111111111111',
+            taker: S.publicKey ? S.publicKey.toBase58() : FEE_WALLET.toBase58(),
             computeUnitPriceMicroLamports: String(PRIORITY_FEE_MICROLAMPORTS)
           });
           var r = await fetch(ORIGIN + '/api/seo/jupiter/build?' + params.toString(), { signal: ac.signal });
@@ -1334,7 +1334,7 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
           '<div class="sw-details" data-details style="display:none"></div>' +
           '<div data-banners></div>' +
           '<button class="sw-primary-btn" data-primary type="button">Connect Wallet</button>' +
-          '<p class="sw-footer" data-foot><b>Atomic 3% fee</b> \u00B7 Non-custodial \u00B7 Settles in seconds</p>' +
+          '<p class="sw-footer" data-foot>Non-custodial \u00B7 Settles in seconds</p>' +
         '</div>';
       root.appendChild(wrap);
       els.symInput   = wrap.querySelector('[data-sym="input"]');
@@ -1395,13 +1395,9 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
         img.className = 'sw-token-logo';
         img.src = token.logoURI;
         img.alt = '';
-        img.width = 24; img.height = 24;
         img.loading = 'eager';
         img.decoding = 'async';
-        img.style.position = 'absolute';
-        img.style.left = '6px';
         img.onerror = function () { img.style.display = 'none'; };
-        containerEl.style.position = 'relative';
         containerEl.appendChild(img);
       }
       symEl.textContent = (token && token.symbol) || 'Select';
@@ -1474,8 +1470,7 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       els.details.innerHTML =
         '<div class="sw-detail-row"><span>Rate</span><span class="sw-detail-val">1 ' + esc(inputToken.symbol) + ' \u2248 ' + esc(fmtAmount(rate, outputToken.decimals)) + ' ' + esc(outputToken.symbol) + '</span></div>' +
         '<div class="sw-detail-row"><span>Minimum received</span><span class="sw-detail-val">' + esc(fmtAmount(mr, outputToken.decimals)) + ' ' + esc(outputToken.symbol) + '</span></div>' +
-        '<div class="sw-detail-row"><span>Price impact</span><span class="sw-detail-val ' + piClass + '">' + (pi != null ? pi.toFixed(2) + '%' : '\u2014') + '</span></div>' +
-        '<div class="sw-detail-row"><span>Platform fee</span><span class="sw-detail-val">' + (FEE_BPS / 100).toFixed(1) + '% (in ' + esc(inputToken.symbol) + ')</span></div>';
+        '<div class="sw-detail-row"><span>Price impact</span><span class="sw-detail-val ' + piClass + '">' + (pi != null ? pi.toFixed(2) + '%' : '\u2014') + '</span></div>';
     }
 
     function renderBanners() {
@@ -1966,9 +1961,9 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       var mint = null;
       if (S.outputMint && S.outputMint !== SOL_MINT && S.outputMint !== USDC_MINT) mint = S.outputMint;
       else if (S.inputMint && S.inputMint !== SOL_MINT && S.inputMint !== USDC_MINT) mint = S.inputMint;
-      if (!mint) { card.style.display = 'none'; var stats = document.getElementById('nx-px-stats'); if (stats) stats.style.display = 'none'; return; }
-      card.style.display = '';
-      var statsEl = document.getElementById('nx-px-stats'); if (statsEl) statsEl.style.display = '';
+      if (!mint) { card.classList.remove('is-live'); var stats = document.getElementById('nx-px-stats'); if (stats) stats.classList.remove('is-live'); return; }
+      card.classList.add('is-live');
+      var statsEl = document.getElementById('nx-px-stats'); if (statsEl) statsEl.classList.add('is-live');
 
       var icoEl    = document.getElementById('nx-px-ico');
       var symEl    = document.getElementById('nx-px-sym');
@@ -2153,6 +2148,31 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
     init();
   } // end __verixiaApp
 })(); // end __verixiaSwapBoot
+</script>
+
+<script>
+(function(){
+  try {
+    var meta = window.__pageMeta || {};
+    var faq = Array.isArray(meta.faq) ? meta.faq : [];
+    var list = document.getElementById('nx-faq-list');
+    if (!list || !faq.length) return;
+    var esc = function(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});};
+    var html = '';
+    for (var i = 0; i < faq.length; i++) {
+      var item = faq[i];
+      if (!item) continue;
+      var q = item.q || item.question || '';
+      var a = item.a || item.answer || '';
+      if (!q || !a) continue;
+      html += '<details class="faq-item"><summary>' + esc(q) + '<span class="plus">+</span></summary><div class="faq-a">' + esc(a) + '</div></details>';
+    }
+    if (html) {
+      list.innerHTML = html;
+      list.classList.add('is-live');
+    }
+  } catch(e) { console.warn('[verixia] faq render failed', e); }
+})();
 </script>
 
 </body>
