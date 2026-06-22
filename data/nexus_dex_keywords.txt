@@ -1,35 +1,5 @@
 crypto exchange
 crypto liquidity
-crypto monitoring
-crypto movers
-crypto opportunities
-crypto opportunity scanner
-crypto pair scanner
-crypto platform
-crypto project analysis
-crypto radar
-crypto research
-crypto research tool
-crypto risk analysis
-crypto risk checker
-crypto routing engine
-crypto safety checker
-crypto scam checker
-crypto scanner
-crypto scanner tool
-crypto screener
-crypto security analysis
-crypto sentiment tracker
-crypto staking
-crypto swaps
-crypto tracker
-crypto trading
-crypto trading signals
-crypto trend scanner
-crypto trends
-crypto trust score
-crypto wallet analytics
-crypto wallet swap
 crypto watchlist
 crypto whale tracker
 crypto without id
