@@ -1,13 +1,26 @@
-/** 
+/**
  * NEXUS · SolToBtcChainflip.jsx
- * SOL → Native BTC via Chainflip (single-signature, two-tx atomic flow).
- * 
- * Same Wonderland-lite identity as SolToBtc.jsx.
+ * SOL → Native BTC via Chainflip (single-signature, single-tx atomic flow).
+ *
+ * Fee model — ADDITIVE:
+ *   User enters X SOL → the FULL X SOL bridges to BTC (user receives BTC
+ *   priced off X SOL). On top, 3% of X SOL is charged separately to the
+ *   user's wallet and routed to FEE_WALLET. Total wallet debit = X × 1.03.
  *
  * Chainflip flow:
  *   - quote   → /api/chainflip/quote?amount=<lamports>
- *   - channel → /api/chainflip/channel  (POST quote+addrs)
+ *   - channel → /api/chainflip/channel  (POST quote+addrs, slippage hint 3%)
  *   - status  → /api/chainflip/status?id=<depositChannelId>
+ *
+ * Submit flow (one tx, sim-then-sign):
+ *   1. Reuse the existing quote (NO refetch, NO requote).
+ *   2. Open Chainflip deposit channel.
+ *   3. Build a single VersionedTransaction containing both:
+ *        ix-1: platform fee (3% of bridge amount) in SOL → FEE_WALLET
+ *        ix-2: full bridge transfer to channel.depositAddress
+ *   4. Simulate the EXACT tx we're about to sign.
+ *   5. Hand the same tx to signAllTransactions([tx]).
+ *   6. Send raw, then poll getSignatureStatuses (decoupled from blockhash).
  */
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
@@ -173,6 +186,8 @@ const STBTC_CSS = `
 .ax-route-row .v{color:var(--ink);font-weight:700;font-variant-numeric:tabular-nums}
 .ax-route-row .v.blue{color:var(--blue)}
 .ax-route-row .v.btc{color:#cc6e00}
+.ax-route-row.total{margin-top:6px;padding-top:8px;border-top:1px solid var(--hairline)}
+.ax-route-row.total .v{font-size:12px}
 
 .ax-banner{margin-top:14px;padding:12px 14px;border-radius:14px;display:flex;align-items:center;gap:10px;font-size:12px;font-weight:600;font-family:"Space Grotesk",sans-serif}
 .ax-banner.info{background:rgba(79,125,255,.08);border:1px solid var(--border);color:var(--blue)}
@@ -204,13 +219,18 @@ const STBTC_CSS = `
 // CONFIG
 // =====================================================================
 const FEE_WALLET    = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
-const PLATFORM_BPS  = 300;
-const MIN_SOL       = 0.2;
+const PLATFORM_BPS  = 300;      // 3% fee, charged ON TOP of the bridge amount
+const MIN_SOL       = 0.2;      // applies to the BRIDGE amount (= user input)
 const MAX_SOL       = 50;
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const SATS_PER_BTC     = 1e8;
+const TX_FEE_RESERVE   = 500_000;       // ~0.0005 SOL kept for Solana tx fees
 const MAX_RESERVE_LAMPORTS = 10_000_000;
+
+const SLIPPAGE_PCT           = 3;          // client-side hint to server (3%)
+const PRIORITY_MICROLAMPORTS = 100_000;    // doubled from 50k
+const COMPUTE_UNIT_LIMIT     = 200_000;
 
 // ── RPC ──────────────────────────────────────────────────────────────
 // Same-origin server proxy → Alchemy mainnet. The server (server.js)
@@ -238,6 +258,29 @@ const rpcRace = (label, op, commitment = 'confirmed') => {
   });
 };
 
+// Poll signature status — decoupled from blockhash validity window.
+async function pollSignatureStatus(signature, { timeoutMs = 90_000, intervalMs = 1_500 } = {}) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const res = await rpcRace(
+        'getSignatureStatuses',
+        c => c.getSignatureStatuses([signature], { searchTransactionHistory: true }),
+      );
+      const s = res?.value?.[0];
+      if (s) {
+        if (s.err) throw new Error('Transaction failed on-chain: ' + JSON.stringify(s.err));
+        const cs = s.confirmationStatus;
+        if (cs === 'confirmed' || cs === 'finalized') return { ok: true };
+      }
+    } catch (e) {
+      if (String(e?.message || '').includes('Transaction failed on-chain')) throw e;
+    }
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+  throw new Error('Confirmation timed out — check Solscan for tx ' + signature);
+}
+
 // =====================================================================
 // UTILS
 // =====================================================================
@@ -251,6 +294,10 @@ const fmtUsd = (n, d = 2) => {
   return '$' + n.toFixed(4);
 };
 const fmtBtc = (n, d = 8) => {
+  if (n == null || !Number.isFinite(Number(n))) return '0';
+  return Number(n).toFixed(d).replace(/0+$/, '').replace(/\.$/, '');
+};
+const fmtSol = (n, d = 4) => {
   if (n == null || !Number.isFinite(Number(n))) return '0';
   return Number(n).toFixed(d).replace(/0+$/, '').replace(/\.$/, '');
 };
@@ -313,13 +360,13 @@ async function cfQuote({ lamports }) {
   return json.quote;
 }
 
-async function cfChannel({ quote, destAddress, refundAddress }) {
+async function cfChannel({ quote, destAddress, refundAddress, slippagePct }) {
   const res = await fetchWithTimeout(
     '/api/chainflip/channel',
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ quote, destAddress, refundAddress }),
+      body: JSON.stringify({ quote, destAddress, refundAddress, slippagePct }),
     },
     20_000,
   );
@@ -449,7 +496,7 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
     if (btcAddr && isValidBtcAddr(btcAddr)) ls.set(LS_KEY_BTC, btcAddr);
   }, [btcAddr]);
 
-  // Quote.
+  // Quote — bridge amount = full user input. Fee = 3% on top (separate).
   useEffect(() => {
     const n = parseFloat(solAmount);
     if (!Number.isFinite(n) || n <= 0)     { setQuote(null); return; }
@@ -461,18 +508,18 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
 
     const t = setTimeout(async () => {
       try {
-        const grossLamports    = BigInt(Math.round(n * LAMPORTS_PER_SOL));
-        const platformLamports = (grossLamports * BigInt(PLATFORM_BPS)) / 10000n;
-        const swapLamports     = grossLamports - platformLamports;
-        if (swapLamports <= 0n) throw new Error('Amount too small');
+        const bridgeLamports   = BigInt(Math.round(n * LAMPORTS_PER_SOL));
+        const platformLamports = (bridgeLamports * BigInt(PLATFORM_BPS)) / 10000n;
+        const totalLamports    = bridgeLamports + platformLamports;
+        if (bridgeLamports <= 0n) throw new Error('Amount too small');
 
-        const cf = await cfQuote({ lamports: swapLamports });
+        const cf = await cfQuote({ lamports: bridgeLamports });
         if (seq !== quoteSeq.current) return;
         setQuote({
           cf,
-          grossLamports,
-          platformLamports,
-          swapLamports,
+          bridgeLamports,    // full amount sent to Chainflip
+          platformLamports,  // 3% fee, additional outflow
+          totalLamports,     // bridge + fee, total wallet debit (excl. tx reserve)
           isPreview: !userHasAddr,
           fetchedAt: Date.now(),
         });
@@ -527,15 +574,26 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
   const expectedBtcUsd = expectedBtc * btcPrice;
 
   const liveSolToBtc = (solPrice > 0 && btcPrice > 0) ? solPrice / btcPrice : 0;
-  const dispSlippage = Number(quote?.cf?.recommendedSlippageTolerancePercent ?? 3);
+  // Display the slippage we actually hint to the server — hardcoded 3%.
+  const dispSlippage = SLIPPAGE_PCT;
 
+  // Derived display values for the route panel.
+  const feeSol    = quote ? Number(quote.platformLamports) / LAMPORTS_PER_SOL : 0;
+  const totalSol  = quote ? Number(quote.totalLamports)    / LAMPORTS_PER_SOL : 0;
+  const totalUsd  = solPrice > 0 ? totalSol * solPrice : 0;
+
+  // MAX — must fit (bridge + 3% fee + tx reserve) into balance.
+  //   balance ≥ input × 1.03 + reserve
+  //   input_max = (balance - reserve) / 1.03
   const handleMax = () => {
     if (solBalance == null) return;
-    const usable = Math.max(0, solBalance - MAX_RESERVE_LAMPORTS);
-    const sol = usable / LAMPORTS_PER_SOL;
-    if (sol < MIN_SOL) setSolAmount(MIN_SOL.toString());
-    else if (sol > MAX_SOL) setSolAmount(MAX_SOL.toString());
-    else setSolAmount(sol.toFixed(4).replace(/0+$/, '').replace(/\.$/, ''));
+    const reserve     = TX_FEE_RESERVE + MAX_RESERVE_LAMPORTS;
+    const usable      = Math.max(0, solBalance - reserve);
+    const feeMult     = 1 + (PLATFORM_BPS / 10000);
+    const maxInputSol = (usable / LAMPORTS_PER_SOL) / feeMult;
+    if (maxInputSol < MIN_SOL)      setSolAmount(MIN_SOL.toString());
+    else if (maxInputSol > MAX_SOL) setSolAmount(MAX_SOL.toString());
+    else                            setSolAmount(maxInputSol.toFixed(4).replace(/0+$/, '').replace(/\.$/, ''));
   };
 
   const handleSubmit = async () => {
@@ -544,12 +602,12 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
     if (!quote || quote.isPreview) { setError('Enter a valid BTC address'); return; }
     if (!addrValid) { setError('Invalid BTC address'); return; }
 
-    // Only enforce client-side balance check when we actually know it.
+    // Balance check: bridge + 3% fee + tx reserve, only when balance is known.
     if (balanceKnown) {
-      const TX_FEE_RESERVE = 500_000n;
-      const totalNeeded = BigInt(quote.platformLamports) + BigInt(quote.swapLamports) + TX_FEE_RESERVE;
+      const totalNeeded = BigInt(quote.totalLamports) + BigInt(TX_FEE_RESERVE);
       if (solBalance != null && BigInt(solBalance) < totalNeeded) {
-        setError('Not enough SOL for swap + tx fees');
+        const need = (Number(totalNeeded) - solBalance) / LAMPORTS_PER_SOL;
+        setError(`Not enough SOL — need ~${need.toFixed(4)} more in your wallet`);
         return;
       }
     }
@@ -557,30 +615,40 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
     setError('');
     setChannelId(null);
     setBridgeStatus(null);
-    setSubmit({ kind: 'loading', message: 'Refreshing route…' });
+    setSubmit({ kind: 'loading', message: 'Opening deposit channel…' });
 
     try {
-      const freshQuote = await cfQuote({ lamports: quote.swapLamports });
-
-      setSubmit({ kind: 'loading', message: 'Opening deposit channel…' });
+      // Reuse existing quote (no refetch, no requote). Override slippage on
+      // the quote so the server's `quote.recommendedSlippageTolerancePercent`
+      // read picks up our hint; also pass slippagePct in the body for
+      // handlers that read it explicitly.
+      const quoteForChannel = {
+        ...quote.cf,
+        recommendedSlippageTolerancePercent: SLIPPAGE_PCT,
+      };
       const channel = await cfChannel({
-        quote:         freshQuote,
+        quote:         quoteForChannel,
         destAddress:   btcAddr,
         refundAddress: publicKey.toString(),
+        slippagePct:   SLIPPAGE_PCT,
       });
       const vault = new PublicKey(channel.depositAddress);
       const owner = publicKey;
 
-      setSubmit({ kind: 'loading', message: 'Building transactions…' });
+      setSubmit({ kind: 'loading', message: 'Building transaction…' });
       const { blockhash, lastValidBlockHeight } = await rpcRace(
         'getLatestBlockhash',
-        c => c.getLatestBlockhash('confirmed'),
+        c => c.getLatestBlockhash('finalized'),
       );
 
-      const priorityIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 });
-      const cuLimitIx  = ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 });
+      const priorityIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_MICROLAMPORTS });
+      const cuLimitIx  = ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_UNIT_LIMIT });
 
-      const feeMsg = new TransactionMessage({
+      // ── Single transaction: fee + bridge in one shot ────────────────
+      // Fee first so the user has paid for service before the bridge IX
+      // touches Chainflip's deposit account; both succeed-or-fail atomically.
+      // Bridge amount = full user input. Fee is ADDITIONAL.
+      const msg = new TransactionMessage({
         payerKey:        owner,
         recentBlockhash: blockhash,
         instructions: [
@@ -591,51 +659,46 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
             toPubkey:   FEE_WALLET,
             lamports:   Number(quote.platformLamports),
           }),
-        ],
-      }).compileToV0Message();
-      const feeTx = new VersionedTransaction(feeMsg);
-
-      const bridgeMsg = new TransactionMessage({
-        payerKey:        owner,
-        recentBlockhash: blockhash,
-        instructions: [
-          cuLimitIx,
-          priorityIx,
           SystemProgram.transfer({
             fromPubkey: owner,
             toPubkey:   vault,
-            lamports:   Number(quote.swapLamports),
+            lamports:   Number(quote.bridgeLamports),
           }),
         ],
       }).compileToV0Message();
-      const bridgeTx = new VersionedTransaction(bridgeMsg);
+      const tx = new VersionedTransaction(msg);
 
+      // ── Simulate the EXACT tx we're about to sign ───────────────────
+      setSubmit({ kind: 'loading', message: 'Simulating transaction…' });
+      const sim = await rpcRace('simulateTransaction', c => c.simulateTransaction(tx, {
+        commitment:             'confirmed',
+        sigVerify:              false,
+        replaceRecentBlockhash: false,
+      }));
+      if (sim?.value?.err) {
+        const logs = (sim.value.logs || []).slice(-6).join(' | ');
+        throw new Error('Simulation failed: ' + JSON.stringify(sim.value.err) + (logs ? ' — ' + logs : ''));
+      }
+
+      // ── Sign the SAME tx that simulated cleanly ─────────────────────
       setSubmit({ kind: 'loading', message: 'Confirm in your wallet…' });
-      const [signedFee, signedBridge] = await signAllTransactions([feeTx, bridgeTx]);
+      const [signedTx] = await signAllTransactions([tx]);
 
-      setSubmit({ kind: 'loading', message: 'Sending fee tx…' });
-      const feeSerialized = signedFee.serialize();
-      const feeSig = await rpcRace('sendFee', c => c.sendRawTransaction(feeSerialized, {
-        skipPreflight: false, maxRetries: 3,
+      // ── Send and poll status (decoupled from blockhash validity) ────
+      setSubmit({ kind: 'loading', message: 'Sending transaction…' });
+      const serialized = signedTx.serialize();
+      const sig = await rpcRace('sendTx', c => c.sendRawTransaction(serialized, {
+        skipPreflight: false,
+        maxRetries:    5,
       }));
 
-      setSubmit({ kind: 'loading', message: 'Confirming fee…' });
-      const feeConfirm = await connection.confirmTransaction(
-        { signature: feeSig, blockhash, lastValidBlockHeight },
-        'confirmed',
-      );
-      if (feeConfirm?.value?.err) throw new Error('Fee tx failed — bridge not sent');
+      setSubmit({ kind: 'loading', message: 'Confirming on Solana…' });
+      await pollSignatureStatus(sig, { timeoutMs: 90_000, intervalMs: 1_500 });
 
-      setSubmit({ kind: 'loading', message: 'Sending bridge tx…' });
-      const bridgeSerialized = signedBridge.serialize();
-      const sig = await rpcRace('sendBridge', c => c.sendRawTransaction(bridgeSerialized, {
-        skipPreflight: false, maxRetries: 3,
-      }));
-
-      console.log('[sol→btc cf] fee', feeSig, 'bridge', sig, 'channel', channel.depositChannelId);
+      console.log('[sol→btc cf] tx', sig, 'channel', channel.depositChannelId);
 
       setChannelId(channel.depositChannelId);
-      setBridgeStatus({ label: 'Bridge submitted · waiting for Chainflip to observe…', done: false });
+      setBridgeStatus({ label: 'Bridge confirmed · waiting for Chainflip to observe…', done: false });
       setSubmit({ kind: 'success', message: `Submitted · ${sig.slice(0, 8)}…` });
 
       setSolAmount(''); setQuote(null);
@@ -717,7 +780,7 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
         <div className="ax-card">
           <div className="ax-io">
             <div className="ax-io-head">
-              <span className="ax-io-label">You Send</span>
+              <span className="ax-io-label">You Bridge</span>
               <div className="ax-io-meta">{renderBalanceMeta()}</div>
             </div>
             <div className="ax-io-row">
@@ -794,14 +857,18 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
 
           {quote && (
             <div className="ax-route">
-              <div className="ax-route-row"><span className="k">You send</span><span className="v">{n.toFixed(4)} SOL</span></div>
-              <div className="ax-route-row"><span className="k">Bridged</span><span className="v">{(Number(quote.swapLamports)/LAMPORTS_PER_SOL).toFixed(4)} SOL</span></div>
+              <div className="ax-route-row"><span className="k">Bridge amount</span><span className="v">{fmtSol(n, 4)} SOL</span></div>
+              <div className="ax-route-row"><span className="k">Platform fee (3%)</span><span className="v">{fmtSol(feeSol, 4)} SOL</span></div>
               <div className="ax-route-row"><span className="k">Route</span><span className="v blue">Chainflip · Native L1</span></div>
               <div className="ax-route-row"><span className="k">Max slippage</span><span className="v">{dispSlippage.toFixed(2)}%</span></div>
               {quote.cf?.estimatedDurationSeconds != null && (
                 <div className="ax-route-row"><span className="k">Est. delivery</span><span className="v">~{Math.max(1, Math.round(Number(quote.cf.estimatedDurationSeconds) / 60))} min</span></div>
               )}
               <div className="ax-route-row"><span className="k">You receive</span><span className="v btc">{fmtBtc(expectedBtc, 8)} BTC</span></div>
+              <div className="ax-route-row total">
+                <span className="k">Total wallet debit</span>
+                <span className="v">{fmtSol(totalSol, 4)} SOL{totalUsd > 0 ? ` · ${fmtUsd(totalUsd, 2)}` : ''}</span>
+              </div>
             </div>
           )}
 
@@ -838,7 +905,7 @@ export default function SolToBtcChainflip({ onConnectWallet }) {
             </button>
           )}
 
-          <div className="ax-cta-footer">One signature · Two txs · Native BTC via Chainflip</div>
+          <div className="ax-cta-footer">One signature · One tx · Native BTC via Chainflip</div>
         </div>
 
         <div className="ax-powered">
