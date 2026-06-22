@@ -778,3 +778,33 @@ swap msol to w
 swap msol to wen
 swap msol to wif
 swap mumu on solana
+swap mumu to sol solana
+swap mumu to usdc solana
+swap mumu to usdt solana
+swap myro on solana
+swap myro to sol solana
+swap myro to usdc solana
+swap myro to usdt solana
+swap newly listed solana token first
+swap op to sol
+swap pengu for act solana
+swap pengu for ai16z solana
+swap pengu for bonk solana
+swap pengu for cloud solana
+swap pengu for drift solana
+swap pengu for fartcoin solana
+swap pengu for goat solana
+swap pengu for grass solana
+swap pengu for hnt solana
+swap pengu for io solana
+swap pengu for jitosol solana
+swap pengu for jto solana
+swap pengu for jup solana
+swap pengu for kmno solana
+swap pengu for mew solana
+swap pengu for mnde solana
+swap pengu for msol solana
+swap pengu for pnut solana
+swap pengu for popcat solana
+swap pengu for pyth solana
+swap pengu for ray solana
