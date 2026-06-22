@@ -165,6 +165,7 @@ crypto dashboard
 crypto discovery platform
 crypto due diligence
 crypto ecosystem
+crypto exchange
 crypto exchange alternative
 crypto exchange without kyc
 crypto fraud detection
@@ -175,6 +176,7 @@ crypto insights
 crypto intelligence
 crypto interoperability
 crypto launch tracker
+crypto liquidity
 crypto liquidity app
 crypto market scanner
 crypto marketplace
@@ -215,6 +217,7 @@ crypto without sign up
 crypto without verification
 crypto worldwide
 decentralized crypto platform
+decentralized exchange
 decentralized exchange no kyc
 decentralized finance
 decentralized finance platform
@@ -485,6 +488,7 @@ swap base to sol
 swap bnb to sol
 swap bonk to sol
 swap btc to sol
+swap crypto
 swap crypto without account
 swap crypto without kyc
 swap crypto without limits
@@ -1228,3 +1232,29 @@ swap sol to jto solana
 swap sol to jup
 swap sol to jup solana
 swap sol to jupiter
+swap sol to kas
+swap sol to kmno
+swap sol to kmno solana
+swap sol to link
+swap sol to melania
+swap sol to meme coin
+swap sol to mew
+swap sol to mew solana
+swap sol to michi
+swap sol to mkr
+swap sol to mnde
+swap sol to mnde solana
+swap sol to moo deng
+swap sol to moodeng solana
+swap sol to mother solana
+swap sol to msol
+swap sol to msol solana
+swap sol to mumu solana
+swap sol to myro solana
+swap sol to near
+swap sol to op
+swap sol to optimism
+swap sol to pengu
+swap sol to pengu solana
+swap sol to pepe
+swap sol to pnut
