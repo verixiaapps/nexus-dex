@@ -1,33 +1,3 @@
-token safety checker
-token safety score
-token scam checker
-token scanner
-token screener
-token swaps
-token tracker
-token transparency
-token trend tracker
-token trends
-token trust score
-token verification
-token volume tracker
-top meme coins
-top solana swaps
-top solana token swaps
-top solana tokens
-top wallets solana
-track profitable wallets
-trade altcoins
-trade crypto anonymously
-trade crypto globally
-trade crypto without registration
-trade meme coins
-trade meme coins instantly
-trade solana
-trade solana for aave
-trade solana for ai16z
-trade solana for bitcoin
-trade solana for bonk
 trade solana for chainlink
 trade solana for dogecoin
 trade solana for drift
