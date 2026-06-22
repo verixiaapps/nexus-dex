@@ -2,36 +2,6 @@ crypto exchange
 crypto liquidity
 decentralized exchange
 swap crypto
-swap mnde to bonk
-swap mnde to cloud
-swap mnde to drift
-swap mnde to fartcoin
-swap mnde to goat
-swap mnde to grass
-swap mnde to hnt
-swap mnde to io
-swap mnde to jitosol
-swap mnde to jto
-swap mnde to jup
-swap mnde to kmno
-swap mnde to mew
-swap mnde to msol
-swap mnde to pengu
-swap mnde to pnut
-swap mnde to popcat
-swap mnde to pyth
-swap mnde to ray
-swap mnde to render
-swap mnde to sol
-swap mnde to sol solana
-swap mnde to tnsr
-swap mnde to usdc solana
-swap mnde to usdt solana
-swap mnde to w
-swap mnde to wen
-swap mnde to wif
-swap moo deng to sol
-swap moodeng on solana
 swap mother on solana
 swap msol for act solana
 swap msol for ai16z solana
