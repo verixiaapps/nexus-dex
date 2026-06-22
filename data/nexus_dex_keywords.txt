@@ -2,36 +2,6 @@ crypto exchange
 crypto liquidity
 decentralized exchange
 swap crypto
-swap pnut to cloud
-swap pnut to drift
-swap pnut to fartcoin
-swap pnut to goat
-swap pnut to grass
-swap pnut to hnt
-swap pnut to io
-swap pnut to jitosol
-swap pnut to jto
-swap pnut to jup
-swap pnut to kmno
-swap pnut to mew
-swap pnut to mnde
-swap pnut to msol
-swap pnut to pengu
-swap pnut to popcat
-swap pnut to pyth
-swap pnut to ray
-swap pnut to render
-swap pnut to sol
-swap pnut to sol solana
-swap pnut to tnsr
-swap pnut to usdc solana
-swap pnut to usdt solana
-swap pnut to w
-swap pnut to wen
-swap pnut to wif
-swap polygon to solana
-swap ponke on solana
-swap ponke to sol
 swap ponke to sol solana
 swap ponke to usdc solana
 swap ponke to usdt solana
