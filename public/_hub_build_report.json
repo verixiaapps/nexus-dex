@@ -1,54 +1,15 @@
 {
-  "keywords_loaded": 52,
+  "keywords_loaded": 1956,
   "hubs_built": 11,
-  "validation_warnings": 7,
+  "validation_warnings": 2,
   "validation_details": [
     {
-      "hub_slug": "live-signals",
-      "matched_keywords": 0,
-      "linked_pages": 0,
-      "errors": [
-        "no linked child pages"
-      ]
-    },
-    {
       "hub_slug": "brand-tokens",
-      "matched_keywords": 0,
+      "matched_keywords": 1,
       "linked_pages": 0,
       "errors": [
-        "no linked child pages"
-      ]
-    },
-    {
-      "hub_slug": "solana-bridges",
-      "matched_keywords": 0,
-      "linked_pages": 0,
-      "errors": [
-        "no linked child pages"
-      ]
-    },
-    {
-      "hub_slug": "wallet-trading",
-      "matched_keywords": 0,
-      "linked_pages": 0,
-      "errors": [
-        "no linked child pages"
-      ]
-    },
-    {
-      "hub_slug": "whale-tracking",
-      "matched_keywords": 0,
-      "linked_pages": 0,
-      "errors": [
-        "no linked child pages"
-      ]
-    },
-    {
-      "hub_slug": "token-launch",
-      "matched_keywords": 0,
-      "linked_pages": 0,
-      "errors": [
-        "no linked child pages"
+        "no linked child pages",
+        "matched keywords exist but no child pages were found on disk"
       ]
     },
     {
