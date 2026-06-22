@@ -1,170 +1,178 @@
-name: SEO Slug Diagnostic
+name: React #130 Render Error Diagnostic
 
 on:
-  workflow_dispatch:
-    inputs:
-      slug:
-        description: 'Slug to test end-to-end'
-        required: false
-        default: 'amazon-stock-token'
+ workflow_dispatch:
 
 jobs:
-  diagnose:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+ diagnose:
+   runs-on: ubuntu-latest
+   timeout-minutes: 20
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+   steps:
+     - name: Checkout
+       uses: actions/checkout@v4
 
-      - name: Setup Node 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
+     - name: Setup Node 22
+       uses: actions/setup-node@v4
+       with:
+         node-version: '22'
 
-      - name: Phase 1 — Verify file exists in public/
-        id: phase1
-        run: |
-          SLUG="${{ github.event.inputs.slug || 'amazon-stock-token' }}"
-          echo "Testing slug: $SLUG"
-          echo "SLUG=$SLUG" >> $GITHUB_ENV
-          PUBLIC_FILE="public/$SLUG/index.html"
-          if [ -f "$PUBLIC_FILE" ]; then
-            SIZE=$(wc -c < "$PUBLIC_FILE")
-            echo "PUBLIC_EXISTS=true" >> $GITHUB_ENV
-            echo "PUBLIC_SIZE=$SIZE" >> $GITHUB_ENV
-            echo "✅ $PUBLIC_FILE exists ($SIZE bytes)"
-          else
-            echo "PUBLIC_EXISTS=false" >> $GITHUB_ENV
-            echo "❌ $PUBLIC_FILE does NOT exist"
-          fi
-          PUBLIC_TOTAL=$(find public -maxdepth 1 -mindepth 1 -type d | wc -l)
-          echo "PUBLIC_TOTAL=$PUBLIC_TOTAL" >> $GITHUB_ENV
-          echo "public/ has $PUBLIC_TOTAL subdirectories total"
+     - name: Phase 1 — npm install
+       run: npm install --legacy-peer-deps
 
-      - name: Phase 2 — npm install
-        run: npm install --legacy-peer-deps
+     - name: Phase 2 — Install Puppeteer
+       run: npm install --no-save puppeteer
 
-      - name: Phase 3 — Run actual Railway build command
-        run: npm run build:all
-        env:
-          CI: 'false'
-          NODE_OPTIONS: '--max-old-space-size=4096'
+     - name: Phase 3 — Start React dev server (unminified errors)
+       run: |
+         npm start > dev-server.log 2>&1 &
+         echo "DEV_PID=$!" >> $GITHUB_ENV
+         echo "Dev server PID: $!"
+       env:
+         CI: 'false'
+         BROWSER: 'none'
+         PORT: '3000'
+         NODE_OPTIONS: '--max-old-space-size=4096'
 
-      - name: Phase 4 — Verify build/ output
-        run: |
-          if [ ! -d build ]; then
-            echo "::error::build/ does not exist after build"
-            exit 1
-          fi
-          BUILD_FILE="build/$SLUG/index.html"
-          if [ -f "$BUILD_FILE" ]; then
-            SIZE=$(wc -c < "$BUILD_FILE")
-            echo "BUILD_EXISTS=true" >> $GITHUB_ENV
-            echo "BUILD_SIZE=$SIZE" >> $GITHUB_ENV
-            echo "✅ $BUILD_FILE exists ($SIZE bytes)"
-          else
-            echo "BUILD_EXISTS=false" >> $GITHUB_ENV
-            echo "❌ $BUILD_FILE does NOT exist after build"
-          fi
-          BUILD_TOTAL=$(find build -maxdepth 1 -mindepth 1 -type d | wc -l)
-          echo "BUILD_TOTAL=$BUILD_TOTAL" >> $GITHUB_ENV
-          echo "build/ has $BUILD_TOTAL subdirectories total"
+     - name: Phase 4 — Wait for webpack compile
+       run: |
+         echo "Waiting for dev server..."
+         for i in $(seq 1 60); do
+           STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000 || echo "000")
+           if echo "$STATUS" | grep -q "200\|304"; then
+             echo "DEV_READY=true" >> $GITHUB_ENV
+             echo "✅ Dev server ready after ${i}s (HTTP $STATUS)"
+             break
+           fi
+           if [ "$i" = "60" ]; then
+             echo "DEV_READY=false" >> $GITHUB_ENV
+             echo "❌ Dev server never came up"
+           fi
+           sleep 2
+         done
 
-          # diff
-          comm -23 \
-            <(find public -maxdepth 1 -mindepth 1 -type d -printf "%f\n" | sort) \
-            <(find build  -maxdepth 1 -mindepth 1 -type d -printf "%f\n" | sort) \
-            > missing.txt
-          MISSING=$(wc -l < missing.txt)
-          echo "MISSING_COUNT=$MISSING" >> $GITHUB_ENV
+     - name: Phase 5 — Capture React error with Puppeteer
+       if: env.DEV_READY == 'true'
+       run: |
+         node << 'SCRIPT'
+         const puppeteer = require('puppeteer');
 
-      - name: Phase 5 — Boot server.js & curl the slug
-        if: env.BUILD_EXISTS == 'true'
-        run: |
-          # Start server in background
-          PORT=3001 node server.js > server.log 2>&1 &
-          SERVER_PID=$!
-          echo "Server PID: $SERVER_PID"
+         (async () => {
+           const browser = await puppeteer.launch({
+             args: ['--no-sandbox', '--disable-setuid-sandbox'],
+             headless: 'new',
+           });
 
-          # Wait for it to come up
-          for i in 1 2 3 4 5 6 7 8 9 10; do
-            if curl -s -o /dev/null http://localhost:3001/health; then
-              echo "✅ Server up after ${i}s"
-              break
-            fi
-            sleep 1
-          done
+           const page = await browser.newPage();
+           const errors = [];
+           const logs  = [];
 
-          # Curl the slug
-          echo ""
-          echo "=== curl /$SLUG ==="
-          RESP=$(curl -s http://localhost:3001/$SLUG | head -c 500)
-          echo "$RESP"
-          echo ""
+           page.on('console', msg => {
+             const t = msg.text();
+             logs.push('[' + msg.type().toUpperCase() + '] ' + t);
+             if (msg.type() === 'error' || msg.type() === 'warning') errors.push({ type: msg.type(), text: t });
+           });
+           page.on('pageerror', err => {
+             errors.push({ type: 'pageerror', text: err.message });
+             logs.push('[PAGEERROR] ' + err.message);
+           });
 
-          # Check if response is SEO HTML or React shell
-          if echo "$RESP" | grep -q "$SLUG\|AMZNx\|Brand Token\|application/ld+json"; then
-            echo "SERVE_RESULT=seo" >> $GITHUB_ENV
-            echo "✅ Server returned SEO HTML"
-          elif echo "$RESP" | grep -q 'id="root"\|<div id="root">'; then
-            echo "SERVE_RESULT=react" >> $GITHUB_ENV
-            echo "❌ Server returned React shell (slug routing broken)"
-          else
-            echo "SERVE_RESULT=unknown" >> $GITHUB_ENV
-            echo "⚠️ Unknown response"
-          fi
+           try {
+             await page.goto('http://localhost:3000', { waitUntil: 'networkidle2', timeout: 30000 });
+           } catch (e) { console.log('Nav note:', e.message); }
 
-          echo ""
-          echo "=== server.log tail ==="
-          tail -50 server.log
+           await new Promise(r => setTimeout(r, 4000));
 
-          kill $SERVER_PID 2>/dev/null || true
-        env:
-          PORT: '3001'
+           // CRA dev overlay lives in an iframe
+           let overlayText = '';
+           try {
+             const frames = page.frames();
+             for (const f of frames) {
+               const txt = await f.evaluate(() => document.body && document.body.innerText).catch(() => '');
+               if (txt && (txt.includes('Element type') || txt.includes('invariant'))) {
+                 overlayText = txt;
+               }
+             }
+           } catch (_) {}
 
-      - name: Phase 6 — Summary
-        if: always()
-        run: |
-          {
-            echo "# SEO Slug Diagnostic — \`$SLUG\`"
-            echo ""
-            echo "## Pipeline trace"
-            echo "| Stage | Status |"
-            echo "|---|---|"
-            echo "| 1. File in \`public/$SLUG/index.html\` | ${PUBLIC_EXISTS:-?} (${PUBLIC_SIZE:-0} bytes) |"
-            echo "| 2. Total slug folders in \`public/\` | ${PUBLIC_TOTAL:-?} |"
-            echo "| 3. CRA build completed | ✅ |"
-            echo "| 4. File in \`build/$SLUG/index.html\` | ${BUILD_EXISTS:-?} (${BUILD_SIZE:-0} bytes) |"
-            echo "| 5. Total slug folders in \`build/\` | ${BUILD_TOTAL:-?} |"
-            echo "| 6. Slug folders dropped during build | ${MISSING_COUNT:-?} |"
-            echo "| 7. Server.js response for \`/$SLUG\` | ${SERVE_RESULT:-not-tested} |"
-            echo ""
-            echo "## Verdict"
-            if [ "$PUBLIC_EXISTS" != "true" ]; then
-              echo "🛑 **File not in repo.** Content engine never wrote this slug. Check Python generation scripts."
-            elif [ "$BUILD_EXISTS" != "true" ]; then
-              echo "🛑 **CRA dropped the file during build.** This is the bug. Add explicit copy step to \`build:all\`."
-              echo ""
-              echo "Suggested fix in \`package.json\`:"
-              echo '```json'
-              echo '"build:all": "react-app-rewired build && cp -r public/*/  build/ 2>/dev/null || true"'
-              echo '```'
-            elif [ "$SERVE_RESULT" = "react" ]; then
-              echo "🛑 **Server.js routes /\$SLUG to React app instead of static file.** Slug regex or middleware order is wrong."
-            elif [ "$SERVE_RESULT" = "seo" ]; then
-              echo "✅ **End-to-end works locally.** If it still fails on Railway, the bug is Railway-specific (cache, env, or build config in railway.toml/Nixpacks)."
-            else
-              echo "⚠️ Inconclusive. Check the artifact."
-            fi
-          } >> $GITHUB_STEP_SUMMARY
+           console.log('\n=== CONSOLE ERRORS ===');
+           if (errors.length === 0) console.log('None');
+           else errors.forEach(e => console.log('[' + e.type + ']', e.text));
 
-      - name: Upload artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: diagnostic
-          path: |
-            missing.txt
-            server.log
-          retention-days: 7
+           if (overlayText) {
+             console.log('\n=== CRA ERROR OVERLAY ===');
+             console.log(overlayText.slice(0, 4000));
+           }
+
+           console.log('\n=== ALL CONSOLE OUTPUT ===');
+           logs.forEach(l => console.log(l));
+
+           const react130 = errors.some(e =>
+             e.text.includes('Element type is invalid') ||
+             e.text.includes('#130') ||
+             e.text.includes('invariant')
+           );
+
+           await browser.close();
+
+           if (react130) {
+             console.log('\n❌ React #130 confirmed — component name is in the overlay above');
+             process.exit(1);
+           } else if (errors.length > 0) {
+             console.log('\n⚠️  Other errors found — see above');
+             process.exit(1);
+           } else {
+             console.log('\n✅ No errors — rendered clean');
+           }
+         })();
+         SCRIPT
+
+         EXIT=$?
+         if [ $EXIT -eq 0 ]; then
+           echo "RENDER_RESULT=clean" >> $GITHUB_ENV
+         else
+           echo "RENDER_RESULT=error" >> $GITHUB_ENV
+         fi
+         exit $EXIT
+
+     - name: Phase 6 — Print dev server log
+       if: always()
+       run: |
+         echo "=== dev-server.log (last 80 lines) ==="
+         tail -80 dev-server.log
+
+     - name: Phase 7 — Summary
+       if: always()
+       run: |
+         {
+           echo "# React #130 Diagnostic"
+           echo ""
+           echo "## Pipeline trace"
+           echo "| Stage | Status |"
+           echo "|---|---|"
+           echo "| Dev server compiled | ${DEV_READY:-false} |"
+           echo "| Render result | ${RENDER_RESULT:-not-tested} |"
+           echo ""
+           echo "## Verdict"
+           if [ "${DEV_READY}" != "true" ]; then
+             echo "🛑 **Dev server never started.** Check dev-server.log artifact — likely a build error or missing env var."
+           elif [ "${RENDER_RESULT}" = "error" ]; then
+             echo "🛑 **React #130 reproduced.** The component name is in the Puppeteer step log above — search for \`Element type is invalid\`."
+           elif [ "${RENDER_RESULT}" = "clean" ]; then
+             echo "✅ **No error in dev build.** The crash is likely environment-specific (missing env var in Railway, or a prod-only import path)."
+           else
+             echo "⚠️ Inconclusive. Check the artifact."
+           fi
+         } >> $GITHUB_STEP_SUMMARY
+
+     - name: Kill dev server
+       if: always()
+       run: kill $DEV_PID 2>/dev/null || true
+
+     - name: Upload artifacts
+       if: always()
+       uses: actions/upload-artifact@v4
+       with:
+         name: react-130-diagnostic
+         path: dev-server.log
+         retention-days: 3
