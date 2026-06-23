@@ -410,7 +410,7 @@ export async function getPumpRoute(opts) {
    Inputs are passed explicitly to keep the React wrapper's useCallback
    dep array stable across solPrice / balance refreshes.
    ============================================================ */
-export async function executeSwap({ mode, swapParams, token, keypair, userPk, tradeConnection, walletStr, solPrice }) {
+export async function executeSwap({ mode, swapParams, token, keypair, userPk, tradeConnection, walletStr, refWalletStr, solPrice }) {
   if (!swapParams) throw new Error('No trade params.');
   const isBuy = mode === 'buy';
   const feeLamports = BigInt(swapParams.feeLamports || '0');
@@ -428,7 +428,7 @@ export async function executeSwap({ mode, swapParams, token, keypair, userPk, tr
     }),
     tradeConnection.getLatestBlockhash('confirmed'),
     feeLamports > 0n
-      ? refLookup(walletStr).catch(() => ({ referrer: null, refSplitBps: 0 }))
+      ? refLookup(refWalletStr || walletStr).catch(() => ({ referrer: null, refSplitBps: 0 }))
       : Promise.resolve({ referrer: null, refSplitBps: 0 }),
   ]);
 
