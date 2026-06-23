@@ -1371,7 +1371,20 @@ export default function Ape({ mainWalletPubkey }) {
     setTimeout(() => setToasts(prev => prev.filter(x => x.id !== id)), t.duration || 6500);
   }, []);
 
-  useEffect(() => { if (walletStr) refRegister(walletStr); }, [walletStr]);
+  // Referral registration is keyed on the MAIN wallet (the durable identity),
+  // not the burner. The burner only signs trades and never enters the referral
+  // graph, so attribution survives a browser/burner reset. The referrer comes
+  // from ?ref= on the URL (a main wallet, set by an invite link). Guard against
+  // self-referral via either the main wallet or the burner.
+  useEffect(() => {
+    if (!mainWalletPubkey) return;
+    let referrer = null;
+    try {
+      const r = new URLSearchParams(window.location.search).get('ref');
+      if (r && r !== mainWalletPubkey && r !== walletStr) referrer = r;
+    } catch (e) {}
+    refRegister(mainWalletPubkey, referrer);
+  }, [mainWalletPubkey, walletStr]);
 
   // Feed
   useEffect(() => {
@@ -1513,13 +1526,14 @@ export default function Ape({ mainWalletPubkey }) {
       userPk: wallet.publicKey,
       tradeConnection,
       walletStr,
+      refWalletStr: mainWalletPubkey,
       solPrice: solPriceRef.current,
     });
     try { localStorage.setItem(HAS_TRADED_KEY, '1'); } catch (e) {}
     setShowLure(false);
     setTimeout(() => { refreshSol(); refreshOneToken(token.mint); }, 800);
     return result;
-  }, [wallet.keypair, wallet.publicKey, tradeConnection, walletStr, refreshSol, refreshOneToken]);
+  }, [wallet.keypair, wallet.publicKey, tradeConnection, walletStr, mainWalletPubkey, refreshSol, refreshOneToken]);
 
   // FIX 5: result.sig (ape-helpers returns { confirmed, sig })
   const onApe = useCallback(async (token) => {
