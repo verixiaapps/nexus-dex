@@ -222,6 +222,7 @@ const AP_CSS = `
 
 .ap-owned-mark{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:800;letter-spacing:.06em;padding:2px 7px;border-radius:6px;background:rgba(127,255,212,.18);color:var(--green);text-transform:uppercase;font-style:normal}
 
+.wa-locked-edit{grid-column:1/-1;margin-bottom:4px}
 .ap-row-action{display:flex;gap:6px;justify-content:flex-end;align-items:center}
 .ap-row-pnl{display:flex;flex-direction:column;align-items:flex-end;justify-content:center;gap:1px;margin-left:8px;min-width:74px;flex-shrink:0;font-family:'JetBrains Mono',monospace;line-height:1.1}
 .ap-row-pnl .pct{font-size:13px;font-weight:800;letter-spacing:-.01em;color:var(--ink2)}
@@ -1260,9 +1261,11 @@ function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPr
     if (swapParams.mode === 'buy') { const tradeSol = Number(swapParams.tradeLamports)/1e9; const tokens = (tradeSol*solPrice)/token.price; return tokens>0?{tokens}:null; }
     const grossSol = (swapParams.tradeTokensUi * token.price)/solPrice; const netSol = grossSol*(1-FEE_BPS/10000); return netSol>0?{sol:netSol}:null;
   }, [swapParams, token && token.price, solPrice]);
+  const BUY_MIN_SOL = 0.03;
+  const belowBuyMin = isBuy && amount && Number(amount) > 0 && Number(amount) < BUY_MIN_SOL;
   const hasFunds = (() => {
     if (!amount || Number(amount) <= 0) return false;
-    if (isBuy) return Number(amount) <= availSol;
+    if (isBuy) return Number(amount) >= BUY_MIN_SOL && Number(amount) <= availSol;
     return ownedUi > 0 && ((solBalance && solBalance.uiAmount) || 0) >= 0.003;
   })();
   const disabled = confirming || !swapParams || !hasFunds || !!error;
@@ -1337,7 +1340,7 @@ function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPr
         )}
         {error && <div className="ap-banner">{error}</div>}
         <button className={'ap-confirm'+(isBuy?'':' sell')} disabled={disabled} onClick={go}>
-          {confirming ? (isBuy?'Buying…':'Selling…') : !amount||Number(amount)<=0 ? (isBuy?'Enter SOL amount':'Enter percentage') : !hasFunds ? (isBuy?'Not enough SOL':(ownedUi<=0?('No '+token.sym+' to sell'):'Need ~0.003 SOL for fees')) : (isBuy?('Buy '+amount+' SOL → '+token.sym):('Sell '+Math.min(100,Number(amount))+'% of '+token.sym))}
+          {confirming ? (isBuy?'Buying…':'Selling…') : !amount||Number(amount)<=0 ? (isBuy?'Enter SOL amount':'Enter percentage') : belowBuyMin ? ('Minimum 0.03 SOL') : !hasFunds ? (isBuy?'Not enough SOL':(ownedUi<=0?('No '+token.sym+' to sell'):'Need ~0.003 SOL for fees')) : (isBuy?('Buy '+amount+' SOL → '+token.sym):('Sell '+Math.min(100,Number(amount))+'% of '+token.sym))}
         </button>
         <p className="ap-tfoot">{token.dex || 'pump.fun'} · 3% fee · settles in seconds</p>
       </div>
@@ -2453,7 +2456,7 @@ function AutoPanel({ open, onClose, auto, solBalance, solPrice }) {
 
         {isCustom ? (
           <div className="wa-sliders">
-            <Slider label="Per-trade SOL" hint="Each buy uses this much SOL." value={s.perTradeSol} min={0.05} max={2} step={0.05} suffix="SOL" onChange={v => updateCustom({ perTradeSol: v })} />
+            <Slider label="Per-trade SOL" hint="Each buy uses this much SOL. Min 0.03." value={s.perTradeSol} min={0.03} max={2} step={0.01} suffix="SOL" onChange={v => updateCustom({ perTradeSol: v })} />
             <Slider label="Take profit at" value={s.takeProfitPct} min={20} max={500} step={10} suffix="%" onChange={v => updateCustom({ takeProfitPct: v })} hint="Sell when up this much." />
             <Slider label="Stop loss at" value={s.stopLossPct} min={10} max={70} step={5} suffix="%" onChange={v => updateCustom({ stopLossPct: v })} hint="Sell if down this much." />
             <Slider label="Min age" value={s.minAgeMin} min={3} max={20} step={1} suffix="min" onChange={v => updateCustom({ minAgeMin: v })} hint="Skip launches younger than this. 3 min floor." />
@@ -2474,7 +2477,9 @@ function AutoPanel({ open, onClose, auto, solBalance, solPrice }) {
           <div className="wa-locked-card">
             <div className="wa-locked-eye"><span>§</span><span>Balanced settings</span></div>
             <div className="wa-locked-grid">
-              <div className="wa-locked-row"><span className="wa-locked-k">Per trade</span><span className="wa-locked-v">{s.perTradeSol}<span className="u">SOL</span></span></div>
+              <div className="wa-locked-edit">
+              <Slider label="Per-trade SOL" hint="Each auto-buy uses this much SOL. Min 0.03." value={balancedAmount} min={0.03} max={2} step={0.01} suffix="SOL" onChange={v => setBalancedAmount(v)} />
+            </div>
               <div className="wa-locked-row"><span className="wa-locked-k">Take profit</span><span className="wa-locked-v gn">{s.takeProfitPct}<span className="u">%</span></span></div>
               <div className="wa-locked-row"><span className="wa-locked-k">Stop loss</span><span className="wa-locked-v rd">{s.stopLossPct}<span className="u">%</span></span></div>
               <div className="wa-locked-row"><span className="wa-locked-k">Min age</span><span className="wa-locked-v">{s.minAgeMin}<span className="u">min</span></span></div>
