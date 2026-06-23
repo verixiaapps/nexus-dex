@@ -1701,6 +1701,12 @@ require('./referrals')(app, { rpcUrl: PRIMARY_RPC_URL });
  * ===================================================================== */
 require('./ape-pump-trade').mountRoutes(app);
 
+/* ========================================================================
+ * Admin dashboard — /api/visit + /api/admin/overview
+ * (mounted last so it can use the same data/ dir as referrals)
+ * ===================================================================== */
+require('./admin')(app);
+
 app.all('/api/*', (req, res) => res.status(404).json({ error: 'API route not found: ' + req.path }));
 
 /* ========================================================================
