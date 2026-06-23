@@ -1535,33 +1535,69 @@ export default function Ape({ mainWalletPubkey }) {
   // FIX 4: fetchTokenMeta + resolveToken that includes owned-token metadata
   const fetchTokenMeta = useCallback((mint) => {
     if (!mint || mint === SOL_MINT) return;
-    if (tokenIndex[mint] || tokenMeta[mint] || metaPendingRef.current.has(mint)) return;
+    if (metaPendingRef.current.has(mint)) return;
     metaPendingRef.current.add(mint);
     fetch('/api/dex/token/' + encodeURIComponent(mint))
       .then(r => (r.ok ? r.json() : null))
-      .then(d => {
-        const t = d && d.token;
-        if (!t) return;
-        setTokenMeta(prev => (prev[mint] ? prev : {
+      .then(async (d) => {
+        const t = (d && d.token) || null;
+        let price = t ? Number(t.price || 0) : 0;
+        let mcap = t ? Number(t.mcap || t.fdv || 0) : 0;
+        let liquidity = t ? Number(t.liquidity || 0) : 0;
+        let holders = t ? Number(t.holders || 0) : 0;
+        let sym = t && t.sym, name = t && t.name, icon = t && t.icon;
+        // DexScreener thin/missing → pull pump.fun bonding-curve data and merge.
+        if (!t || !(liquidity > 0) || !(holders > 0)) {
+          try {
+            const pr = await fetch('/api/pump/info/' + encodeURIComponent(mint));
+            if (pr.ok) {
+              const pf = await pr.json();
+              if (pf) {
+                if (!(liquidity > 0) && Number(pf.liquidity) > 0) liquidity = Number(pf.liquidity);
+                if (!(holders > 0) && Number(pf.holders) > 0)     holders   = Number(pf.holders);
+                if (!icon && pf.icon)                             icon      = pf.icon;
+                if (!sym && pf.sym)                               sym       = pf.sym;
+                if (!name && pf.name)                             name      = pf.name;
+              }
+            }
+          } catch (e) {}
+        }
+        if (!t && !(price > 0) && !(liquidity > 0)) return; // nothing usable
+        setTokenMeta(prev => ({
           ...prev,
-          [mint]: { mint, sym: t.sym || '???', name: t.name || t.sym || 'Unknown', icon: t.icon || null, price: Number(t.price || 0) },
+          [mint]: {
+            mint,
+            sym: sym || (prev[mint] && prev[mint].sym) || '???',
+            name: name || (prev[mint] && prev[mint].name) || 'Unknown',
+            icon: icon || (prev[mint] && prev[mint].icon) || null,
+            price,
+            mcap,
+            liquidity,
+            holders,
+          },
         }));
       })
       .catch(() => {})
       .finally(() => { metaPendingRef.current.delete(mint); });
-  }, [tokenIndex, tokenMeta]);
+  }, []);
 
   const resolveToken = useCallback(
-    (mint) => tokenIndex[mint] || tokenMeta[mint] || { mint, sym: '???', name: 'Unknown', price: 0, icon: null },
+    (mint) => tokenMeta[mint] || tokenIndex[mint] || { mint, sym: '???', name: 'Unknown', price: 0, icon: null },
     [tokenIndex, tokenMeta]
   );
 
-  // Fetch metadata for owned tokens not in the live feed
+  // Refresh metadata/price for owned tokens not in the live feed, on a timer
+  // so P&L stays current even after they age off the launch feed.
   useEffect(() => {
-    for (const mint of Object.keys(balances)) {
-      if (mint === SOL_MINT) continue;
-      if ((balances[mint].uiAmount || 0) > 0) fetchTokenMeta(mint);
-    }
+    const refreshOwned = () => {
+      for (const mint of Object.keys(balances)) {
+        if (mint === SOL_MINT) continue;
+        if ((balances[mint].uiAmount || 0) > 0) fetchTokenMeta(mint);
+      }
+    };
+    refreshOwned();
+    const id = setInterval(refreshOwned, 5000);
+    return () => clearInterval(id);
   }, [balances, fetchTokenMeta]);
 
   // solPrice held in a ref so executeSwap's identity stays stable across the
@@ -2265,6 +2301,16 @@ function useAutoTrade(deps) {
     if (tradeStampsRef.current.length >= effective.maxPerHour) return;
     if (positionsRef.current.length >= effective.maxOpen) return;
 
+    // Not enough SOL for even one trade → stop the engine and tell the user
+    // once, rather than scanning the whole feed and failing every token.
+    const availSol = (solBalance && solBalance.uiAmount) || 0;
+    if (availSol < effective.perTradeSol + 0.01) {
+      setEnabled(false);
+      pushLog('error', 'Auto-trade stopped — burner out of SOL');
+      pushToast && pushToast({ type: 'error', em: '◎', body: <>Out of SOL — auto-trade stopped. <b>Add funds to your burner</b> to keep going.</>, duration: 9000 });
+      return;
+    }
+
     for (const tk of recentTokens) {
       if (!tk || !tk.mint) continue;
       if (seenMintsRef.current.has(tk.mint)) continue;
@@ -2308,7 +2354,17 @@ function useAutoTrade(deps) {
           pushLog('buy', 'Bought $' + tk.sym + ' · ' + effective.perTradeSol.toFixed(2) + ' SOL');
           pushToast && pushToast({ type: 'success', em: '✓', body: <>Auto: bought <b>${tk.sym}</b></> });
         } catch (e) {
-          pushLog('error', 'Skipped $' + tk.sym + ' · ' + (e.message || 'failed'));
+          const msg = (e && e.message) || 'failed';
+          // Out of SOL: there's nothing left to trade with, so stop the engine
+          // and show ONE clear message instead of spraying identical errors
+          // every cycle until the user notices.
+          if (/not enough sol|insufficient/i.test(msg)) {
+            setEnabled(false);
+            pushLog('error', 'Auto-trade stopped — burner out of SOL');
+            pushToast && pushToast({ type: 'error', em: '◎', body: <>Out of SOL — auto-trade stopped. <b>Add funds to your burner</b> to keep going.</>, duration: 9000 });
+          } else {
+            pushLog('error', 'Skipped $' + tk.sym + ' · ' + msg);
+          }
         } finally {
           inflightRef.current.delete(tk.mint);
         }
