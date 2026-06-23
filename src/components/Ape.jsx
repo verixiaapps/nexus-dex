@@ -1654,19 +1654,33 @@ export default function Ape({ mainWalletPubkey }) {
   });
 
   const filtered = useMemo(() => {
+    // OWNED tab = your bag. Driven entirely by wallet balances, never by the
+    // launch feed. Show EVERYTHING you hold (no cap), biggest position value
+    // first, and do NOT apply the discovery filters (wild / min-liq) — those
+    // shape "All new" only and must never hide a token you actually own.
+    if (activeTab === 'owned') {
+      const held = [];
+      for (const mint of Object.keys(balances)) {
+        if (mint === SOL_MINT) continue;
+        const bal = balances[mint];
+        if (!bal || !(bal.uiAmount > 0)) continue;
+        // Prefer live feed data for the token if present, else resolve metadata.
+        const fromFeed = recent.find(t => t.mint === mint);
+        const tok = fromFeed || resolveToken(mint);
+        if (tok) held.push(tok);
+      }
+      held.sort((a, b) => {
+        const av = ((balances[a.mint] && balances[a.mint].uiAmount) || 0) * (a.price || 0);
+        const bv = ((balances[b.mint] && balances[b.mint].uiAmount) || 0) * (b.price || 0);
+        return bv - av;
+      });
+      return held;
+    }
+
+    // ALL-NEW tab = discovery feed. Filters apply here; capped for scannability.
     let list = recent;
     if (wildOnly) list = list.filter(t => riskRead(t).tier === 'high');
     if (minLiq > 0) list = list.filter(t => (t.liquidity || 0) >= minLiq);
-    if (activeTab === 'owned') {
-      list = list.filter(t => balances[t.mint] && balances[t.mint].uiAmount > 0);
-      const inFeed = new Set(list.map(t => t.mint));
-      for (const mint of Object.keys(balances)) {
-        if (mint === SOL_MINT) continue;
-        if (inFeed.has(mint)) continue;
-        if (!(balances[mint].uiAmount > 0)) continue;
-        list.push(resolveToken(mint));
-      }
-    }
     return list.slice(0, 15);
   }, [recent, wildOnly, minLiq, activeTab, balances, resolveToken]);
 
@@ -1823,7 +1837,7 @@ export default function Ape({ mainWalletPubkey }) {
                 <span className="d" />
                 <span>{feedError ? 'Reconnecting…' : 'Live · refreshing every ' + (POLL_RECENT / 1000) + 's'}</span>
               </span>
-              <span>{filtered.length} of {recent.length} shown</span>
+              <span>{activeTab === 'owned' ? (filtered.length + (filtered.length === 1 ? ' token held' : ' tokens held')) : (filtered.length + ' of ' + recent.length + ' shown')}</span>
             </div>
           </div>
         </div>
@@ -2152,10 +2166,10 @@ function StatsPanel({ open, onClose, wallet, mainWalletPubkey, solPrice, initial
    ============================================================ */
 const BALANCED_SETTINGS = {
   perTradeSol: 0.2, takeProfitPct: 150, stopLossPct: 30,
-  minAgeMin: 3, maxAgeMin: 30, minLiqUsd: 10000, minHolders: 30,
+  minAgeMin: 0, maxAgeMin: 30, minLiqUsd: 10000, minHolders: 30,
   minVibe: 40, maxOpen: 5, maxPerHour: 10,
 };
-const SAFETY_FLOOR = { dailyLossCapSol: 1.0, maxHoldMin: 30, ageMinAbsolute: 3, posPollMs: 7000 };
+const SAFETY_FLOOR = { dailyLossCapSol: 1.0, maxHoldMin: 30, ageMinAbsolute: 0, posPollMs: 7000 };
 const AT_SETTINGS_KEY = 'lr_at_settings_v1';
 const AT_STATE_KEY = 'lr_at_state_v1';
 const AT_POSITIONS_KEY = 'lr_at_positions_v1';
@@ -2334,10 +2348,11 @@ function useAutoTrade(deps) {
           if (!Number.isFinite(px) || px <= 0) continue;
           setPositions(prev => prev.map(x => x.mint === p.mint ? { ...x, currentPriceUsd: px } : x));
           const pnlPct = ((px - p.entryPriceUsd) / p.entryPriceUsd) * 100;
-          const ageMin = (now - p.ts) / 60000;
+          // Auto-sell fires ONLY on take-profit or stop-loss. The time-based
+          // force-exit has been removed — positions are held until they hit
+          // the user's TP/SL target (or are sold manually).
           const reason = pnlPct >= effective.takeProfitPct ? 'take-profit'
-                       : pnlPct <= -effective.stopLossPct ? 'stop-loss'
-                       : ageMin >= SAFETY_FLOOR.maxHoldMin ? 'time-out' : null;
+                       : pnlPct <= -effective.stopLossPct ? 'stop-loss' : null;
           if (!reason) continue;
           setPositions(prev => prev.map(x => x.mint === p.mint ? { ...x, exiting: true } : x));
           try {
@@ -2459,18 +2474,17 @@ function AutoPanel({ open, onClose, auto, solBalance, solPrice }) {
             <Slider label="Per-trade SOL" hint="Each buy uses this much SOL. Min 0.03." value={s.perTradeSol} min={0.03} max={2} step={0.01} suffix="SOL" onChange={v => updateCustom({ perTradeSol: v })} />
             <Slider label="Take profit at" value={s.takeProfitPct} min={20} max={500} step={10} suffix="%" onChange={v => updateCustom({ takeProfitPct: v })} hint="Sell when up this much." />
             <Slider label="Stop loss at" value={s.stopLossPct} min={10} max={70} step={5} suffix="%" onChange={v => updateCustom({ stopLossPct: v })} hint="Sell if down this much." />
-            <Slider label="Min age" value={s.minAgeMin} min={3} max={20} step={1} suffix="min" onChange={v => updateCustom({ minAgeMin: v })} hint="Skip launches younger than this. 3 min floor." />
+            <Slider label="Min age" value={s.minAgeMin} min={0} max={20} step={1} suffix="min" onChange={v => updateCustom({ minAgeMin: v })} hint="Skip launches younger than this. 0 = buy immediately." />
             <Slider label="Max age" value={s.maxAgeMin} min={5} max={120} step={5} suffix="min" onChange={v => updateCustom({ maxAgeMin: v })} hint="Skip launches older than this." />
-            <Slider label="Min liquidity" value={s.minLiqUsd} min={1000} max={100000} step={1000} suffix="$" onChange={v => updateCustom({ minLiqUsd: v })} hint="Thin pools are hard to exit." />
-            <Slider label="Min holders" value={s.minHolders} min={10} max={500} step={10} suffix="" onChange={v => updateCustom({ minHolders: v })} hint="Skip lonely tokens." />
-            <Slider label="Min safety score" value={s.minVibe} min={20} max={85} step={5} suffix="/85" onChange={v => updateCustom({ minVibe: v })} hint="Skip worse safety reads than this." />
+            <Slider label="Min liquidity" value={s.minLiqUsd} min={0} max={100000} step={500} suffix="$" onChange={v => updateCustom({ minLiqUsd: v })} hint="0 = buy anything. Thin pools are hard to SELL — your stop-loss may not fill." />
+            <Slider label="Min holders" value={s.minHolders} min={0} max={500} step={5} suffix="" onChange={v => updateCustom({ minHolders: v })} hint="0 = no holder requirement." />
+            <Slider label="Min safety score" value={s.minVibe} min={0} max={85} step={5} suffix="/85" onChange={v => updateCustom({ minVibe: v })} hint="0 = ignore safety score entirely." />
             <Slider label="Max open" value={s.maxOpen} min={1} max={10} step={1} suffix="" onChange={v => updateCustom({ maxOpen: v })} hint="Hold limit." />
             <Slider label="Max / hour" value={s.maxPerHour} min={1} max={30} step={1} suffix="" onChange={v => updateCustom({ maxPerHour: v })} hint="Trade frequency cap." />
             <div className="wa-floor">
               <b>Safety floors that can't be turned off:</b><br/>
               · Daily loss cap: -{SAFETY_FLOOR.dailyLossCapSol} SOL (auto-pauses)<br/>
-              · Max hold time: {SAFETY_FLOOR.maxHoldMin} minutes (force-exits)<br/>
-              · Absolute min age: {SAFETY_FLOOR.ageMinAbsolute} minutes
+              · Sells only on your take-profit or stop-loss target
             </div>
           </div>
         ) : (
