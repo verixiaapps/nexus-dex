@@ -2166,7 +2166,7 @@ function StatsPanel({ open, onClose, wallet, mainWalletPubkey, solPrice, initial
    ============================================================ */
 const BALANCED_SETTINGS = {
   perTradeSol: 0.2, takeProfitPct: 150, stopLossPct: 30,
-  minAgeMin: 0, maxAgeMin: 30, minLiqUsd: 10000, minHolders: 30,
+  minAgeMin: 0, maxAgeMin: 30, minLiqUsd: 10000, minMcapUsd: 0, minHolders: 30,
   minVibe: 40, maxOpen: 5, maxPerHour: 10,
 };
 const SAFETY_FLOOR = { dailyLossCapSol: 1.0, maxHoldMin: 30, ageMinAbsolute: 0, posPollMs: 7000 };
@@ -2198,19 +2198,12 @@ function loadPositions() {
 function savePositions(arr) { try { localStorage.setItem(AT_POSITIONS_KEY, JSON.stringify(arr || [])); } catch (e) {} }
 function loadEnabled() { try { return localStorage.getItem(AT_ENABLED_KEY) === '1'; } catch (e) { return false; } }
 function saveEnabled(v) { try { localStorage.setItem(AT_ENABLED_KEY, v ? '1' : '0'); } catch (e) {} }
-function loadBalancedAmount() {
-  try { const raw = localStorage.getItem(AT_BAL_AMT_KEY); if (raw == null) return BALANCED_SETTINGS.perTradeSol; const n = Number(raw); return Number.isFinite(n) && n > 0 ? n : BALANCED_SETTINGS.perTradeSol; }
-  catch (e) { return BALANCED_SETTINGS.perTradeSol; }
-}
-function saveBalancedAmount(n) { try { localStorage.setItem(AT_BAL_AMT_KEY, String(n)); } catch (e) {} }
 
 function useAutoTrade(deps) {
   const { recentTokens, solBalance, solPrice, balances, executeSwap, pushToast } = deps;
   const initialDaily = useMemo(() => loadDailyState() || {}, []);
   const [enabled, setEnabledState] = useState(() => loadEnabled());
-  const [mode, setMode] = useState('balanced');
   const [custom, setCustom] = useState(() => loadCustomSettings());
-  const [balancedAmount, setBalancedAmountState] = useState(() => loadBalancedAmount());
   const [positions, setPositionsState] = useState(() => loadPositions());
   const [log, setLog] = useState([]);
   const [dailyPnlSol, setDailyPnlSol] = useState(initialDaily.dailyPnlSol || 0);
@@ -2232,11 +2225,6 @@ function useAutoTrade(deps) {
       saveEnabled(next); return next;
     });
   }, []);
-  const setBalancedAmount = useCallback((n) => {
-    const v = Number(n);
-    if (!Number.isFinite(v) || v <= 0) return;
-    setBalancedAmountState(v); saveBalancedAmount(v);
-  }, []);
 
   const setPositions = useCallback((updater) => {
     setPositionsState(prev => {
@@ -2245,7 +2233,9 @@ function useAutoTrade(deps) {
     });
   }, []);
 
-  const settings = mode === 'balanced' ? { ...BALANCED_SETTINGS, perTradeSol: balancedAmount } : custom;
+  // Single mode (Custom only). Hard-cap per-trade buy at 1 SOL regardless of
+  // any stored value, as the last guardrail on auto-buy blast radius.
+  const settings = { ...custom, perTradeSol: Math.min(1, Math.max(0.03, Number(custom.perTradeSol) || 0.2)) };
   const effective = useMemo(() => ({ ...settings, minAgeMin: Math.max(SAFETY_FLOOR.ageMinAbsolute, settings.minAgeMin) }), [settings]);
 
   const updateCustom = useCallback((patch) => {
@@ -2289,6 +2279,7 @@ function useAutoTrade(deps) {
       if (ageMin > effective.maxAgeMin) { seenMintsRef.current.add(tk.mint); continue; }
       if (ageMin < effective.minAgeMin) continue;
       if (!Number.isFinite(tk.liquidity) || tk.liquidity < effective.minLiqUsd) continue;
+      if (effective.minMcapUsd > 0 && (!Number.isFinite(tk.mcap) || tk.mcap < effective.minMcapUsd)) continue;
       if (!Number.isFinite(tk.holders) || tk.holders < effective.minHolders) continue;
       const r = riskRead(tk);
       if (r.score < effective.minVibe) continue;
@@ -2405,7 +2396,7 @@ function useAutoTrade(deps) {
     setPositions([]);
   }, [executeSwap, setPositions, pushLog]);
 
-  return { enabled, setEnabled, paused, setPaused, mode, setMode, custom, updateCustom, balancedAmount, setBalancedAmount, settings, effective, positions, log, dailyPnlSol, tradesToday, flatten };
+  return { enabled, setEnabled, paused, setPaused, custom, updateCustom, settings, effective, positions, log, dailyPnlSol, tradesToday, flatten };
 }
 
 function Slider({ label, hint, value, min, max, step, suffix, onChange }) {
@@ -2426,9 +2417,8 @@ function AutoPanel({ open, onClose, auto, solBalance, solPrice }) {
   useEffect(() => { if (!open) return; const h = (e) => { if (e.key === 'Escape') onClose && onClose(); }; window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h); }, [open, onClose]);
   if (!open) return null;
 
-  const { enabled, setEnabled, paused, setPaused, mode, setMode, settings, custom, updateCustom, balancedAmount, setBalancedAmount, positions, log, dailyPnlSol, tradesToday, flatten } = auto;
-  const isCustom = mode === 'custom';
-  const s = isCustom ? custom : settings;
+  const { enabled, setEnabled, paused, setPaused, settings, custom, updateCustom, positions, log, dailyPnlSol, tradesToday, flatten } = auto;
+  const s = settings;
 
   return (
     <div className="wa-root">
@@ -2455,12 +2445,6 @@ function AutoPanel({ open, onClose, auto, solBalance, solPrice }) {
           </div>
         ) : null}
 
-        <div className={'wa-modes' + (isCustom ? ' custom' : '')}>
-          <div className="wa-mode-ind" />
-          <button className={'wa-mode-t' + (!isCustom ? ' active' : '')} onClick={() => setMode('balanced')}>Balanced</button>
-          <button className={'wa-mode-t' + (isCustom ? ' active' : '')} onClick={() => setMode('custom')}>Custom</button>
-        </div>
-
         <div className={'wa-master' + (enabled && !paused ? ' on' : paused ? ' paused' : '')}>
           <div className="wa-master-l">
             <div className={'wa-master-h' + (enabled && !paused ? ' on' : '')}>{enabled && !paused ? <>Running.</> : paused ? <>Paused.</> : <>Ready when you <span className="it">are.</span></>}</div>
@@ -2469,43 +2453,25 @@ function AutoPanel({ open, onClose, auto, solBalance, solPrice }) {
           <div className={'wa-tog' + (enabled && !paused ? ' on' : '')} onClick={() => { if (paused) return; setEnabled(!enabled); }} />
         </div>
 
-        {isCustom ? (
-          <div className="wa-sliders">
-            <Slider label="Per-trade SOL" hint="Each buy uses this much SOL. Min 0.03." value={s.perTradeSol} min={0.03} max={2} step={0.01} suffix="SOL" onChange={v => updateCustom({ perTradeSol: v })} />
-            <Slider label="Take profit at" value={s.takeProfitPct} min={20} max={500} step={10} suffix="%" onChange={v => updateCustom({ takeProfitPct: v })} hint="Sell when up this much." />
-            <Slider label="Stop loss at" value={s.stopLossPct} min={10} max={70} step={5} suffix="%" onChange={v => updateCustom({ stopLossPct: v })} hint="Sell if down this much." />
-            <Slider label="Min age" value={s.minAgeMin} min={0} max={20} step={1} suffix="min" onChange={v => updateCustom({ minAgeMin: v })} hint="Skip launches younger than this. 0 = buy immediately." />
-            <Slider label="Max age" value={s.maxAgeMin} min={5} max={120} step={5} suffix="min" onChange={v => updateCustom({ maxAgeMin: v })} hint="Skip launches older than this." />
-            <Slider label="Min liquidity" value={s.minLiqUsd} min={0} max={100000} step={500} suffix="$" onChange={v => updateCustom({ minLiqUsd: v })} hint="0 = buy anything. Thin pools are hard to SELL — your stop-loss may not fill." />
-            <Slider label="Min holders" value={s.minHolders} min={0} max={500} step={5} suffix="" onChange={v => updateCustom({ minHolders: v })} hint="0 = no holder requirement." />
-            <Slider label="Min safety score" value={s.minVibe} min={0} max={85} step={5} suffix="/85" onChange={v => updateCustom({ minVibe: v })} hint="0 = ignore safety score entirely." />
-            <Slider label="Max open" value={s.maxOpen} min={1} max={10} step={1} suffix="" onChange={v => updateCustom({ maxOpen: v })} hint="Hold limit." />
-            <Slider label="Max / hour" value={s.maxPerHour} min={1} max={30} step={1} suffix="" onChange={v => updateCustom({ maxPerHour: v })} hint="Trade frequency cap." />
-            <div className="wa-floor">
-              <b>Safety floors that can't be turned off:</b><br/>
-              · Daily loss cap: -{SAFETY_FLOOR.dailyLossCapSol} SOL (auto-pauses)<br/>
-              · Sells only on your take-profit or stop-loss target
-            </div>
+        <div className="wa-sliders">
+          <Slider label="Per-trade SOL" hint="Each auto-buy uses this much SOL. Max 1 SOL." value={s.perTradeSol} min={0.03} max={1} step={0.01} suffix="SOL" onChange={v => updateCustom({ perTradeSol: v })} />
+          <Slider label="Take profit at" value={s.takeProfitPct} min={20} max={500} step={10} suffix="%" onChange={v => updateCustom({ takeProfitPct: v })} hint="Sell when up this much." />
+          <Slider label="Stop loss at" value={s.stopLossPct} min={10} max={70} step={5} suffix="%" onChange={v => updateCustom({ stopLossPct: v })} hint="Sell if down this much." />
+          <Slider label="Min age" value={s.minAgeMin} min={0} max={20} step={1} suffix="min" onChange={v => updateCustom({ minAgeMin: v })} hint="Skip launches younger than this. 0 = buy immediately." />
+          <Slider label="Max age" value={s.maxAgeMin} min={5} max={120} step={5} suffix="min" onChange={v => updateCustom({ maxAgeMin: v })} hint="Skip launches older than this." />
+          <Slider label="Min liquidity" value={s.minLiqUsd} min={0} max={100000} step={500} suffix="$" onChange={v => updateCustom({ minLiqUsd: v })} hint="0 = buy anything. Thin pools are hard to SELL — your stop-loss may not fill." />
+          <Slider label="Min market cap" value={s.minMcapUsd} min={0} max={500000} step={1000} suffix="$" onChange={v => updateCustom({ minMcapUsd: v })} hint="0 = no market-cap floor. Skip tokens below this mcap." />
+          <Slider label="Min holders" value={s.minHolders} min={0} max={500} step={5} suffix="" onChange={v => updateCustom({ minHolders: v })} hint="0 = no holder requirement." />
+          <Slider label="Min safety score" value={s.minVibe} min={0} max={85} step={5} suffix="/85" onChange={v => updateCustom({ minVibe: v })} hint="0 = ignore safety score entirely." />
+          <Slider label="Max open" value={s.maxOpen} min={1} max={10} step={1} suffix="" onChange={v => updateCustom({ maxOpen: v })} hint="Hold limit." />
+          <Slider label="Max / hour" value={s.maxPerHour} min={1} max={30} step={1} suffix="" onChange={v => updateCustom({ maxPerHour: v })} hint="Trade frequency cap." />
+          <div className="wa-floor">
+            <b>Safety floors that can't be turned off:</b><br/>
+            · Daily loss cap: -{SAFETY_FLOOR.dailyLossCapSol} SOL (auto-pauses)<br/>
+            · Per-trade buy capped at 1 SOL<br/>
+            · Sells only on your take-profit or stop-loss target
           </div>
-        ) : (
-          <div className="wa-locked-card">
-            <div className="wa-locked-eye"><span>§</span><span>Balanced settings</span></div>
-            <div className="wa-locked-grid">
-              <div className="wa-locked-edit">
-              <Slider label="Per-trade SOL" hint="Each auto-buy uses this much SOL. Min 0.03." value={balancedAmount} min={0.03} max={2} step={0.01} suffix="SOL" onChange={v => setBalancedAmount(v)} />
-            </div>
-              <div className="wa-locked-row"><span className="wa-locked-k">Take profit</span><span className="wa-locked-v gn">{s.takeProfitPct}<span className="u">%</span></span></div>
-              <div className="wa-locked-row"><span className="wa-locked-k">Stop loss</span><span className="wa-locked-v rd">{s.stopLossPct}<span className="u">%</span></span></div>
-              <div className="wa-locked-row"><span className="wa-locked-k">Min age</span><span className="wa-locked-v">{s.minAgeMin}<span className="u">min</span></span></div>
-              <div className="wa-locked-row"><span className="wa-locked-k">Max age</span><span className="wa-locked-v">{s.maxAgeMin}<span className="u">min</span></span></div>
-              <div className="wa-locked-row"><span className="wa-locked-k">Min liquidity</span><span className="wa-locked-v">${format(s.minLiqUsd)}</span></div>
-              <div className="wa-locked-row"><span className="wa-locked-k">Min holders</span><span className="wa-locked-v">{s.minHolders}</span></div>
-              <div className="wa-locked-row"><span className="wa-locked-k">Min safety</span><span className="wa-locked-v">{s.minVibe}/85</span></div>
-              <div className="wa-locked-row"><span className="wa-locked-k">Max open</span><span className="wa-locked-v">{s.maxOpen}</span></div>
-              <div className="wa-locked-row"><span className="wa-locked-k">Max / hour</span><span className="wa-locked-v">{s.maxPerHour}</span></div>
-            </div>
-          </div>
-        )}
+        </div>
 
         <div className="wa-stats">
           <div className="wa-statc"><div className="wa-statc-l">Today P&L</div><div className={'wa-statc-v ' + (dailyPnlSol > 0 ? 'gn' : dailyPnlSol < 0 ? 'rd' : 'dim')}>{Math.abs(dailyPnlSol) > 0.0001 ? formatSolSigned(dailyPnlSol) : '—'}{Math.abs(dailyPnlSol) > 0.0001 ? <span className="u">SOL</span> : null}</div></div>
