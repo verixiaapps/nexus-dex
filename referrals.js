@@ -1,556 +1,625 @@
-// ape-helpers.js — React-free logic extracted from Ape.jsx to thin out the
-// big component. Pure functions, formatters, the vibe-check, trade-param
-// builders, share intents, RPC connection layer, and the pump route fetch.
+// referrals.js — Wonderland Radar growth layer.
+// 
+// MOUNT (one line in server.js, before the catch-all 404 handler):
 //
-// PERFORMANCE PATCHES (this revision):
-//   1) Confirmation poll: 5000ms -> 800ms. searchTransactionHistory: false
-//      (was searching archive on a sig we just sent — pointless and slow).
-//      Rebroadcast every ~3.2s, blockheight check every ~4.8s instead of
-//      every iteration. Net: 1–3s perceived confirmation vs 5–15s prior.
-//   2) Pre-send parallelization: getPumpRoute + getLatestBlockhash +
-//      refLookup now run via Promise.all. Saves 100–400ms per trade.
-//   3) ALT account cache: decodeBuiltTx() caches AddressLookupTableAccount
-//      lookups by base58 key. Pump.fun's ALT is stable for the session, so
-//      trade #2+ skips the getMultipleAccountsInfo round-trip. ~150–300ms.
-//   4) Referrer cache: refLookup() memoizes per walletStr. Bot doing 50
-//      trades only calls /api/ref/lookup once.
+//     require('./referrals')(app, { rpcUrl: PRIMARY_RPC_URL });
 //
-// Place this next to Ape.jsx and import what you need. See bottom of file
-// for the public API.
+// `rpcUrl` is required for the honeypot-check endpoint to work. server.js
+// already passes its resolved PRIMARY_RPC_URL (ALCHEMY_RPC_URL on mainnet,
+// DEVNET_RPC_URL on devnet). If for some reason it's not passed, this
+// module falls back to reading ALCHEMY_RPC_URL / DEVNET_RPC_URL from env
+// directly. There is NO public-node fallback by design — per the RPC
+// policy, Ankr is reserved for the buy/sell trade path only, and we don't
+// silently hit a rate-limited public node either.
+//
+// WHAT IT DOES:
+//   - Tracks the referrer for each trader wallet, locked on first visit.
+//   - Logs every trade routed through your app.
+//   - Powers /api/ref/{register,lookup,stats,leaderboard,pnl} and /share/:wallet.
+//   - Returns a fee-split config the client uses at trade time to atomically
+//     route 50% of the 3% platform fee to the referrer's wallet — in the SAME
+//     signed tx as the trade. Server NEVER holds funds. No withdraw flow
+//     needed because there's nothing to withdraw.
+//
+// STORAGE: ./data/referrals.json. Atomic writes via tmp+rename, single
+// promise-chain mutex. Zero new dependencies.
+//
+// KOL BOOST CODES: edit KOL_BOOST_CODES below to add new ones. A wallet that
+// activates a code gets a 50/50 split (instead of 70/30) for 60 days on every
+// trade their referees make.
 
-import { Buffer } from 'buffer';
-import {
-  Connection,
-  PublicKey,
-  SystemProgram,
-  VersionedTransaction,
-  TransactionMessage,
-  AddressLookupTableAccount,
-} from '@solana/web3.js';
+const fs = require('fs');
+const path = require('path');
 
-/* ============================================================
-   CONFIG
-   ============================================================ */
-export const SOL_MINT   = 'So11111111111111111111111111111111111111112';
-export const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
-export const FEE_BPS    = 300;
-export const SOL_RESERVE = 0.01;
+const DATA_DIR = path.join(__dirname, 'data');
+const DB_PATH  = path.join(DATA_DIR, 'referrals.json');
+const TMP_PATH = DB_PATH + '.tmp';
 
-export const DEFAULT_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
-export const DEFAULT_SELL_PRESETS = [25, 50, 100];
+// Split is expressed as basis points OF THE PLATFORM FEE (not of trade).
+// Platform fee itself stays 3% of trade — set client-side in Ape.jsx.
+//   Default: referrer 50% of the 3% fee  → 1.5% of trade
+//   Boost:   referrer 50% of the 3% fee  → 1.5% of trade (same as default now)
+const SPLIT_DEFAULT_REF_BPS = 5000;
+const SPLIT_BOOST_REF_BPS   = 5000;
+const BOOST_DURATION_MS     = 60 * 24 * 3600 * 1000;
 
-/* ============================================================
-   RPC CONNECTION LAYER
-   /api/solana-rpc — Alchemy only. Every background read: balances, token
-   accounts, prices, positions, debug, and withdraw tx submission.
-   /api/trade-rpc  — Alchemy primary, Ankr fallback. ONLY the buy/sell
-   critical path inside executeSwap. The only place Ankr is exercised.
-   ============================================================ */
-export const RPC_URL = (typeof window !== 'undefined' && window.location)
-  ? window.location.origin + '/api/solana-rpc'
-  : 'http://localhost:3001/api/solana-rpc';
+// === KOL CODES — EDIT THIS LIST TO ONBOARD NEW REFERRERS WITH BOOST ===
+const KOL_BOOST_CODES = new Set([
+  'EARLY',
+  'KOLALPHA',
+  // Add more here. Anything in this set, used as ?boost=CODE on the URL,
+  // gets the holder a 50/50 split for 60 days.
+]);
 
-export const TRADE_RPC_URL = (typeof window !== 'undefined' && window.location)
-  ? window.location.origin + '/api/trade-rpc'
-  : 'http://localhost:3001/api/trade-rpc';
+const PUBKEY_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const MAX_TRADES = 500_000;
+const TRIM_KEEP  = 400_000;
 
-export const BAL_COMMITMENT = 'processed';
+// ── DB ────────────────────────────────────────────────────────────
+let _cache = null;
+let _writeChain = Promise.resolve();
 
-const _connCache = new Map();
-export const getConn = (commitment) => {
-  let c = _connCache.get(commitment);
-  if (!c) { c = new Connection(RPC_URL, commitment); _connCache.set(commitment, c); }
-  return c;
-};
-const _tradeConnCache = new Map();
-export const getTradeConn = (commitment) => {
-  let c = _tradeConnCache.get(commitment);
-  if (!c) { c = new Connection(TRADE_RPC_URL, commitment); _tradeConnCache.set(commitment, c); }
-  return c;
-};
-export const balRpcRace = (op) => op(getConn(BAL_COMMITMENT));
+function _emptyDb() { return { users: {}, trades: [], version: 1 }; }
 
-/* ============================================================
-   FORMATTERS
-   ============================================================ */
-export function format(n) {
-  if (!Number.isFinite(n)) return '0';
-  if (n >= 1e9) return (n/1e9).toFixed(2)+'B';
-  if (n >= 1e6) return (n/1e6).toFixed(2)+'M';
-  if (n >= 1e3) return Math.round(n).toLocaleString();
-  if (n >= 1) return n.toFixed(2);
-  return n.toPrecision(3);
-}
-export function formatMoney(n) {
-  if (!Number.isFinite(n) || n <= 0) return '—';
-  if (n >= 1e9) return '$'+(n/1e9).toFixed(2)+'B';
-  if (n >= 1e6) return '$'+(n/1e6).toFixed(2)+'M';
-  if (n >= 1e3) return '$'+(n/1e3).toFixed(1)+'K';
-  if (n >= 1) return '$'+n.toFixed(2);
-  return '$'+n.toPrecision(2);
-}
-export function formatPrice(p) {
-  if (!Number.isFinite(p) || p <= 0) return '—';
-  if (p >= 1) return '$'+p.toFixed(4);
-  if (p >= 0.01) return '$'+p.toFixed(5);
-  if (p >= 0.0001) return '$'+p.toFixed(6);
-  if (p >= 0.00000001) return '$'+p.toFixed(9);
-  return '$'+p.toExponential(2);
-}
-export function formatPct(p) { if (!Number.isFinite(p)) return '0%'; return (p>=0?'+':'')+p.toFixed(p<10&&p>-10?2:1)+'%'; }
-export function formatSol(n) {
-  if (!Number.isFinite(n) || n <= 0) return '0';
-  if (n >= 1000) return n.toFixed(0);
-  if (n >= 1) return n.toFixed(3);
-  if (n >= 0.001) return n.toFixed(4);
-  return n.toFixed(6);
-}
-export function formatSolSigned(n) {
-  if (!Number.isFinite(n) || n === 0) return '0';
-  return (n >= 0 ? '+' : '-') + formatSol(Math.abs(n));
-}
-export function formatUsdAbs(n) {
-  if (!Number.isFinite(n) || n === 0) return '$0';
-  const abs = Math.abs(n); const s = n < 0 ? '-' : '';
-  if (abs >= 1e6) return s + '$' + (abs/1e6).toFixed(2) + 'M';
-  if (abs >= 1e3) return s + '$' + (abs/1e3).toFixed(1) + 'K';
-  if (abs >= 1)   return s + '$' + abs.toFixed(2);
-  return s + '$' + abs.toPrecision(2);
-}
-export function formatTokens(n) {
-  if (!Number.isFinite(n) || n <= 0) return '0';
-  if (n >= 1e9) return (n/1e9).toFixed(2)+'B';
-  if (n >= 1e6) return (n/1e6).toFixed(2)+'M';
-  if (n >= 1e3) return Math.round(n).toLocaleString();
-  if (n >= 1) return n.toFixed(2);
-  return n.toPrecision(3);
-}
-export function fmtAgeShort(ms) {
-  if (!Number.isFinite(ms) || ms < 0) return '';
-  if (ms < 60000) return Math.max(1, Math.floor(ms/1000))+'s';
-  if (ms < 3600000) {
-    const m = Math.floor(ms/60000), s = Math.floor((ms%60000)/1000);
-    return s > 0 && m < 10 ? (m+'m '+s+'s') : (m+'m');
-  }
-  const h = ms/3600000; if (h < 24) return Math.round(h)+'h';
-  return Math.round(h/24)+'d';
-}
-export function ageClass(ms) {
-  if (!Number.isFinite(ms)) return 'wr-age old';
-  if (ms < 30000) return 'wr-age';
-  if (ms < 180000) return 'wr-age med';
-  return 'wr-age old';
-}
-export function mobAgeClass(ms) {
-  if (!Number.isFinite(ms)) return 'mob-age old';
-  if (ms < 30000) return 'mob-age';
-  if (ms < 180000) return 'mob-age med';
-  return 'mob-age old';
-}
-export const lamportsToSol = (l) => Number(l || 0) / 1e9;
-export const truncWallet = (w) => w ? w.slice(0,4) + '…' + w.slice(-4) : '';
-
-/* ============================================================
-   VIBE CHECK
-   ============================================================ */
-export const RISK_CEIL = 85;
-export function riskRead(t) {
-  if (!t) return { score: 0, verdict: 'Unknown', tier: 'high', label: 'Wild', knowns: [], unknowns: [] };
-  const liq = t.liquidity || 0, mcap = t.mcap || 0, hold = t.holders || 0, vol = t.volume24h || 0;
-  // Age in minutes. Tokens from normalize() carry pairCreatedAtMs (not ageMs);
-  // accept either so the age component of the score actually contributes.
-  const _ageMs = Number.isFinite(t.ageMs) ? t.ageMs
-               : (Number.isFinite(t.pairCreatedAtMs) ? Date.now() - t.pairCreatedAtMs : NaN);
-  const ageMin = Number.isFinite(_ageMs) ? _ageMs / 60000 : Infinity;
-  const dataPoints = (liq > 0 ? 1 : 0) + (hold > 0 ? 1 : 0) + (vol > 0 ? 1 : 0) + (mcap > 0 ? 1 : 0);
-  const tooThin = dataPoints <= 1;
-  let s = 0;
-  s += Math.min(26, Math.log10(Math.max(liq, 1)) * 5.6);
-  let liqRatio = null;
-  if (mcap > 0 && liq > 0) { liqRatio = liq / mcap; s += liqRatio >= 0.15 ? 22 : liqRatio >= 0.08 ? 16 : liqRatio >= 0.03 ? 9 : liqRatio >= 0.01 ? 4 : 0; }
-  s += Math.min(16, Math.log10(Math.max(hold, 1)) * 5.3);
-  if (hold >= 50 && mcap > 0) { const perHolder = mcap / hold; s += perHolder < 500 ? 6 : perHolder < 2000 ? 3 : 0; }
-  if (liq > 0) { const turn = vol / liq; s += (turn >= 0.1 && turn <= 4) ? 12 : (turn > 4 && turn <= 12) ? 6 : turn > 0 ? 3 : 0; }
-  s += ageMin >= 30 ? 8 : ageMin >= 10 ? 5 : ageMin >= 3 ? 2 : 0;
-  if (t.bond != null) s += (t.bond >= 20 && t.bond <= 90) ? 6 : 3;
-  let score = Math.round(Math.max(3, Math.min(RISK_CEIL, s)));
-  if (tooThin) score = Math.min(score, 28);
-  const knowns = [];
-  knowns.push(liq >= 30000 ? ['ok', '✓ Liq ' + formatMoney(liq)] : liq >= 5000 ? ['cau', 'Liq ' + formatMoney(liq)] : ['bad', 'Thin liq ' + formatMoney(liq || 0)]);
-  knowns.push(hold >= 500 ? ['ok', '✓ ' + format(hold) + ' holders'] : hold >= 100 ? ['cau', format(hold) + ' holders'] : ['bad', (hold || 0) + ' holders']);
-  if (liqRatio != null) knowns.push(liqRatio >= 0.08 ? ['ok', '✓ Liq ' + (liqRatio * 100).toFixed(0) + '% of mcap'] : ['bad', 'Liq only ' + (liqRatio * 100).toFixed(1) + '% of mcap']);
-  const unknowns = ['LP lock duration', 'dev wallet plans', 'mint/freeze authority', 'bundled buys'];
-  let verdict, tier, label;
-  if (tooThin) { verdict = 'Too fresh to read'; tier = 'med'; label = 'Mixed'; }
-  else if (score >= 60) { verdict = 'Looks steady — still risky'; tier = 'low'; label = 'Steady'; }
-  else if (score >= 38) { verdict = 'Mixed signals'; tier = 'med'; label = 'Mixed'; }
-  else { verdict = 'High risk'; tier = 'high'; label = 'Wild'; }
-  return { score, verdict, tier, label, knowns, unknowns };
+function _ensureDir() {
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-export function normalize(t) {
-  const rawMint = t && t.mint;
-  if (!rawMint || typeof rawMint !== 'string' || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(rawMint)) return null;
-  const createdAtMs = t.pairCreatedAt ? new Date(t.pairCreatedAt).getTime() : null;
-  let bond = Number(t.bondingProgress != null ? t.bondingProgress : (t.curveProgress != null ? t.curveProgress : NaN));
-  bond = Number.isFinite(bond) ? Math.max(0, Math.min(100, bond)) : null;
-  return {
-    mint: rawMint, sym: t.sym || '???', name: t.name || t.sym || 'Unknown',
-    icon: t.icon || null,
-    price: Number(t.price || 0), change: Number(t.priceChange24h || 0),
-    pairCreatedAtMs: createdAtMs,
-    mcap: Number(t.mcap || t.fdv || 0), volume24h: Number(t.volume24h || 0),
-    holders: Number(t.holders || 0), liquidity: Number(t.liquidity || 0),
-    decimals: Number(t.decimals != null ? t.decimals : 6), pumpPool: t.pumpPool || 'auto',
-    bond, dex: t.dexId || (t.pumpPool ? 'pump.fun' : null), source: 'dexscreener',
-  };
-}
-
-/* ============================================================
-   ERROR MAPPERS
-   ============================================================ */
-export const friendlyError = (err) => {
-  const m = String((err && err.message) || err || '').toLowerCase();
-  if (m.includes('user reject') || m.includes('cancelled')) return 'Cancelled.';
-  if (m.includes('graduat')) return 'Token graduated off the bonding curve — not tradable here.';
-  if (m.includes('not a pump') || m.includes('not indexed')) return 'Not a pump.fun bonding-curve token.';
-  if (m.includes('slippage')) return 'Price moved past slippage — try again.';
-  if (m.includes('insufficient') || m.includes('debit an account')) return 'Not enough SOL for this trade + fees.';
-  if (m.includes('blockhash') || m.includes('expired')) return 'Tx expired — retry.';
-  if (m.includes("didn't confirm") || m.includes('not confirm')) return "Sent but didn't confirm — check Solscan before retrying.";
-  if (m.includes('simulation failed')) return 'Trade would fail right now — price likely moved.';
-  if (m.includes('incorrectprogramid')) return 'Pump SDK fee-config stale — try again.';
-  if (m.includes('rate')) return 'Rate limited — try again.';
-  return (err && err.message ? err.message.slice(0, 200) : 'Trade failed.');
-};
-export function describeSimLogs(logs, fallbackMsg) {
-  const arr = Array.isArray(logs) ? logs : [];
-  const j = arr.join('\n').toLowerCase();
-  if (j.includes('slippage') || j.includes('toomuchsol') || j.includes('toolittlesol')) return 'Price moved past slippage — try again.';
-  if (j.includes('insufficient') || j.includes('debit an account')) return 'Not enough SOL for the trade + fees.';
-  if (j.includes('exceeded') && j.includes('compute')) return 'Hit the compute limit — retry.';
-  const ctx = (arr.filter(l => /program log:|error|0x/i.test(l)).pop() || '').replace(/^Program log:\s*/i, '').slice(0, 150);
-  if (ctx) return 'Sim failed -> ' + ctx;
-  return fallbackMsg ? ('Sim failed -> ' + String(fallbackMsg).slice(0, 160)) : 'Sim failed (no logs).';
-}
-
-// Decode a Solana transaction error object (st.value.err) into plain language.
-// The object is usually { InstructionError: [i, { Custom: <code> }] } or a bare
-// string. Pump.fun's bonding-curve program throws a handful of custom codes;
-// the most common buy failures are slippage and graduated/complete curves.
-export function describeOnChainErr(err) {
-  if (err == null) return 'On-chain error.';
-  if (typeof err === 'string') {
-    const s = err.toLowerCase();
-    if (s.includes('slippage')) return 'Slippage exceeded — price moved before it landed.';
-    if (s.includes('insufficient')) return 'Not enough SOL for the trade + fees.';
-    return 'On-chain error: ' + err.slice(0, 100);
-  }
+function _readSync() {
   try {
-    const ie = err.InstructionError;
-    if (Array.isArray(ie) && ie[1] && typeof ie[1] === 'object' && 'Custom' in ie[1]) {
-      const code = ie[1].Custom;
-      // Common pump.fun bonding-curve custom error codes.
-      const map = {
-        6000: 'Token not on a bonding curve (may have graduated).',
-        6001: 'Slippage exceeded — price moved before it landed.',
-        6002: 'Bonding curve complete — token graduated, trade on a DEX instead.',
-        6003: 'Trade too small for this curve.',
-        6004: 'Not enough SOL for the trade + fees.',
+    if (!fs.existsSync(DB_PATH)) return _emptyDb();
+    const text = fs.readFileSync(DB_PATH, 'utf8');
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object') return _emptyDb();
+    if (!parsed.users  || typeof parsed.users !== 'object') parsed.users  = {};
+    if (!Array.isArray(parsed.trades)) parsed.trades = [];
+    return parsed;
+  } catch (e) {
+    console.warn('[referrals] read failed, starting fresh:', e.message);
+    return _emptyDb();
+  }
+}
+
+function _getDb() {
+  if (!_cache) {
+    _ensureDir();
+    _cache = _readSync();
+  }
+  return _cache;
+}
+
+function _persist() {
+  _writeChain = _writeChain.then(() => {
+    try {
+      _ensureDir();
+      fs.writeFileSync(TMP_PATH, JSON.stringify(_cache));
+      fs.renameSync(TMP_PATH, DB_PATH);
+    } catch (e) {
+      console.warn('[referrals] write failed:', e.message);
+    }
+  });
+  return _writeChain;
+}
+
+// ── helpers ───────────────────────────────────────────────────────
+function _validPubkey(s) {
+  return typeof s === 'string' && PUBKEY_RE.test(s);
+}
+
+function _user(wallet) {
+  const db = _getDb();
+  if (!db.users[wallet]) {
+    db.users[wallet] = {
+      wallet,
+      referrer: null,
+      joined_at: Date.now(),
+      boost_code: null,
+      boost_until: null,
+    };
+  }
+  return db.users[wallet];
+}
+
+function _isBoosted(wallet) {
+  const u = _getDb().users[wallet];
+  if (!u || !u.boost_until) return false;
+  return u.boost_until > Date.now();
+}
+
+function _refSplitBpsForReferrer(referrer) {
+  if (!referrer) return 0;
+  return _isBoosted(referrer) ? SPLIT_BOOST_REF_BPS : SPLIT_DEFAULT_REF_BPS;
+}
+
+// ── mount ─────────────────────────────────────────────────────────
+function mount(app, options) {
+  const opts = options || {};
+
+  // POST /api/ref/register
+  //   { wallet, referrer?, boost? }
+  // Referrer is LOCKED on first set — can't be changed. Boost can only be
+  // activated once per wallet, and only if the code is in KOL_BOOST_CODES.
+  app.post('/api/ref/register', (req, res) => {
+    try {
+      const wallet   = String(req.body?.wallet || '').trim();
+      const referrer = req.body?.referrer ? String(req.body.referrer).trim() : null;
+      const boost    = req.body?.boost ? String(req.body.boost).trim().toUpperCase() : null;
+
+      if (!_validPubkey(wallet))     return res.status(400).json({ error: 'Invalid wallet' });
+      if (referrer && wallet === referrer) return res.status(400).json({ error: 'Self-referral not allowed' });
+
+      const u = _user(wallet);
+      let changed = false;
+      let boostActivated = false;
+
+      if (!u.referrer && referrer && _validPubkey(referrer)) {
+        u.referrer = referrer;
+        changed = true;
+      }
+
+      if (boost && KOL_BOOST_CODES.has(boost) && !u.boost_code) {
+        u.boost_code = boost;
+        u.boost_until = Date.now() + BOOST_DURATION_MS;
+        changed = true;
+        boostActivated = true;
+      }
+
+      if (changed) _persist();
+
+      return res.json({
+        wallet: u.wallet,
+        referrer: u.referrer,
+        boosted: _isBoosted(wallet),
+        boost_until: u.boost_until,
+        boostActivated,
+      });
+    } catch (e) {
+      console.warn('[referrals/register]', e.message);
+      res.status(500).json({ error: 'Internal' });
+    }
+  });
+
+  // GET /api/ref/lookup?wallet=<trader>
+  // Client calls this just before building a trade tx. Returns the address
+  // that should receive the referrer's share, and the bps of the platform
+  // fee they should get.
+  app.get('/api/ref/lookup', (req, res) => {
+    try {
+      const wallet = String(req.query.wallet || '').trim();
+      if (!_validPubkey(wallet)) return res.json({ referrer: null, refSplitBps: 0 });
+      const u = _getDb().users[wallet];
+      if (!u || !u.referrer) return res.json({ referrer: null, refSplitBps: 0 });
+      return res.json({
+        referrer: u.referrer,
+        refSplitBps: _refSplitBpsForReferrer(u.referrer),
+      });
+    } catch (e) {
+      res.json({ referrer: null, refSplitBps: 0 });
+    }
+  });
+
+  // POST /api/ref/log-trade
+  //   { wallet, mint, sym, name, side, sol_amount, token_amount,
+  //     price_usd, sol_price_usd, sig, ref_wallet, ref_lamports,
+  //     platform_lamports }
+  // Called by client AFTER the user signs and submits. Idempotent on sig
+  // (a re-submission with the same sig is dropped).
+  app.post('/api/ref/log-trade', (req, res) => {
+    try {
+      const b = req.body || {};
+      const wallet = String(b.wallet || '').trim();
+      if (!_validPubkey(wallet)) return res.status(400).json({ error: 'Invalid wallet' });
+      const side = b.side === 'buy' || b.side === 'sell' ? b.side : null;
+      if (!side) return res.status(400).json({ error: 'Invalid side' });
+
+      const sig = String(b.sig || '').slice(0, 96);
+      const db  = _getDb();
+
+      if (sig) {
+        // Cheap dup check — scan only the tail since trades are append-only.
+        const tail = db.trades.length > 200 ? db.trades.slice(-200) : db.trades;
+        if (tail.some(t => t.sig === sig)) return res.json({ ok: true, dup: true });
+      }
+
+      const t = {
+        wallet,
+        mint: String(b.mint || ''),
+        sym:  String(b.sym || '').slice(0, 32),
+        name: String(b.name || '').slice(0, 64),
+        side,
+        sol_amount:        Number(b.sol_amount) || 0,
+        token_amount:      Number(b.token_amount) || 0,
+        price_usd:         Number(b.price_usd) || 0,
+        sol_price_usd:     Number(b.sol_price_usd) || 0,
+        sig,
+        ref_wallet:        _validPubkey(b.ref_wallet) ? b.ref_wallet : null,
+        ref_lamports:      Number(b.ref_lamports) || 0,
+        platform_lamports: Number(b.platform_lamports) || 0,
+        ts: Date.now(),
       };
-      return map[code] || ('On-chain error (pump code ' + code + ') — token may have graduated or moved.');
+
+      _user(wallet);
+      db.trades.push(t);
+      if (db.trades.length > MAX_TRADES) db.trades = db.trades.slice(-TRIM_KEEP);
+      _persist();
+      return res.json({ ok: true });
+    } catch (e) {
+      console.warn('[referrals/log-trade]', e.message);
+      res.status(500).json({ error: 'Internal' });
     }
-    if (Array.isArray(ie) && typeof ie[1] === 'string') {
-      const s = ie[1].toLowerCase();
-      if (s.includes('insufficient')) return 'Not enough SOL for the trade + fees.';
-      return 'On-chain error: ' + ie[1];
+  });
+
+  // GET /api/ref/stats?wallet=<referrer>
+  app.get('/api/ref/stats', (req, res) => {
+    try {
+      const wallet = String(req.query.wallet || '').trim();
+      if (!_validPubkey(wallet)) return res.status(400).json({ error: 'Invalid wallet' });
+      const db = _getDb();
+      const u  = db.users[wallet];
+
+      const cutoff7d  = Date.now() - 7 * 86400000;
+      const cutoff24h = Date.now() - 86400000;
+      const activeReferees = new Set();
+      let earned     = 0;
+      let earned_7d  = 0;
+      let earned_24h = 0;
+
+      for (const t of db.trades) {
+        if (t.ref_wallet !== wallet) continue;
+        activeReferees.add(t.wallet);
+        earned += t.ref_lamports;
+        if (t.ts >= cutoff7d)  earned_7d  += t.ref_lamports;
+        if (t.ts >= cutoff24h) earned_24h += t.ref_lamports;
+      }
+
+      let referees = 0;
+      for (const w in db.users) {
+        if (db.users[w].referrer === wallet) referees++;
+      }
+
+      return res.json({
+        wallet,
+        referees,
+        active_referees: activeReferees.size,
+        earned_lamports:     earned,
+        earned_lamports_7d:  earned_7d,
+        earned_lamports_24h: earned_24h,
+        boost_active: _isBoosted(wallet),
+        boost_until:  u?.boost_until || null,
+        boost_code:   u?.boost_code || null,
+        split_bps_now: _isBoosted(wallet) ? SPLIT_BOOST_REF_BPS : SPLIT_DEFAULT_REF_BPS,
+        split_bps_default: SPLIT_DEFAULT_REF_BPS,
+        split_bps_boost:   SPLIT_BOOST_REF_BPS,
+      });
+    } catch (e) {
+      console.warn('[referrals/stats]', e.message);
+      res.status(500).json({ error: 'Internal' });
     }
-  } catch (e) {}
-  return 'On-chain error: ' + JSON.stringify(err).slice(0, 100);
-}
+  });
 
-/* ============================================================
-   COLOR
-   ============================================================ */
-export function colorFor(mint) {
-  const palette = ['#a855f7','#f472b6','#fb923c','#60a5fa','#22d3ee','#facc15','#16a34a','#ec4899','#0ea5e9','#fda4af','#f59e0b','#9333ea','#84cc16','#06b6d4','#dc2626'];
-  let h = 0;
-  for (let i = 0; i < mint.length; i++) h = (h * 31 + mint.charCodeAt(i)) | 0;
-  return palette[Math.abs(h) % palette.length];
-}
-export function shade(hex, p) {
-  const f = parseInt(hex.slice(1), 16); const t = p < 0 ? 0 : 255; const pp = Math.abs(p) / 100;
-  const R = f >> 16, G = (f >> 8) & 0xFF, B = f & 0xFF;
-  return '#' + (0x1000000 + (Math.round((t - R) * pp) + R) * 0x10000 + (Math.round((t - G) * pp) + G) * 0x100 + (Math.round((t - B) * pp) + B)).toString(16).slice(1);
-}
+  // GET /api/ref/leaderboard?window=24h|7d|all
+  // Top 50 traders by SOL volume routed through the app.
+  const _lbCache = new Map();
+  const LB_TTL = 30_000;
+  app.get('/api/ref/leaderboard', (req, res) => {
+    try {
+      const w = req.query.window === '24h' ? '24h' :
+                req.query.window === '7d'  ? '7d'  : 'all';
+      const hit = _lbCache.get(w);
+      if (hit && Date.now() - hit.ts < LB_TTL) return res.json(hit.payload);
 
-/* ============================================================
-   TRADE PARAM BUILDERS
-   NOTE: the BUY divisor 110n matches the server-side 10% slippage
-   (1 + 10/100). If slippage changes server-side, change it here too.
-   ============================================================ */
-export function buildBuyParams(n) {
-  if (!Number.isFinite(n) || n <= 0) return null;
-  const totalLamports = BigInt(Math.floor(n * 1e9));
-  if (totalLamports <= 0n) return null;
-  const feeLamports = (totalLamports * BigInt(FEE_BPS)) / 10000n;
-  const tradeLamports = ((totalLamports - feeLamports) * 100n) / 110n;
-  if (tradeLamports <= 0n || feeLamports <= 0n) return null;
-  return { mode: 'buy', solAmount: n, totalLamports: totalLamports.toString(), tradeLamports: tradeLamports.toString(), feeLamports: feeLamports.toString() };
-}
-export function buildSellParams(token, pct, tokenBalance, solPrice) {
-  if (!tokenBalance || !tokenBalance.amount || BigInt(tokenBalance.amount) <= 0n) return null;
-  const p = Math.min(100, Math.max(0.01, pct));
-  const tradeTokens = (BigInt(tokenBalance.amount) * BigInt(Math.floor(p * 100))) / 10000n;
-  if (tradeTokens <= 0n) return null;
-  const decimals = tokenBalance.decimals || token.decimals || 6;
-  const tradeTokensUi = Number(tradeTokens) / Math.pow(10, decimals);
-  let feeLamports = '0';
-  if (token && token.price > 0 && solPrice > 0) {
-    const grossSol = (tradeTokensUi * token.price) / solPrice;
-    const lam = Math.floor(grossSol * (FEE_BPS / 10000) * 1e9);
-    if (lam > 0) feeLamports = String(lam);
-  }
-  return { mode: 'sell', decimals, percentage: p, tradeTokens: tradeTokens.toString(), tradeTokensUi, feeLamports };
-}
+      const cutoff = w === '24h' ? Date.now() - 86400000 :
+                     w === '7d'  ? Date.now() - 7 * 86400000 : 0;
+      const db = _getDb();
+      const by = new Map();
 
-/* ============================================================
-   SHARE INTENTS
-   ============================================================ */
-export function buildShareUrl() { if (typeof window === 'undefined') return ''; try { return new URL(window.location.origin + window.location.pathname).toString(); } catch (e) { return ''; } }
-export function buildTweetText(o) {
-  const { mode, token, solAmount, outAmount, percentage } = o;
-  if (mode === 'buy') {
-    const recv = outAmount > 0 ? '\n-> ' + formatTokens(outAmount) + ' $' + token.sym : '';
-    return 'Just caught $' + token.sym + ' on wonderland//radar — ' + solAmount + ' SOL' + recv + '\n\nFresh launches at first light:';
-  }
-  const got = outAmount > 0 ? '\n-> ' + formatSol(outAmount) + ' SOL back' : '';
-  return 'Sold ' + percentage + '% of $' + token.sym + ' on wonderland//radar' + got + '\n\nField log open here:';
-}
-export function openTwitterShare(text, url) {
-  if (typeof window === 'undefined') return;
-  const params = new URLSearchParams({ text }); if (url) params.set('url', url);
-  window.open('https://twitter.com/intent/tweet?' + params, '_blank', 'noopener,noreferrer,width=600,height=500');
-}
-export function inviteUrl(walletStr) {
-  if (typeof window === 'undefined' || !walletStr) return '';
-  return window.location.origin + '/?ref=' + walletStr;
-}
-export function shareUrlPath(walletStr) {
-  if (typeof window === 'undefined' || !walletStr) return '';
-  return window.location.origin + '/share/' + walletStr;
-}
-export function openTelegram(text, url) {
-  if (typeof window === 'undefined') return;
-  const params = new URLSearchParams({ url: url || '', text });
-  window.open('https://t.me/share/url?' + params, '_blank', 'noopener,noreferrer');
-}
+      for (const t of db.trades) {
+        if (t.ts < cutoff) continue;
+        let u = by.get(t.wallet);
+        if (!u) {
+          u = { wallet: t.wallet, volume_sol: 0, trades: 0, buys: 0, sells: 0 };
+          by.set(t.wallet, u);
+        }
+        u.volume_sol += Number(t.sol_amount || 0);
+        u.trades += 1;
+        if (t.side === 'buy') u.buys += 1; else u.sells += 1;
+      }
 
-/* ============================================================
-   REFERRAL HELPERS
-   refLookup is cached per walletStr: the referrer never changes for a
-   given burner, so the bot's 50th trade hits memory, not the network.
-   refRegister / refLogTrade stay fire-and-forget.
-   ============================================================ */
-const _refCache = new Map();
-export async function refLookup(walletStr) {
-  if (!walletStr) return { referrer: null, refSplitBps: 0 };
-  if (_refCache.has(walletStr)) return _refCache.get(walletStr);
-  try {
-    const r = await fetch('/api/ref/lookup?wallet=' + encodeURIComponent(walletStr));
-    if (!r.ok) { const v = { referrer: null, refSplitBps: 0 }; _refCache.set(walletStr, v); return v; }
-    const d = await r.json();
-    const v = (!d || !d.referrer)
-      ? { referrer: null, refSplitBps: 0 }
-      : { referrer: d.referrer, refSplitBps: Number(d.refSplitBps) || 0 };
-    _refCache.set(walletStr, v);
-    return v;
-  } catch (e) { return { referrer: null, refSplitBps: 0 }; }
-}
-export function refRegister(walletStr, referrer, boost) {
-  try {
-    fetch('/api/ref/register', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ wallet: walletStr, referrer: referrer || null, boost: boost || null }),
-    }).catch(() => {});
-  } catch (e) {}
-}
-export function refLogTrade(payload) {
-  try {
-    fetch('/api/ref/log-trade', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    }).catch(() => {});
-  } catch (e) {}
-}
-
-/* ============================================================
-   PUMP ROUTE  (hits the dedicated Ape route)
-   ALT cache: Pump.fun's address lookup table is stable for the life of
-   the session. The first trade pays for the getMultipleAccountsInfo;
-   every subsequent trade hits memory.
-   ============================================================ */
-export const APE_PUMP_ROUTE = '/api/ape/pump-trade';
-const _altCache = new Map(); // base58 key -> AddressLookupTableAccount
-
-export async function decodeBuiltTx(b64, connection) {
-  const txBytes = Buffer.from(b64, 'base64');
-  const tx = VersionedTransaction.deserialize(txBytes);
-  const message = tx.message;
-  const lookupKeys = (message.addressTableLookups || []).map(l => l.accountKey);
-  const alts = [];
-  if (lookupKeys.length > 0) {
-    const uncached = [];
-    for (const k of lookupKeys) {
-      const hit = _altCache.get(k.toBase58());
-      if (hit) alts.push(hit);
-      else uncached.push(k);
+      const list = [...by.values()]
+        .sort((a, b) => b.volume_sol - a.volume_sol)
+        .slice(0, 50);
+      const payload = {
+        window: w,
+        count: list.length,
+        total_traders: by.size,
+        traders: list,
+        ts: Date.now(),
+      };
+      _lbCache.set(w, { ts: Date.now(), payload });
+      return res.json(payload);
+    } catch (e) {
+      console.warn('[referrals/leaderboard]', e.message);
+      res.status(500).json({ error: 'Internal' });
     }
-    if (uncached.length > 0) {
-      const infos = await connection.getMultipleAccountsInfo(uncached);
-      for (let i = 0; i < uncached.length; i++) {
-        if (!infos[i]) continue;
-        const alt = new AddressLookupTableAccount({
-          key: uncached[i],
-          state: AddressLookupTableAccount.deserialize(infos[i].data),
+  });
+
+  // GET /api/ref/pnl?wallet=<wallet>
+  // Realized P&L per mint + open position sizing. The client multiplies the
+  // open position by the current price to get unrealized.
+  app.get('/api/ref/pnl', (req, res) => {
+    try {
+      const wallet = String(req.query.wallet || '').trim();
+      if (!_validPubkey(wallet)) return res.status(400).json({ error: 'Invalid wallet' });
+      const db = _getDb();
+      const userTrades = db.trades.filter(t => t.wallet === wallet);
+
+      const byMint = new Map();
+      let total_volume_sol = 0;
+      let realized_sol_total = 0;
+      let first_trade_ts = Infinity;
+      let last_trade_ts  = 0;
+
+      for (const t of userTrades) {
+        let p = byMint.get(t.mint);
+        if (!p) {
+          p = {
+            mint: t.mint, sym: t.sym, name: t.name,
+            buys: 0, sells: 0,
+            sol_in: 0, sol_out: 0,
+            tokens_in: 0, tokens_out: 0,
+            first_ts: t.ts, last_ts: t.ts,
+          };
+          byMint.set(t.mint, p);
+        }
+        if (t.side === 'buy') {
+          p.buys += 1;
+          p.sol_in    += t.sol_amount;
+          p.tokens_in += t.token_amount;
+        } else {
+          p.sells += 1;
+          p.sol_out    += t.sol_amount;
+          p.tokens_out += t.token_amount;
+        }
+        if (t.sym  && !p.sym)  p.sym  = t.sym;
+        if (t.name && !p.name) p.name = t.name;
+        if (t.ts < p.first_ts) p.first_ts = t.ts;
+        if (t.ts > p.last_ts)  p.last_ts  = t.ts;
+        if (t.ts < first_trade_ts) first_trade_ts = t.ts;
+        if (t.ts > last_trade_ts)  last_trade_ts  = t.ts;
+        total_volume_sol += t.sol_amount;
+      }
+
+      const positions = [];
+      for (const p of byMint.values()) {
+        const avg_buy_price_sol = p.tokens_in > 0 ? p.sol_in / p.tokens_in : 0;
+        const open_tokens = Math.max(0, p.tokens_in - p.tokens_out);
+        const realized_pnl_sol = p.sol_out - (p.tokens_out * avg_buy_price_sol);
+        realized_sol_total += realized_pnl_sol;
+        positions.push({
+          mint: p.mint, sym: p.sym, name: p.name,
+          buys: p.buys, sells: p.sells,
+          sol_in: p.sol_in, sol_out: p.sol_out,
+          tokens_in: p.tokens_in, tokens_out: p.tokens_out,
+          open_tokens, avg_buy_price_sol,
+          realized_pnl_sol,
+          first_ts: p.first_ts, last_ts: p.last_ts,
+          open: open_tokens > 0.000001,
         });
-        _altCache.set(uncached[i].toBase58(), alt);
-        alts.push(alt);
+      }
+      positions.sort((a, b) => b.last_ts - a.last_ts);
+
+      return res.json({
+        wallet,
+        trade_count: userTrades.length,
+        total_volume_sol,
+        realized_pnl_sol: realized_sol_total,
+        first_trade_ts: first_trade_ts === Infinity ? null : first_trade_ts,
+        last_trade_ts:  last_trade_ts  === 0        ? null : last_trade_ts,
+        positions,
+      });
+    } catch (e) {
+      console.warn('[referrals/pnl]', e.message);
+      res.status(500).json({ error: 'Internal' });
+    }
+  });
+
+  // GET /share/:wallet
+  // OG / Twitter Card unfurl + redirect to app root with ?ref=<wallet>.
+  // When someone clicks a shared link, they land on the app already tagged
+  // with the referrer locked in.
+  app.get('/share/:wallet', (req, res) => {
+    try {
+      const wallet = String(req.params.wallet || '').trim();
+      if (!_validPubkey(wallet)) return res.status(400).send('Invalid wallet');
+
+      const db = _getDb();
+      const ut = db.trades.filter(t => t.wallet === wallet);
+      const last7d = ut.filter(t => t.ts > Date.now() - 7 * 86400000);
+
+      const byMint = new Map();
+      let volume = 0;
+      for (const t of ut) {
+        if (!byMint.has(t.mint)) byMint.set(t.mint, { sol_in: 0, sol_out: 0, tokens_in: 0, tokens_out: 0 });
+        const p = byMint.get(t.mint);
+        if (t.side === 'buy') { p.sol_in += t.sol_amount; p.tokens_in += t.token_amount; }
+        else                  { p.sol_out += t.sol_amount; p.tokens_out += t.token_amount; }
+        volume += t.sol_amount;
+      }
+      let realized = 0;
+      for (const p of byMint.values()) {
+        const avg = p.tokens_in > 0 ? p.sol_in / p.tokens_in : 0;
+        realized += p.sol_out - p.tokens_out * avg;
+      }
+
+      const tag = wallet.slice(0, 4) + '…' + wallet.slice(-4);
+      const pnlLabel = realized >= 0 ? '+' + realized.toFixed(3) + ' SOL' : realized.toFixed(3) + ' SOL';
+      const title = 'Field log · ' + tag + ' · Wonderland Radar';
+      const desc  = ut.length + ' entries · ' + last7d.length + ' this week · realized ' + pnlLabel + ' · ' + volume.toFixed(2) + ' SOL volume';
+      const url   = (req.protocol || 'https') + '://' + req.get('host') + '/?ref=' + encodeURIComponent(wallet);
+
+      const esc = (s) => String(s).replace(/[<>&"']/g, c =>
+        ({ '<':'&lt;', '>':'&gt;', '&':'&amp;', '"':'&quot;', "'":'&#39;' }[c]));
+
+      const html = '<!doctype html>'
+        + '<html lang="en"><head>'
+        + '<meta charset="utf-8">'
+        + '<title>' + esc(title) + '</title>'
+        + '<meta name="description" content="' + esc(desc) + '">'
+        + '<meta property="og:title" content="' + esc(title) + '">'
+        + '<meta property="og:description" content="' + esc(desc) + '">'
+        + '<meta property="og:url" content="' + esc(url) + '">'
+        + '<meta property="og:type" content="website">'
+        + '<meta name="twitter:card" content="summary">'
+        + '<meta name="twitter:title" content="' + esc(title) + '">'
+        + '<meta name="twitter:description" content="' + esc(desc) + '">'
+        + '<meta http-equiv="refresh" content="0; url=' + esc(url) + '">'
+        + '<style>body{font-family:system-ui;background:#0E0B1F;color:#F4EFFF;display:grid;place-items:center;min-height:100vh;margin:0}a{color:#6BEEFF}</style>'
+        + '</head><body>'
+        + '<p>Redirecting to <a href="' + esc(url) + '">Wonderland Radar</a>…</p>'
+        + '</body></html>';
+
+      res.set('Content-Type', 'text/html; charset=utf-8').send(html);
+    } catch (e) {
+      console.warn('[referrals/share]', e.message);
+      res.status(500).send('Internal');
+    }
+  });
+
+  // ── HONEYPOT / SAFETY CHECK ──────────────────────────────────────
+  // GET /api/honeypot-check/:mint
+  // Returns { safe, reasons, program }. Used by the auto-trade hook before
+  // every commit. Cached 60s per mint to avoid hammering the RPC.
+  //
+  // Checks:
+  //   - Token program is SPL or Token-2022 (anything else = reject)
+  //   - Mint authority is null (else dev can mint unlimited supply)
+  //   - Freeze authority is null (else dev can freeze your token account)
+  //   - For Token-2022: scan mint extensions for known dangerous types.
+  //       Extension type IDs below match spl-token-2022 ExtensionType enum.
+
+  const SPL_TOKEN_PROGRAM  = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+  const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+
+  // RPC URL resolution: passed option wins; otherwise read the mainnet or
+  // devnet URL directly from env. NO public-node fallback — honeypot check
+  // is not a buy/sell, so per policy it does NOT use Ankr either. If
+  // nothing is configured, the endpoint returns a clear error.
+  const RPC_URL = opts.rpcUrl
+               || process.env.ALCHEMY_RPC_URL
+               || process.env.DEVNET_RPC_URL
+               || '';
+
+  if (!RPC_URL) {
+    console.warn('[referrals] no RPC URL available — honeypot check will fail until ALCHEMY_RPC_URL (or DEVNET_RPC_URL) is set');
+  }
+
+  async function rpcGetAccountInfo(mint) {
+    if (!RPC_URL) throw new Error('No RPC URL configured');
+    const r = await fetch(RPC_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 1, method: 'getAccountInfo',
+        params: [mint, { encoding: 'base64', commitment: 'confirmed' }],
+      }),
+    });
+    if (!r.ok) throw new Error('RPC HTTP ' + r.status);
+    const d = await r.json();
+    if (d.error) throw new Error(d.error.message || 'RPC error');
+    return d.result && d.result.value;
+  }
+
+  async function inspectMint(mint) {
+    const info = await rpcGetAccountInfo(mint);
+    if (!info) return { safe: false, reasons: ['Mint not found on-chain'], program: 'unknown' };
+    if (!Array.isArray(info.data) || typeof info.data[0] !== 'string') {
+      return { safe: false, reasons: ['Mint data missing or malformed'], program: 'unknown' };
+    }
+
+    const owner = info.owner;
+    const buf   = Buffer.from(info.data[0], 'base64');
+    const reasons = [];
+
+    if (owner !== SPL_TOKEN_PROGRAM && owner !== TOKEN_2022_PROGRAM) {
+      return { safe: false, reasons: ['Unknown token program'], program: 'unknown' };
+    }
+
+    // SPL Mint layout: mint_authority_tag(4) + mint_authority(32) + supply(8) +
+    // decimals(1) + is_initialized(1) + freeze_authority_tag(4) + freeze_authority(32) = 82 bytes
+    if (buf.length < 82) return { safe: false, reasons: ['Malformed mint'], program: owner === TOKEN_2022_PROGRAM ? '2022' : 'spl' };
+
+    const hasMintAuthority   = buf.readUInt32LE(0)  === 1;
+    const hasFreezeAuthority = buf.readUInt32LE(46) === 1;
+
+    if (hasMintAuthority)   reasons.push('Mint authority active — dev can mint supply');
+    if (hasFreezeAuthority) reasons.push('Freeze authority active — dev can freeze your tokens');
+
+    // Token-2022 extensions live after byte 165 (padded base mint) + 1 byte account-type tag.
+    if (owner === TOKEN_2022_PROGRAM && buf.length > 166) {
+      let off = 166;
+      while (off + 4 <= buf.length) {
+        const extType = buf.readUInt16LE(off);
+        const extLen  = buf.readUInt16LE(off + 2);
+        // Type 0 = Uninitialized = padding bytes. End of extensions.
+        if (extType === 0) break;
+
+        // Dangerous mint extension types (per spl-token-2022 ExtensionType enum):
+        //   1  TransferFeeConfig          fee on every transfer, up to 100%
+        //   6  DefaultAccountState        new holder accounts can start frozen
+        //   9  NonTransferable            literally cannot transfer
+        //  12  PermanentDelegate          dev can move tokens out of any wallet
+        //  14  TransferHook               dev program runs on every transfer
+        //  26  Pausable                   dev can pause all transfers globally
+        if (extType === 1)  reasons.push('Transfer fee extension — sells may be taxed up to 100%');
+        if (extType === 6)  reasons.push('Default-frozen accounts — new holders start frozen');
+        if (extType === 9)  reasons.push('Non-transferable mint — literally cannot be sold');
+        if (extType === 12) reasons.push('Permanent delegate — dev can move tokens from any wallet');
+        if (extType === 14) reasons.push('Transfer hook — dev program runs on every transfer');
+        if (extType === 26) reasons.push('Pausable mint — dev can freeze all transfers globally');
+
+        off += 4 + extLen;
+        if (extLen > 4096) break; // sanity
       }
     }
-  }
-  const decompiled = TransactionMessage.decompile(message, { addressLookupTableAccounts: alts });
-  return { instructions: decompiled.instructions, alts };
-}
 
-export async function getPumpRoute(opts) {
-  const { action, mint, user, amount, decimals, connection } = opts;
-  const body = { action, mint, user: user.toBase58(), amount: String(amount) };
-  if (decimals != null) body.decimals = Number(decimals);
-  const r = await fetch(APE_PUMP_ROUTE, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error((data && data.error) || ('pump HTTP ' + r.status));
-  if (!data.tx) throw new Error('PumpPortal returned no tx.');
-  const dec = await decodeBuiltTx(data.tx, connection);
-  return { instructions: dec.instructions, alts: dec.alts, pool: data.pool, route: data.route };
-}
-
-/* ============================================================
-   BUY/SELL HOT PATH
-   Speed work in this revision:
-     · Promise.all the three independent network calls (route fetch,
-       blockhash, refLookup) instead of running them in series.
-     · Confirmation loop: 800ms poll, searchTransactionHistory: false.
-       Rebroadcast every ~3.2s, blockheight check every ~4.8s. Bail
-       early on on-chain error / past lastValidBlockHeight.
-     · ALT and referrer caches above eliminate the per-trade lookups
-       after the first call.
-
-   Inputs are passed explicitly to keep the React wrapper's useCallback
-   dep array stable across solPrice / balance refreshes.
-   ============================================================ */
-export async function executeSwap({ mode, swapParams, token, keypair, userPk, tradeConnection, walletStr, refWalletStr, solPrice }) {
-  if (!swapParams) throw new Error('No trade params.');
-  const isBuy = mode === 'buy';
-  const feeLamports = BigInt(swapParams.feeLamports || '0');
-
-  // Fire the three independent network calls in parallel.
-  // refLookup is cached after first call; the first call costs ~80–200ms.
-  const [route, latest, refData] = await Promise.all([
-    getPumpRoute({
-      action: isBuy ? 'buy' : 'sell',
-      mint: token.mint,
-      user: userPk,
-      amount: isBuy ? swapParams.tradeLamports : swapParams.tradeTokens,
-      decimals: isBuy ? undefined : swapParams.decimals,
-      connection: tradeConnection,
-    }),
-    tradeConnection.getLatestBlockhash('confirmed'),
-    feeLamports > 0n
-      ? refLookup(refWalletStr || walletStr).catch(() => ({ referrer: null, refSplitBps: 0 }))
-      : Promise.resolve({ referrer: null, refSplitBps: 0 }),
-  ]);
-
-  const ixs = [...route.instructions];
-
-  if (feeLamports > 0n) {
-    ixs.push(SystemProgram.transfer({ fromPubkey: userPk, toPubkey: FEE_WALLET, lamports: feeLamports }));
-    if (refData.referrer && refData.refSplitBps > 0) {
-      const refLamports = (feeLamports * BigInt(refData.refSplitBps)) / 10000n;
-      if (refLamports > 0n) ixs.push(SystemProgram.transfer({ fromPubkey: userPk, toPubkey: new PublicKey(refData.referrer), lamports: refLamports }));
-    }
+    return {
+      safe: reasons.length === 0,
+      reasons,
+      program: owner === TOKEN_2022_PROGRAM ? '2022' : 'spl',
+    };
   }
 
-  const message = new TransactionMessage({
-    payerKey: userPk,
-    recentBlockhash: latest.blockhash,
-    instructions: ixs,
-  }).compileToV0Message(route.alts);
-  const tx = new VersionedTransaction(message);
+  const _honeyCache = new Map();
+  const HONEY_TTL   = 60_000;
 
-  // [wr-sim] removed — PumpPortal tx is pre-validated; sim was doubling RPC
-  // cost per trade. Send-error path below still uses describeSimLogs() on
-  // returned logs.
-
-  tx.sign([keypair]);
-  const raw = tx.serialize();
-
-  let sig;
-  try {
-    sig = await tradeConnection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 5 });
-  } catch (sendErr) {
-    let logs = (sendErr && sendErr.logs) || null;
-    if (!logs && sendErr && typeof sendErr.getLogs === 'function') {
-      try { logs = await sendErr.getLogs(tradeConnection); } catch (e2) {}
-    }
-    throw new Error(describeSimLogs(logs, sendErr && sendErr.message));
-  }
-
-  // Fast confirmation loop.
-  // Status check every 800ms (searchTransactionHistory: false — we just sent
-  // it, no need to scan archive). Rebroadcast every 4 polls (~3.2s).
-  // Blockheight check every 6 polls (~4.8s) — cheap bail-out for expiry.
-  let confirmed = false;
-  let onchainErr = null;
-  const startedAt = Date.now();
-  const HARD_CAP_MS = 60000;
-  const POLL_MS = 800;
-  const REBROADCAST_EVERY = 4;
-  const BLOCKHEIGHT_CHECK_EVERY = 6;
-  let pollCount = 0;
-
-  while (Date.now() - startedAt < HARD_CAP_MS) {
+  app.get('/api/honeypot-check/:mint', async (req, res) => {
     try {
-      const st = await tradeConnection.getSignatureStatus(sig, { searchTransactionHistory: false });
-      if (st && st.value && st.value.err) { onchainErr = st.value.err; break; }
-      const cs = st && st.value && st.value.confirmationStatus;
-      if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
-    } catch (e) {}
+      const mint = String(req.params.mint || '').trim();
+      if (!_validPubkey(mint)) return res.status(400).json({ safe: false, reasons: ['Invalid mint'] });
 
-    pollCount++;
+      const hit = _honeyCache.get(mint);
+      if (hit && Date.now() - hit.ts < HONEY_TTL) return res.json(hit.payload);
 
-    if (pollCount % BLOCKHEIGHT_CHECK_EVERY === 0) {
-      try {
-        const h = await tradeConnection.getBlockHeight('confirmed');
-        if (h > latest.lastValidBlockHeight) break;
-      } catch (e) {}
+      const result = await inspectMint(mint);
+      _honeyCache.set(mint, { ts: Date.now(), payload: result });
+
+      // Trim cache.
+      if (_honeyCache.size > 5000) {
+        const sorted = [..._honeyCache.entries()].sort((a, b) => a[1].ts - b[1].ts);
+        for (let i = 0; i < 1500; i++) _honeyCache.delete(sorted[i][0]);
+      }
+      return res.json(result);
+    } catch (e) {
+      console.warn('[honeypot]', e.message);
+      res.status(500).json({ safe: false, reasons: ['Check failed: ' + (e.message || 'rpc')] });
     }
+  });
 
-    if (pollCount % REBROADCAST_EVERY === 0) {
-      try { await tradeConnection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }); } catch (e) {}
-    }
-
-    await new Promise(r => setTimeout(r, POLL_MS));
-  }
-
-  if (onchainErr) throw new Error(describeOnChainErr(onchainErr));
-  if (!confirmed) throw new Error("Sent but didn't confirm in time — check Solscan before retrying.");
-
-  // log to referral / pnl ledger (fire and forget)
-  try {
-    const volSol = isBuy ? Number(swapParams.tradeLamports) / 1e9 : (swapParams.tradeTokensUi * (token.price || 0)) / (solPrice || 1);
-    refLogTrade({ wallet: walletStr, mint: token.mint, sym: token.sym, side: mode, sol: volSol, sig, ts: Date.now() });
-  } catch (e) {}
-
-  return { confirmed: true, sig };
+  console.log('[referrals] mounted · default '
+    + (SPLIT_DEFAULT_REF_BPS/100) + '% / boost '
+    + (SPLIT_BOOST_REF_BPS/100) + '% to referrer · '
+    + KOL_BOOST_CODES.size + ' KOL code(s) · data: ' + DB_PATH
+    + ' · honeypot check ' + (RPC_URL ? 'ready' : 'DISABLED (no RPC URL)'));
 }
+
+module.exports = mount;
