@@ -2585,3 +2585,4 @@ function AutoPanel({ open, onClose, auto, solBalance, solPrice }) {
     </div>
   );
 }
+ 
