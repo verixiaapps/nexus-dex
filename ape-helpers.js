@@ -234,6 +234,41 @@ export function describeSimLogs(logs, fallbackMsg) {
   return fallbackMsg ? ('Sim failed -> ' + String(fallbackMsg).slice(0, 160)) : 'Sim failed (no logs).';
 }
 
+// Decode a Solana transaction error object (st.value.err) into plain language.
+// The object is usually { InstructionError: [i, { Custom: <code> }] } or a bare
+// string. Pump.fun's bonding-curve program throws a handful of custom codes;
+// the most common buy failures are slippage and graduated/complete curves.
+export function describeOnChainErr(err) {
+  if (err == null) return 'On-chain error.';
+  if (typeof err === 'string') {
+    const s = err.toLowerCase();
+    if (s.includes('slippage')) return 'Slippage exceeded — price moved before it landed.';
+    if (s.includes('insufficient')) return 'Not enough SOL for the trade + fees.';
+    return 'On-chain error: ' + err.slice(0, 100);
+  }
+  try {
+    const ie = err.InstructionError;
+    if (Array.isArray(ie) && ie[1] && typeof ie[1] === 'object' && 'Custom' in ie[1]) {
+      const code = ie[1].Custom;
+      // Common pump.fun bonding-curve custom error codes.
+      const map = {
+        6000: 'Token not on a bonding curve (may have graduated).',
+        6001: 'Slippage exceeded — price moved before it landed.',
+        6002: 'Bonding curve complete — token graduated, trade on a DEX instead.',
+        6003: 'Trade too small for this curve.',
+        6004: 'Not enough SOL for the trade + fees.',
+      };
+      return map[code] || ('On-chain error (pump code ' + code + ') — token may have graduated or moved.');
+    }
+    if (Array.isArray(ie) && typeof ie[1] === 'string') {
+      const s = ie[1].toLowerCase();
+      if (s.includes('insufficient')) return 'Not enough SOL for the trade + fees.';
+      return 'On-chain error: ' + ie[1];
+    }
+  } catch (e) {}
+  return 'On-chain error: ' + JSON.stringify(err).slice(0, 100);
+}
+
 /* ============================================================
    COLOR
    ============================================================ */
@@ -508,7 +543,7 @@ export async function executeSwap({ mode, swapParams, token, keypair, userPk, tr
     await new Promise(r => setTimeout(r, POLL_MS));
   }
 
-  if (onchainErr) throw new Error('On-chain error: ' + JSON.stringify(onchainErr).slice(0, 120));
+  if (onchainErr) throw new Error(describeOnChainErr(onchainErr));
   if (!confirmed) throw new Error("Sent but didn't confirm in time — check Solscan before retrying.");
 
   // log to referral / pnl ledger (fire and forget)
@@ -519,4 +554,3 @@ export async function executeSwap({ mode, swapParams, token, keypair, userPk, tr
 
   return { confirmed: true, sig };
 }
- 
