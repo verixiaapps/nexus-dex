@@ -1091,6 +1091,64 @@ app.get('/api/dex/token/:mint', async (req, res) => {
   }
 });
 
+/* ------------------------------------------------------------------------
+ * /api/pump/info/:mint — fresh-token fallback.
+ *
+ * DexScreener doesn't index a pump.fun token for the first few minutes, so
+ * /api/dex/token returns null or zero liquidity/holders for brand-new mints
+ * (shows "Thin liq —", "0 holders", bottomed-out safety score). This route
+ * returns pump.fun's own bonding-curve data — liquidity from the curve's SOL
+ * reserves, holder count, image — which exists from the moment of launch.
+ *
+ * Additive only: the client calls this when /api/dex/token comes back thin,
+ * and merges the fields. Reuses _lrFetchPumpInfo + fetchSolPriceUsd already
+ * defined above. Does NOT touch the existing /api/dex/token route.
+ * ---------------------------------------------------------------------- */
+app.get('/api/pump/info/:mint', async (req, res) => {
+  try {
+    const mint = String(req.params.mint || '');
+    if (!PUMP_BASE58_RE.test(mint)) return res.status(400).json({ error: 'Invalid mint' });
+
+    const cacheKey = 'pump:info:' + mint;
+    const cached = getCachedJson(cacheKey);
+    if (cached) return res.status(cached.status).json(cached.payload);
+
+    const solP = await fetchSolPriceUsd().catch(() => 0);
+    const pf = await _lrFetchPumpInfo(mint, solP).catch(() => null);
+
+    // Also pull any websocket trade-stat data we already track for this mint
+    // (trader count, latest vSol) as a secondary source.
+    const ts = _lrTradeStats.get(mint);
+    const wsMeta = _lrBuf.get(mint);
+
+    let holders = (pf && pf.holders > 0) ? pf.holders : 0;
+    if (!(holders > 0) && ts && ts.traders && ts.traders.size > 0) holders = ts.traders.size;
+
+    let liquidityUsd = (pf && pf.liquidityUsd > 0) ? pf.liquidityUsd : 0;
+    if (!(liquidityUsd > 0) && ts && ts.vSol > 0 && solP > 0) liquidityUsd = ts.vSol * solP * 2;
+
+    const icon = (pf && pf.imageUrl) || null;
+
+    const payload = {
+      mint,
+      holders,
+      liquidity: liquidityUsd,
+      icon,
+      sym:  (wsMeta && wsMeta.sym) || null,
+      name: (wsMeta && wsMeta.name) || null,
+      source: 'pump.fun',
+      found: !!(pf || (ts && (ts.traders.size > 0 || ts.vSol > 0))),
+    };
+    // Short cache — this data fills in fast as the token ages.
+    setCachedJson(cacheKey, 200, payload, 3_000);
+    return res.json(payload);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'pump.fun info timed out' });
+    logError('pump-info', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+
 app.get('/api/dex/pump-check', async (req, res) => {
   try {
     const mintsParam = String(req.query.mints || '');
