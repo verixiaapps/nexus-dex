@@ -1032,7 +1032,7 @@ const PUMPPORTAL_URL    = 'https://pumpportal.fun/api/trade-local';
 const PUMP_DEX_IDS      = new Set(['pumpfun', 'pumpswap']);
 const PUMP_BASE58_RE    = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const PUMP_SLIPPAGE_PCT = 10;
-const PUMP_PRIORITY_FEE = 0.0001;
+const PUMP_PRIORITY_FEE = 0.001;
 
 function _shapePumpToken(mint, pairs) {
   if (!Array.isArray(pairs) || pairs.length === 0) return null;
