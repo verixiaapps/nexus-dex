@@ -157,7 +157,11 @@ export const RISK_CEIL = 85;
 export function riskRead(t) {
   if (!t) return { score: 0, verdict: 'Unknown', tier: 'high', label: 'Wild', knowns: [], unknowns: [] };
   const liq = t.liquidity || 0, mcap = t.mcap || 0, hold = t.holders || 0, vol = t.volume24h || 0;
-  const ageMin = Number.isFinite(t.ageMs) ? t.ageMs / 60000 : Infinity;
+  // Age in minutes. Tokens from normalize() carry pairCreatedAtMs (not ageMs);
+  // accept either so the age component of the score actually contributes.
+  const _ageMs = Number.isFinite(t.ageMs) ? t.ageMs
+               : (Number.isFinite(t.pairCreatedAtMs) ? Date.now() - t.pairCreatedAtMs : NaN);
+  const ageMin = Number.isFinite(_ageMs) ? _ageMs / 60000 : Infinity;
   const dataPoints = (liq > 0 ? 1 : 0) + (hold > 0 ? 1 : 0) + (vol > 0 ? 1 : 0) + (mcap > 0 ? 1 : 0);
   const tooThin = dataPoints <= 1;
   let s = 0;
@@ -515,4 +519,3 @@ export async function executeSwap({ mode, swapParams, token, keypair, userPk, tr
 
   return { confirmed: true, sig };
 }
- 
