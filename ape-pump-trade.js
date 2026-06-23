@@ -28,7 +28,7 @@
 const PUMPPORTAL_URL = 'https://pumpportal.fun/api/trade-local';
 const BASE58_RE      = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const SLIPPAGE_PCT   = 10;
-const PRIORITY_FEE   = 0.001;
+const PRIORITY_FEE   = 0.0001;
 const ROUTE          = '/api/ape/pump-trade';
 const TIMEOUT_MS     = 15_000;
 
@@ -119,4 +119,3 @@ function mountRoutes(app) {
 }
 
 module.exports = { mountRoutes, ROUTE };
- 
