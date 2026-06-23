@@ -17,7 +17,7 @@
 //   - Logs every trade routed through your app.
 //   - Powers /api/ref/{register,lookup,stats,leaderboard,pnl} and /share/:wallet.
 //   - Returns a fee-split config the client uses at trade time to atomically
-//     route 30% of the 3% platform fee to the referrer's wallet — in the SAME
+//     route 50% of the 3% platform fee to the referrer's wallet — in the SAME
 //     signed tx as the trade. Server NEVER holds funds. No withdraw flow
 //     needed because there's nothing to withdraw.
 //
@@ -37,9 +37,9 @@ const TMP_PATH = DB_PATH + '.tmp';
 
 // Split is expressed as basis points OF THE PLATFORM FEE (not of trade).
 // Platform fee itself stays 3% of trade — set client-side in Ape.jsx.
-//   Default: referrer 30% of the 3% fee  → 0.9% of trade
-//   Boost:   referrer 50% of the 3% fee  → 1.5% of trade
-const SPLIT_DEFAULT_REF_BPS = 3000;
+//   Default: referrer 50% of the 3% fee  → 1.5% of trade
+//   Boost:   referrer 50% of the 3% fee  → 1.5% of trade (same as default now)
+const SPLIT_DEFAULT_REF_BPS = 5000;
 const SPLIT_BOOST_REF_BPS   = 5000;
 const BOOST_DURATION_MS     = 60 * 24 * 3600 * 1000;
 
