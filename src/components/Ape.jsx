@@ -223,6 +223,11 @@ const AP_CSS = `
 .ap-owned-mark{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:800;letter-spacing:.06em;padding:2px 7px;border-radius:6px;background:rgba(127,255,212,.18);color:var(--green);text-transform:uppercase;font-style:normal}
 
 .ap-row-action{display:flex;gap:6px;justify-content:flex-end;align-items:center}
+.ap-row-pnl{display:flex;flex-direction:column;align-items:flex-end;justify-content:center;gap:1px;margin-left:8px;min-width:74px;flex-shrink:0;font-family:'JetBrains Mono',monospace;line-height:1.1}
+.ap-row-pnl .pct{font-size:13px;font-weight:800;letter-spacing:-.01em;color:var(--ink2)}
+.ap-row-pnl .sol{font-size:10px;font-weight:700;color:var(--ink3);font-variant-numeric:tabular-nums}
+.ap-row-pnl.up .pct,.ap-row-pnl.up .sol{color:var(--green)}
+.ap-row-pnl.dn .pct,.ap-row-pnl.dn .sol{color:var(--red)}
 .ap-btn-buy{padding:8px 14px;border-radius:10px;border:none;cursor:pointer;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:12.5px;background:var(--sky);color:var(--ink);display:inline-flex;align-items:center;gap:6px;box-shadow:0 4px 12px rgba(160,231,255,.30);transition:transform .12s,box-shadow .18s}
 .ap-btn-buy:hover{transform:translateY(-1px);box-shadow:0 6px 18px rgba(160,231,255,.40)}
 .ap-btn-buy:disabled{opacity:.6;cursor:wait;transform:none}
@@ -993,10 +998,21 @@ function OpenPositionsStrip({ walletStr, solPrice, onOpenStats }) {
   );
 }
 
-const SpecimenRow = React.memo(function SpecimenRow({ token, ageMsLive, owned, quickAmount, busy, onApe, onSell, onOpen, isFresh, ownedMode }) {
+const SpecimenRow = React.memo(function SpecimenRow({ token, ageMsLive, owned, costBasis, solPrice, quickAmount, busy, onApe, onSell, onOpen, isFresh, ownedMode }) {
   const r = riskRead(token);
   const ownedUi = (owned && owned.uiAmount) || 0;
   const ownedUsd = ownedUi * (token.price || 0);
+  // Live P&L from real cost basis (sol_in - sol_out), same math as the open-
+  // positions strip. Only shown when we have a logged basis and a SOL price.
+  let pnl = null;
+  if (costBasis && solPrice > 0 && (token.price || 0) > 0) {
+    const costSol = Math.max(0, (costBasis.sol_in || 0) - (costBasis.sol_out || 0));
+    if (costSol > 0) {
+      const curValSol = (ownedUi * token.price) / solPrice;
+      const gainSol = curValSol - costSol;
+      pnl = { gainSol, pct: (gainSol / costSol) * 100, up: gainSol > 0.0001, dn: gainSol < -0.0001 };
+    }
+  }
   const ape = (e) => { e.stopPropagation(); if (busy) return; onApe(token); };
   const sell = (e) => { e.stopPropagation(); if (busy) return; onSell(token); };
   return (
@@ -1019,6 +1035,12 @@ const SpecimenRow = React.memo(function SpecimenRow({ token, ageMsLive, owned, q
       </div>
       <MiniSparkline change={token.change} />
       <span className={'ap-pill ' + r.tier}><span className="d" />{r.tier === 'low' ? 'low' : r.tier === 'med' ? 'medium' : 'high risk'}</span>
+      {(ownedMode && pnl) ? (
+        <div className={'ap-row-pnl' + (pnl.up ? ' up' : pnl.dn ? ' dn' : '')}>
+          <span className="pct">{(pnl.pct >= 0 ? '+' : '') + pnl.pct.toFixed(1)}%</span>
+          <span className="sol">{formatSolSigned(pnl.gainSol)} SOL</span>
+        </div>
+      ) : null}
       <div className="ap-row-action">
         {ownedMode ? (
           <>
@@ -1041,6 +1063,9 @@ const SpecimenRow = React.memo(function SpecimenRow({ token, ageMsLive, owned, q
   && Math.floor(prev.ageMsLive / 5000) === Math.floor(next.ageMsLive / 5000)
   && ((prev.owned && prev.owned.amount) || null) === ((next.owned && next.owned.amount) || null)
   && prev.busy === next.busy
+  && prev.solPrice === next.solPrice
+  && ((prev.costBasis && prev.costBasis.sol_in) || 0) === ((next.costBasis && next.costBasis.sol_in) || 0)
+  && ((prev.costBasis && prev.costBasis.sol_out) || 0) === ((next.costBasis && next.costBasis.sol_out) || 0)
   && prev.quickAmount === next.quickAmount
   && prev.ownedMode === next.ownedMode
   && prev.isFresh === next.isFresh
@@ -1341,6 +1366,35 @@ export default function Ape({ mainWalletPubkey }) {
   const [solPrice, setSolPrice] = useState(0);
   const [balances, setBalances] = useState({});
   const [tokenIndex, setTokenIndex] = useState({});
+  // Per-mint cost basis (sol_in / sol_out) from the server trade log, used to
+  // show live P&L on each owned row. Keyed by mint. Refreshed on the same
+  // cadence as positions. Only mints traded through the app appear here.
+  const [pnlBasis, setPnlBasis] = useState({});
+  useEffect(() => {
+    if (!walletStr) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await fetch('/api/ref/pnl?wallet=' + encodeURIComponent(walletStr));
+        if (!r.ok) return;
+        const d = await r.json();
+        if (cancelled) return;
+        const map = {};
+        for (const p of (d.positions || [])) {
+          if (!p || !p.mint) continue;
+          map[p.mint] = { sol_in: Number(p.sol_in) || 0, sol_out: Number(p.sol_out) || 0, open_tokens: Number(p.open_tokens) || 0 };
+        }
+        setPnlBasis(prev => {
+          const keys = Object.keys(map);
+          if (keys.length === Object.keys(prev).length && keys.every(k => prev[k] && prev[k].sol_in === map[k].sol_in && prev[k].sol_out === map[k].sol_out && prev[k].open_tokens === map[k].open_tokens)) return prev;
+          return map;
+        });
+      } catch (e) {}
+    };
+    load();
+    const id = setInterval(load, POLL_POSITIONS);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [walletStr]);
 
   // FIX 2: tokenMeta for owned tokens not in the live feed, plus tradeConnection
   const [tokenMeta, setTokenMeta] = useState({});
@@ -1746,6 +1800,8 @@ export default function Ape({ mainWalletPubkey }) {
                       token={t}
                       ageMsLive={ageMsLive}
                       owned={balances[t.mint]}
+                      costBasis={pnlBasis[t.mint]}
+                      solPrice={solPrice}
                       quickAmount={quickAmount + ' SOL'}
                       busy={!!busyMints[t.mint]}
                       onApe={onApe}
@@ -2100,6 +2156,8 @@ const SAFETY_FLOOR = { dailyLossCapSol: 1.0, maxHoldMin: 30, ageMinAbsolute: 3, 
 const AT_SETTINGS_KEY = 'lr_at_settings_v1';
 const AT_STATE_KEY = 'lr_at_state_v1';
 const AT_POSITIONS_KEY = 'lr_at_positions_v1';
+const AT_ENABLED_KEY = 'lr_at_enabled_v1';
+const AT_BAL_AMT_KEY = 'lr_at_bal_amount_v1';
 const AT_POS_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
 function loadCustomSettings() {
@@ -2121,13 +2179,21 @@ function loadPositions() {
   } catch (e) { return []; }
 }
 function savePositions(arr) { try { localStorage.setItem(AT_POSITIONS_KEY, JSON.stringify(arr || [])); } catch (e) {} }
+function loadEnabled() { try { return localStorage.getItem(AT_ENABLED_KEY) === '1'; } catch (e) { return false; } }
+function saveEnabled(v) { try { localStorage.setItem(AT_ENABLED_KEY, v ? '1' : '0'); } catch (e) {} }
+function loadBalancedAmount() {
+  try { const raw = localStorage.getItem(AT_BAL_AMT_KEY); if (raw == null) return BALANCED_SETTINGS.perTradeSol; const n = Number(raw); return Number.isFinite(n) && n > 0 ? n : BALANCED_SETTINGS.perTradeSol; }
+  catch (e) { return BALANCED_SETTINGS.perTradeSol; }
+}
+function saveBalancedAmount(n) { try { localStorage.setItem(AT_BAL_AMT_KEY, String(n)); } catch (e) {} }
 
 function useAutoTrade(deps) {
   const { recentTokens, solBalance, solPrice, balances, executeSwap, pushToast } = deps;
   const initialDaily = useMemo(() => loadDailyState() || {}, []);
-  const [enabled, setEnabled] = useState(false);
+  const [enabled, setEnabledState] = useState(() => loadEnabled());
   const [mode, setMode] = useState('balanced');
   const [custom, setCustom] = useState(() => loadCustomSettings());
+  const [balancedAmount, setBalancedAmountState] = useState(() => loadBalancedAmount());
   const [positions, setPositionsState] = useState(() => loadPositions());
   const [log, setLog] = useState([]);
   const [dailyPnlSol, setDailyPnlSol] = useState(initialDaily.dailyPnlSol || 0);
@@ -2143,6 +2209,18 @@ function useAutoTrade(deps) {
   const exitSolPriceRef = useRef(solPrice);
   useEffect(() => { exitSolPriceRef.current = solPrice; }, [solPrice]);
 
+  const setEnabled = useCallback((v) => {
+    setEnabledState(prev => {
+      const next = typeof v === 'function' ? v(prev) : v;
+      saveEnabled(next); return next;
+    });
+  }, []);
+  const setBalancedAmount = useCallback((n) => {
+    const v = Number(n);
+    if (!Number.isFinite(v) || v <= 0) return;
+    setBalancedAmountState(v); saveBalancedAmount(v);
+  }, []);
+
   const setPositions = useCallback((updater) => {
     setPositionsState(prev => {
       const next = typeof updater === 'function' ? updater(prev) : updater;
@@ -2150,7 +2228,7 @@ function useAutoTrade(deps) {
     });
   }, []);
 
-  const settings = mode === 'balanced' ? BALANCED_SETTINGS : custom;
+  const settings = mode === 'balanced' ? { ...BALANCED_SETTINGS, perTradeSol: balancedAmount } : custom;
   const effective = useMemo(() => ({ ...settings, minAgeMin: Math.max(SAFETY_FLOOR.ageMinAbsolute, settings.minAgeMin) }), [settings]);
 
   const updateCustom = useCallback((patch) => {
@@ -2309,7 +2387,7 @@ function useAutoTrade(deps) {
     setPositions([]);
   }, [executeSwap, setPositions, pushLog]);
 
-  return { enabled, setEnabled, paused, setPaused, mode, setMode, custom, updateCustom, settings, effective, positions, log, dailyPnlSol, tradesToday, flatten };
+  return { enabled, setEnabled, paused, setPaused, mode, setMode, custom, updateCustom, balancedAmount, setBalancedAmount, settings, effective, positions, log, dailyPnlSol, tradesToday, flatten };
 }
 
 function Slider({ label, hint, value, min, max, step, suffix, onChange }) {
@@ -2330,7 +2408,7 @@ function AutoPanel({ open, onClose, auto, solBalance, solPrice }) {
   useEffect(() => { if (!open) return; const h = (e) => { if (e.key === 'Escape') onClose && onClose(); }; window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h); }, [open, onClose]);
   if (!open) return null;
 
-  const { enabled, setEnabled, paused, setPaused, mode, setMode, settings, custom, updateCustom, positions, log, dailyPnlSol, tradesToday, flatten } = auto;
+  const { enabled, setEnabled, paused, setPaused, mode, setMode, settings, custom, updateCustom, balancedAmount, setBalancedAmount, positions, log, dailyPnlSol, tradesToday, flatten } = auto;
   const isCustom = mode === 'custom';
   const s = isCustom ? custom : settings;
 
