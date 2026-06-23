@@ -1423,7 +1423,8 @@ export default function Ape({ mainWalletPubkey }) {
         const mint = info.mint;
         const amount = info.tokenAmount.amount;
         const uiAmount = Number(info.tokenAmount.uiAmount) || 0;
-        if (uiAmount > 0) next[mint] = { amount, uiAmount };
+        const decimals = Number(info.tokenAmount.decimals);
+        if (uiAmount > 0) next[mint] = { amount, uiAmount, decimals: Number.isFinite(decimals) ? decimals : 6 };
       }
       setBalances(prev => {
         const prevKeys = Object.keys(prev);
@@ -1444,17 +1445,19 @@ export default function Ape({ mainWalletPubkey }) {
         conn.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID, mint: new PublicKey(mint) }, BAL_COMMITMENT),
         conn.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID, mint: new PublicKey(mint) }, BAL_COMMITMENT),
       ]);
-      let amount = '0', uiAmount = 0;
+      let amount = '0', uiAmount = 0, decimals = 6;
       for (const acc of [...tk.value, ...tk22.value]) {
         const info = acc.account.data.parsed.info;
         amount = info.tokenAmount.amount;
         uiAmount = Number(info.tokenAmount.uiAmount) || 0;
+        const d = Number(info.tokenAmount.decimals);
+        if (Number.isFinite(d)) decimals = d;
       }
       setBalances(prev => {
         const cur = prev[mint];
         if (uiAmount === 0) { if (!cur) return prev; const next = { ...prev }; delete next[mint]; return next; }
         if (cur && cur.amount === amount) return prev;
-        return { ...prev, [mint]: { amount, uiAmount } };
+        return { ...prev, [mint]: { amount, uiAmount, decimals } };
       });
     } catch (e) {}
   }, [walletStr]);
@@ -1491,11 +1494,17 @@ export default function Ape({ mainWalletPubkey }) {
     }
   }, [balances, fetchTokenMeta]);
 
+  // solPrice held in a ref so executeSwap's identity stays stable across the
+  // 30s price refresh — otherwise the auto-trade exit-loop effect (which
+  // depends on executeSwap) tears down and rebuilds its interval every 30s.
+  const solPriceRef = useRef(solPrice);
+  useEffect(() => { solPriceRef.current = solPrice; }, [solPrice]);
+
   // FIX 1: executeSwap wrapper with correct arg shape for ape-helpers.executeSwap
-  const executeSwap = useCallback(async ({ mode, token, swapParams, tradeLamports, feeLamports, totalLamports, tradeTokensRaw, tradeTokensUi }) => {
+  const executeSwap = useCallback(async ({ mode, token, swapParams, tradeLamports, feeLamports, totalLamports, tradeTokensRaw, tradeTokensUi, decimals }) => {
     const params = swapParams || (mode === 'buy'
       ? { mode: 'buy', tradeLamports, feeLamports, totalLamports }
-      : { mode: 'sell', tradeTokens: tradeTokensRaw, tradeTokensUi, feeLamports: feeLamports != null ? String(feeLamports) : '0' });
+      : { mode: 'sell', tradeTokens: tradeTokensRaw, tradeTokensUi, feeLamports: feeLamports != null ? String(feeLamports) : '0', decimals: decimals != null ? Number(decimals) : 6 });
     const result = await apeExecuteSwap({
       mode: params.mode,
       swapParams: params,
@@ -1504,13 +1513,13 @@ export default function Ape({ mainWalletPubkey }) {
       userPk: wallet.publicKey,
       tradeConnection,
       walletStr,
-      solPrice,
+      solPrice: solPriceRef.current,
     });
     try { localStorage.setItem(HAS_TRADED_KEY, '1'); } catch (e) {}
     setShowLure(false);
     setTimeout(() => { refreshSol(); refreshOneToken(token.mint); }, 800);
     return result;
-  }, [wallet.keypair, wallet.publicKey, tradeConnection, walletStr, solPrice, refreshSol, refreshOneToken]);
+  }, [wallet.keypair, wallet.publicKey, tradeConnection, walletStr, refreshSol, refreshOneToken]);
 
   // FIX 5: result.sig (ape-helpers returns { confirmed, sig })
   const onApe = useCallback(async (token) => {
@@ -2115,6 +2124,10 @@ function useAutoTrade(deps) {
   const tradeStampsRef = useRef([]);
   const positionsRef = useRef(positions);
   useEffect(() => { positionsRef.current = positions; }, [positions]);
+  const balancesRef = useRef(balances);
+  useEffect(() => { balancesRef.current = balances; }, [balances]);
+  const exitSolPriceRef = useRef(solPrice);
+  useEffect(() => { exitSolPriceRef.current = solPrice; }, [solPrice]);
 
   const setPositions = useCallback((updater) => {
     setPositionsState(prev => {
@@ -2159,12 +2172,17 @@ function useAutoTrade(deps) {
       if (inflightRef.current.has(tk.mint)) continue;
       if (positionsRef.current.some(p => p.mint === tk.mint)) continue;
 
+      // Only "too old" permanently blacklists. Age-too-young, liquidity,
+      // holders, and vibe are all transient — a token that fails now may
+      // pass minutes later as it ages into the window and fills out. Marking
+      // them seen here is what stopped auto-buys from ever firing.
       const ageMin = tk.pairCreatedAtMs ? (now - tk.pairCreatedAtMs) / 60000 : 999;
-      if (ageMin < effective.minAgeMin || ageMin > effective.maxAgeMin) { seenMintsRef.current.add(tk.mint); continue; }
-      if (!Number.isFinite(tk.liquidity) || tk.liquidity < effective.minLiqUsd) { seenMintsRef.current.add(tk.mint); continue; }
-      if (!Number.isFinite(tk.holders) || tk.holders < effective.minHolders) { seenMintsRef.current.add(tk.mint); continue; }
+      if (ageMin > effective.maxAgeMin) { seenMintsRef.current.add(tk.mint); continue; }
+      if (ageMin < effective.minAgeMin) continue;
+      if (!Number.isFinite(tk.liquidity) || tk.liquidity < effective.minLiqUsd) continue;
+      if (!Number.isFinite(tk.holders) || tk.holders < effective.minHolders) continue;
       const r = riskRead(tk);
-      if (r.score < effective.minVibe) { seenMintsRef.current.add(tk.mint); continue; }
+      if (r.score < effective.minVibe) continue;
       if (!(tk.price > 0)) continue;
       if (((solBalance && solBalance.uiAmount) || 0) < effective.perTradeSol + 0.01) continue;
 
@@ -2199,13 +2217,18 @@ function useAutoTrade(deps) {
     }
   }, [enabled, paused, recentTokens, effective, solBalance, executeSwap, pushLog, pushToast, setPositions]);
 
-  // Exit loop — TP/SL/timeout
+  // Exit loop — TP/SL/timeout.
+  // Reads positions/balances/solPrice from refs so the interval is built once
+  // per on/off transition (gated on hasPositions) rather than rebuilt on every
+  // price tick or balance poll. Depending on `solPrice`/`balances` directly
+  // would tear the interval down every 30s and could fire tick() mid-trade.
+  const hasPositions = positions.length > 0;
   useEffect(() => {
-    if (positions.length === 0) return;
+    if (!hasPositions) return;
     let cancelled = false;
     const tick = async () => {
       const now = Date.now();
-      for (const p of positions) {
+      for (const p of positionsRef.current) {
         if (cancelled) return;
         if (p.exiting) continue;
         try {
@@ -2223,16 +2246,22 @@ function useAutoTrade(deps) {
           if (!reason) continue;
           setPositions(prev => prev.map(x => x.mint === p.mint ? { ...x, exiting: true } : x));
           try {
-            const owned = balances && balances[p.mint];
+            const owned = balancesRef.current && balancesRef.current[p.mint];
             if (!owned || !((owned.uiAmount || 0) > 0)) {
+              // Balance may not have landed yet (refreshOneToken fires ~800ms
+              // after buy; the 30s poll is slower). Don't drop a fresh position
+              // as "gone" — wait until it's had time to show up.
+              if ((Date.now() - p.ts) < 45000) {
+                setPositions(prev => prev.map(x => x.mint === p.mint ? { ...x, exiting: false } : x));
+                continue;
+              }
               setPositions(prev => prev.filter(x => x.mint !== p.mint));
               pushLog('info', '$' + p.sym + ' position cleared (no balance)');
               continue;
             }
             const tk = { mint: p.mint, sym: p.sym, name: p.name, icon: p.icon, price: px };
-            // FIX 6: use tradeTokensRaw which the wrapper maps to tradeTokens for ape-helpers
-            await executeSwap({ mode: 'sell', token: tk, tradeTokensRaw: BigInt(owned.amount || '0'), tradeTokensUi: owned.uiAmount, feeLamports: 0n });
-            const exitSol = (owned.uiAmount * px) / (solPrice || 150);
+            await executeSwap({ mode: 'sell', token: tk, tradeTokensRaw: BigInt(owned.amount || '0'), tradeTokensUi: owned.uiAmount, decimals: owned.decimals, feeLamports: 0n });
+            const exitSol = (owned.uiAmount * px) / (exitSolPriceRef.current || 150);
             const pnlSol = exitSol - (p.entrySol || 0);
             setPositions(prev => prev.filter(x => x.mint !== p.mint));
             setDailyPnlSol(n => n + pnlSol);
@@ -2248,23 +2277,23 @@ function useAutoTrade(deps) {
     tick();
     const id = setInterval(tick, SAFETY_FLOOR.posPollMs);
     return () => { cancelled = true; clearInterval(id); };
-  }, [positions, effective, balances, solPrice, executeSwap, setPositions, pushLog]);
+  }, [hasPositions, effective, executeSwap, setPositions, pushLog]);
 
   const flatten = useCallback(async () => {
     setEnabled(false);
     for (const p of positionsRef.current) {
       try {
-        const owned = balances && balances[p.mint];
+        const owned = balancesRef.current && balancesRef.current[p.mint];
         if (!owned || !((owned.uiAmount || 0) > 0)) continue;
         const tk = { mint: p.mint, sym: p.sym, name: p.name, icon: p.icon, price: p.currentPriceUsd };
-        await executeSwap({ mode: 'sell', token: tk, tradeTokensRaw: BigInt(owned.amount || '0'), tradeTokensUi: owned.uiAmount, feeLamports: 0n });
+        await executeSwap({ mode: 'sell', token: tk, tradeTokensRaw: BigInt(owned.amount || '0'), tradeTokensUi: owned.uiAmount, decimals: owned.decimals, feeLamports: 0n });
         pushLog('sell', 'Flatten $' + p.sym);
       } catch (e) {
         pushLog('error', 'Flatten failed $' + p.sym);
       }
     }
     setPositions([]);
-  }, [balances, executeSwap, setPositions, pushLog]);
+  }, [executeSwap, setPositions, pushLog]);
 
   return { enabled, setEnabled, paused, setPaused, mode, setMode, custom, updateCustom, settings, effective, positions, log, dailyPnlSol, tradesToday, flatten };
 }
