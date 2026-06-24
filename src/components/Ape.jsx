@@ -1,5 +1,5 @@
 // Ape.jsx — Nexus DEX · Ape (early-launch trading terminal)
-// 
+//
 // Single-file build. Combines the React surface, the CSS, and the heavy
 // auxiliary panels (StatsPanel + AutoPanel + useAutoTrade) that were
 // temporarily split out during the rewrite.
@@ -146,7 +146,7 @@ const AP_CSS = `
 .ap-pos-strip-row{padding:9px 18px;display:flex;align-items:center;gap:12px;border-top:1px solid rgba(183,148,246,.14)}
 .ap-pos-strip-av{flex-shrink:0;width:28px;height:28px;border-radius:8px;display:grid;place-items:center;font-family:'Inter',sans-serif;font-style:italic;font-size:13px;color:#fff;overflow:hidden;box-shadow:0 2px 6px rgba(26,27,78,.16)}
 .ap-pos-strip-av img{width:100%;height:100%;object-fit:cover}
-.ap-pos-strip-sym{font-family:'Inter',sans-serif;font-style:italic;font-size:15px;letter-spacing:-.005em;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+.ap-pos-strip-sym{font-family:'Inter',sans-serif;font-size:15px;letter-spacing:-.005em;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
 .ap-pos-strip-pnl{font-family:'JetBrains Mono',monospace;font-weight:700;font-size:12.5px;color:var(--green)}
 .ap-pos-strip-pnl.dn{color:var(--red)}
 .ap-pos-strip-pnl.dim{color:var(--ink3);font-weight:600}
@@ -167,7 +167,7 @@ const AP_CSS = `
 .ap-trend-card .av{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;font-family:'Inter',sans-serif;font-style:italic;font-size:14px;color:#fff;flex-shrink:0;overflow:hidden;box-shadow:0 2px 6px rgba(26,27,78,.16)}
 .ap-trend-card .av img{width:100%;height:100%;object-fit:cover}
 .ap-trend-card .meta{min-width:0;flex:1}
-.ap-trend-card .sym{font-family:'Inter',sans-serif;font-style:italic;font-size:15.5px;letter-spacing:-.005em;line-height:1;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ap-trend-card .sym{font-family:'Inter',sans-serif;font-size:15.5px;letter-spacing:-.005em;line-height:1;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ap-trend-card .chg{font-family:'JetBrains Mono',monospace;font-size:10.5px;font-weight:800;letter-spacing:.02em;margin-top:3px;color:var(--green)}
 .ap-trend-card .chg.dn{color:var(--red)}
 
@@ -265,7 +265,7 @@ const AP_CSS = `
 .ap-tshead-row{display:flex;align-items:center;gap:13px;padding-right:38px}
 .ap-tshead .ap-av{width:56px;height:56px;border-radius:14px;font-size:21px}
 .ap-tshead .title{flex:1;min-width:0}
-.ap-tshead .sym{font-family:'Inter',sans-serif;font-style:italic;font-size:28px;letter-spacing:-.02em;line-height:1;color:var(--ink)}
+.ap-tshead .sym{font-family:'Inter',sans-serif;font-size:28px;letter-spacing:-.02em;line-height:1;color:var(--ink)}
 .ap-tshead .sub{font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--ink2);font-weight:600;margin-top:5px}
 
 .ap-chart-wrap{margin:14px 22px 0;padding:12px 0 6px;border-top:1px solid var(--hairline)}
@@ -279,7 +279,10 @@ const AP_CSS = `
 .ap-chart-unit{display:flex;gap:2px;background:var(--glass);border:1px solid var(--hairline);border-radius:9px;padding:2px}
 .ap-chart-unit .u{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--ink3);background:none;border:none;padding:4px 9px;border-radius:7px;cursor:pointer}
 .ap-chart-unit .u.on{background:var(--cyan);color:#fff}
-.ap-candles{height:120px !important}
+.ap-candles{height:230px !important}
+.ap-chart-pxline{position:absolute;right:0;transform:translateY(-50%);font-family:'Inter',sans-serif;font-size:10px;font-weight:800;color:#0B0E14;background:#fff;border:1px solid var(--hairline);border-radius:5px;padding:1px 5px;font-variant-numeric:tabular-nums;pointer-events:none}
+.ap-chart-hl{position:absolute;transform:translateY(-50%);font-family:'Inter',sans-serif;font-size:9.5px;font-weight:700;color:var(--ink2);font-variant-numeric:tabular-nums;pointer-events:none;white-space:nowrap}
+.ap-chart-axis{display:flex;justify-content:space-between;padding:6px 4px 0;font-family:'Inter',sans-serif;font-size:9px;font-weight:600;color:var(--ink3);font-variant-numeric:tabular-nums}
 .ap-chart-building{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink3);margin-left:8px}
 .ap-research{margin:12px 22px 0;padding:14px;background:var(--glass);border:1px solid var(--hairline);border-radius:16px}
 .ap-research-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px 10px}
@@ -428,7 +431,7 @@ const AP_CSS = `
 .ap-wtoken:last-child{border-bottom:none}
 .ap-wtoken .ap-av{width:34px;height:34px;border-radius:9px;font-size:14px;flex-shrink:0}
 .ap-wtoken-nm{flex:1;min-width:0}
-.ap-wtoken-sym{font-family:'Inter',sans-serif;font-style:italic;font-size:15px;letter-spacing:-.005em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+.ap-wtoken-sym{font-family:'Inter',sans-serif;font-size:15px;letter-spacing:-.005em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
 .ap-wtoken-amt{font-family:'JetBrains Mono',monospace;font-size:10.5px;font-weight:600;color:var(--ink2);margin-top:2px}
 .ap-wtoken-usd{font-family:'JetBrains Mono',monospace;font-weight:800;font-size:12.5px;color:var(--green);flex-shrink:0}
 .ap-block-l{font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink3);font-weight:800;margin-bottom:9px}
@@ -583,7 +586,7 @@ const AP_CSS = `
 .wp-pos-no{font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;color:var(--ink3)}
 .wp-pos-tk{display:flex;align-items:center;gap:10px;min-width:0}
 .wp-pos-av{flex-shrink:0;width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-family:'Inter',sans-serif;font-style:italic;font-size:13px;color:#fff;text-transform:uppercase;box-shadow:0 3px 10px rgba(26,27,78,.16)}
-.wp-pos-sym{font-family:'Inter',sans-serif;font-style:italic;font-size:15px;letter-spacing:-.005em;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:8px;color:var(--ink)}
+.wp-pos-sym{font-family:'Inter',sans-serif;font-size:15px;letter-spacing:-.005em;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:8px;color:var(--ink)}
 .wp-pos-status{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:800;letter-spacing:.04em;padding:2px 6px;border-radius:5px;text-transform:uppercase;font-style:normal}
 .wp-pos-status.open{background:rgba(127,255,212,.18);color:var(--green)}
 .wp-pos-status.closed{background:rgba(26,27,78,.06);color:var(--ink2)}
@@ -717,7 +720,7 @@ const AP_CSS = `
 .wa-pos-row:hover{background:rgba(160,231,255,.04)}
 .wa-pos-av{flex-shrink:0;width:36px;height:36px;border-radius:10px;display:grid;place-items:center;font-family:'Inter',sans-serif;font-style:italic;font-size:13.5px;color:#fff;text-transform:uppercase;box-shadow:0 3px 10px rgba(26,27,78,.16)}
 .wa-pos-nm{flex:1;min-width:0}
-.wa-pos-sym{font-family:'Inter',sans-serif;font-style:italic;font-size:15px;letter-spacing:-.005em;line-height:1.1;color:var(--ink)}
+.wa-pos-sym{font-family:'Inter',sans-serif;font-size:15px;letter-spacing:-.005em;line-height:1.1;color:var(--ink)}
 .wa-pos-time{font-family:'JetBrains Mono',monospace;font-size:10.5px;font-weight:600;color:var(--ink2);margin-top:3px}
 .wa-pos-pnl{flex-shrink:0;text-align:right;min-width:90px}
 .wa-pos-pnl-v{font-family:'Inter',sans-serif;font-size:17px;letter-spacing:-.015em;line-height:1;color:var(--ink)}
@@ -903,13 +906,18 @@ function TokenChart({ token, solPrice }) {
     if (tickMintRef.current !== token.mint) { tickMintRef.current = token.mint; setTicks([]); }
     const sample = () => {
       const px = Number(token.price) || 0;
+      // Always record a point each tick (even if the price is unchanged) so the
+      // chart resolves quickly and a flat price draws an honest flat line —
+      // rather than starving the chart and spinning on "Building…" forever.
       if (px > 0) setTicks(prev => {
-        const next = prev.length && prev[prev.length - 1].p === px ? prev : [...prev, { t: Date.now(), p: px }];
+        const next = [...prev, { t: Date.now(), p: px }];
         return next.length > 120 ? next.slice(next.length - 120) : next;
       });
     };
     sample();
-    const id = setInterval(sample, 3000);
+    // Sample faster (2s) so two points exist within ~2s and the line shows
+    // almost immediately instead of waiting through several 3s gaps.
+    const id = setInterval(sample, 2000);
     return () => clearInterval(id);
   }, [token && token.mint, token && token.price]);
 
@@ -1017,7 +1025,7 @@ function TokenChart({ token, solPrice }) {
   const first = conv(candles[0].o);
   const last = conv(candles[candles.length - 1].c);
   const isUp = last >= first;
-  const upColor = '#0a7a4c', dnColor = '#D14B6A';
+  const upColor = '#12B76A', dnColor = '#F0436E';
   const tfClass = isUp ? ' on up' : ' on dn';
 
   const lows  = candles.map(k => conv(k.l));
@@ -1031,11 +1039,17 @@ function TokenChart({ token, solPrice }) {
   const minP = rawMin - pad;
   const maxP = rawMax + pad;
   const range = (maxP - minP) || (maxP * 0.001) || 1;
-  const W = 320, H = 120, padY = 8, padX = 2;
+  // Taller chart like GMGN (their candles fill the screen). Reserve right gutter
+  // for price labels and bottom strip for time axis.
+  const W = 340, H = 230, padY = 14, padX = 3, gutR = 4;
   const n = candles.length;
   const slot = (W - padX * 2) / n;
-  const bodyW = Math.max(1.2, Math.min(slot * 0.66, 9));
+  const bodyW = Math.max(1.4, Math.min(slot * 0.66, 11));
   const yOf = (v) => H - padY - ((v - minP) / range) * (H - 2 * padY);
+  // Indices of the highest-high and lowest-low candles, for GMGN's H/L markers.
+  let hiIdx = 0, loIdx = 0;
+  for (let i = 1; i < n; i++) { if (highs[i] > highs[hiIdx]) hiIdx = i; if (lows[i] < lows[loIdx]) loIdx = i; }
+  const fmtAxis = (v) => unit === 'mcap' ? '$' + format(v) : formatPrice(v);
 
   const hv = hover != null && candles[hover] ? candles[hover] : null;
   const lastPx = conv(candles[candles.length - 1].c);
@@ -1072,12 +1086,26 @@ function TokenChart({ token, solPrice }) {
             return (
               <g key={i} opacity={hover != null && hover !== i ? 0.5 : 1}>
                 <line x1={cx} x2={cx} y1={yH} y2={yL} stroke={col} strokeWidth="1" />
-                <rect x={cx - bodyW / 2} y={top} width={bodyW} height={bh} fill={col} />
+                <rect x={cx - bodyW / 2} y={top} width={bodyW} height={bh} fill={col} rx="0.5" />
               </g>
             );
           })}
-          {hover != null && <line x1={padX + hover * slot + slot / 2} x2={padX + hover * slot + slot / 2} y1="0" y2={H} stroke="#1A1B4E" strokeOpacity="0.18" strokeWidth="1" strokeDasharray="2 2" />}
+          {/* GMGN-style dashed current-price line across the chart */}
+          <line x1="0" x2={W - gutR} y1={yOf(lastPx)} y2={yOf(lastPx)} stroke="#9AA3B2" strokeWidth="0.8" strokeDasharray="3 3" />
+          {/* high / low extreme markers like GMGN's 2.02M / 1.13M labels */}
+          <line x1={padX + hiIdx * slot + slot / 2} x2={padX + hiIdx * slot + slot / 2 + 14} y1={yOf(highs[hiIdx])} y2={yOf(highs[hiIdx])} stroke="#9AA3B2" strokeWidth="0.7" />
+          <line x1={padX + loIdx * slot + slot / 2} x2={padX + loIdx * slot + slot / 2 + 14} y1={yOf(lows[loIdx])} y2={yOf(lows[loIdx])} stroke="#9AA3B2" strokeWidth="0.7" />
+          {hover != null && <line x1={padX + hover * slot + slot / 2} x2={padX + hover * slot + slot / 2} y1="0" y2={H} stroke="#0B0E14" strokeOpacity="0.16" strokeWidth="1" strokeDasharray="2 2" />}
         </svg>
+        {/* price + extreme labels overlaid (HTML, crisp text) */}
+        <div className="ap-chart-pxline" style={{ top: (yOf(lastPx) / H * 100) + '%' }}>{fmtAxis(lastPx)}</div>
+        <div className="ap-chart-hl hi" style={{ top: (yOf(highs[hiIdx]) / H * 100) + '%', left: ((padX + hiIdx * slot + slot / 2 + 16) / W * 100) + '%' }}>{fmtAxis(highs[hiIdx])}</div>
+        <div className="ap-chart-hl lo" style={{ top: (yOf(lows[loIdx]) / H * 100) + '%', left: ((padX + loIdx * slot + slot / 2 + 16) / W * 100) + '%' }}>{fmtAxis(lows[loIdx])}</div>
+      </div>
+      <div className="ap-chart-axis">
+        <span>{new Date(candles[0].ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+        {n > 4 ? <span>{new Date(candles[Math.floor(n / 2)].ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span> : null}
+        <span>{new Date(candles[n - 1].ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
       </div>
       <div className="ap-tf-pills">
         {CHART_TFS.map(t => (<button key={t} className={'ap-tf' + (t === tf ? tfClass : '')} onClick={() => setTf(t)}>{t}</button>))}
@@ -2379,7 +2407,7 @@ export default function Ape({ mainWalletPubkey }) {
 
       {tradeToken && (
         <TradeSheet
-          token={tradeToken}
+          token={tokenIndex[tradeToken.mint] ? { ...tradeToken, ...tokenIndex[tradeToken.mint] } : tradeToken}
           initialMode={tradeMode}
           onClose={() => setTradeToken(null)}
           onConfirm={onTradeConfirm}
