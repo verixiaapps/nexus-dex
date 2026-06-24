@@ -345,6 +345,14 @@ export function openTelegram(text, url) {
   const params = new URLSearchParams({ url: url || '', text });
   window.open('https://t.me/share/url?' + params, '_blank', 'noopener,noreferrer');
 }
+// Discord has no public web share-intent URL, so the reliable cross-client move
+// is to copy a ready-to-paste message to the clipboard. Returns true on success
+// so the caller can show a "copied — paste in Discord" toast.
+export async function openDiscord(text, url) {
+  if (typeof navigator === 'undefined' || !navigator.clipboard) return false;
+  try { await navigator.clipboard.writeText((text || '') + (url ? '\n' + url : '')); return true; }
+  catch (e) { return false; }
+}
 
 /* ============================================================
    REFERRAL HELPERS
