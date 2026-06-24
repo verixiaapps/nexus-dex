@@ -1320,10 +1320,10 @@ app.get('/api/dex/sol-price', async (req, res) => {
 });
 
 const _chartTfs = {
-  '5m':  { timeframe: 'minute', aggregate: 1,  limit: 5  },
-  '1H':  { timeframe: 'minute', aggregate: 5,  limit: 12 },
-  '6H':  { timeframe: 'minute', aggregate: 15, limit: 24 },
-  '24H': { timeframe: 'hour',   aggregate: 1,  limit: 24 },
+  '5m':  { timeframe: 'minute', aggregate: 1,  limit: 60  },
+  '1H':  { timeframe: 'minute', aggregate: 5,  limit: 60  },
+  '6H':  { timeframe: 'minute', aggregate: 15, limit: 60  },
+  '24H': { timeframe: 'hour',   aggregate: 1,  limit: 48  },
 };
 
 app.get('/api/dex/chart/:mint', async (req, res) => {
