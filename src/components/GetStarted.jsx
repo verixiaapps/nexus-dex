@@ -83,39 +83,12 @@ const WP_CSS = `
  -webkit-background-clip:initial;background-clip:initial;-webkit-text-fill-color:currentColor;color:var(--ink-2);font-weight:700;
 }
 
-/* DESCRIPTION (replaces hero) */
-.wp-desc{padding:14px 18px 6px;font-size:13px;color:var(--ink-2);font-weight:500;line-height:1.45}
-.wp-desc b{color:var(--ink);font-weight:700}
-
-/* HERO PITCH (disconnected) — kept harmless/flattened */
-.wp-hero{padding:14px 18px 6px;text-align:left;position:relative;z-index:2}
-.wp-hero-eyebrow{
- display:inline-flex;align-items:center;gap:7px;
- background:var(--glass-strong);backdrop-filter:none;
- border:1px solid var(--border);border-radius:999px;
- padding:6px 12px;margin-bottom:12px;
- font-size:10px;font-weight:700;color:var(--ink-2);letter-spacing:0.8px;
-}
-.wp-hero-eyebrow .dot{
- width:6px;height:6px;border-radius:50%;
- background:var(--green);box-shadow:none;
- animation:wpPulse 1.6s ease-in-out infinite;
-}
-.wp-hero h1{
- font-family:inherit;font-weight:700;
- font-size:30px;line-height:1.05;letter-spacing:-.02em;
- margin:0 0 12px;color:var(--ink);
-}
-.wp-hero h1 .shim{
- font-style:normal;
- background:none;
- -webkit-background-clip:initial;background-clip:initial;-webkit-text-fill-color:currentColor;color:var(--ink);
- animation:none;
-}
-.wp-hero-sub{
- color:var(--ink-2);font-size:13px;font-weight:500;
- margin:0 0 16px;max-width:340px;line-height:1.45;
-}
+/* HERO — flattened; only the Connect button remains */
+.wp-hero{padding:12px 18px 4px;text-align:left;position:relative;z-index:2}
+.wp-hero-eyebrow{display:none}
+.wp-hero h1{display:none}
+.wp-hero h1 .shim{font-style:normal;background:none;-webkit-background-clip:initial;background-clip:initial;-webkit-text-fill-color:currentColor;color:var(--ink)}
+.wp-hero-sub{display:none}
 .wp-hero-connect{
  display:inline-flex;align-items:center;gap:8px;
  background:var(--glass-strong);backdrop-filter:none;
@@ -241,14 +214,8 @@ const WP_CSS = `
  position:relative;overflow:hidden;
 }
 .wp-moonpay::before{display:none}
-.wp-moonpay:hover{
- transform:translateY(-1px);
- opacity:.95;
-}
-.wp-moonpay.urgent{
- background:#0a0a0a;
- box-shadow:0 0 0 1px var(--green);
-}
+.wp-moonpay:hover{transform:translateY(-1px);opacity:.95}
+.wp-moonpay.urgent{background:#0a0a0a;box-shadow:0 0 0 1px var(--green)}
 .wp-moonpay-logo{
  width:40px;height:40px;border-radius:50%;background:#fff;
  display:grid;place-items:center;flex-shrink:0;
@@ -269,7 +236,7 @@ const WP_CSS = `
 .wp-moonpay-mini:hover{background:#f0f0f1;border-color:var(--ink)}
 .wp-moonpay-mini-text{font-size:12px;font-weight:600;letter-spacing:0.1px}
 
-/* BALANCE CARD (connected hero) */
+/* BALANCE CARD (connected) */
 .wp-balance-card{
  margin:14px 18px 0;padding:22px 20px;border-radius:18px;
  background:#0a0a0a;
@@ -279,19 +246,13 @@ const WP_CSS = `
  animation:wpRise .5s cubic-bezier(.2,.8,.2,1) backwards;
 }
 .wp-balance-card::before{display:none}
-.wp-bal-top{
- display:flex;justify-content:space-between;align-items:center;
- margin-bottom:18px;position:relative;z-index:2;
-}
+.wp-bal-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;position:relative;z-index:2}
 .wp-status-pill{
  display:inline-flex;align-items:center;gap:7px;
  background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);
  padding:5px 11px;border-radius:999px;
 }
-.wp-status-dot{
- width:6px;height:6px;border-radius:50%;background:#16ff8a;
- box-shadow:none;animation:wpPulse 1.8s ease-in-out infinite;
-}
+.wp-status-dot{width:6px;height:6px;border-radius:50%;background:#16ff8a;box-shadow:none;animation:wpPulse 1.8s ease-in-out infinite}
 .wp-status-text{color:#fff;font-size:9px;font-weight:700;letter-spacing:0.8px}
 .wp-refresh{
  width:34px;height:34px;border-radius:50%;
@@ -302,10 +263,7 @@ const WP_CSS = `
 .wp-refresh:hover{background:rgba(255,255,255,.2);color:#fff;border-color:rgba(255,255,255,.3)}
 .wp-refresh:disabled{cursor:wait;opacity:.6}
 .wp-refresh.spinning svg{animation:wpSpin 1s linear infinite}
-.wp-bal-label{
- font-size:10px;color:rgba(255,255,255,.6);font-weight:700;letter-spacing:1px;
- margin-bottom:6px;position:relative;z-index:2;
-}
+.wp-bal-label{font-size:10px;color:rgba(255,255,255,.6);font-weight:700;letter-spacing:1px;margin-bottom:6px;position:relative;z-index:2}
 .wp-bal-value{
  font-family:ui-monospace,Menlo,monospace;font-size:48px;font-weight:700;
  line-height:0.95;letter-spacing:-.03em;color:#fff;
@@ -320,31 +278,20 @@ const WP_CSS = `
  transition:border-color .15s;position:relative;z-index:2;
 }
 .wp-addr-card:hover{border-color:rgba(255,255,255,.3)}
-.wp-addr-ring{
- width:28px;height:28px;border-radius:50%;flex-shrink:0;
- padding:2px;background:#fff;
- animation:none;
-}
-.wp-addr-ring-inner{
- width:100%;height:100%;border-radius:50%;background:#0a0a0a;
- display:grid;place-items:center;font-size:11px;font-weight:800;color:#fff;
-}
+.wp-addr-ring{width:28px;height:28px;border-radius:50%;flex-shrink:0;padding:2px;background:#fff;animation:none}
+.wp-addr-ring-inner{width:100%;height:100%;border-radius:50%;background:#0a0a0a;display:grid;place-items:center;font-size:11px;font-weight:800;color:#fff}
 .wp-addr-info{flex:1;text-align:left;min-width:0}
 .wp-addr-label{font-size:9px;color:rgba(255,255,255,.6);font-weight:700;letter-spacing:0.8px}
 .wp-addr-val{font-family:ui-monospace,monospace;font-size:12px;color:#fff;font-weight:600;margin-top:2px}
 .wp-copy{
  font-size:9px;font-weight:700;color:#0a0a0a;
- background:#fff;
- border:1px solid #fff;padding:6px 11px;border-radius:8px;
+ background:#fff;border:1px solid #fff;padding:6px 11px;border-radius:8px;
  letter-spacing:0.6px;flex-shrink:0;transition:all .15s;
 }
 .wp-copy.copied{background:var(--green);border-color:var(--green);color:#fff}
 
 /* STATS ORBS */
-.wp-orbs{
- display:grid;grid-template-columns:repeat(3,1fr);gap:8px;
- padding:14px 18px 4px;position:relative;z-index:2;
-}
+.wp-orbs{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:14px 18px 4px;position:relative;z-index:2}
 .wp-orb{
  position:relative;padding:14px 10px 12px;border-radius:14px;
  background:#fff;backdrop-filter:none;
@@ -360,10 +307,7 @@ const WP_CSS = `
 .wp-orb-sub{font-size:9px;color:var(--ink-3);font-weight:600;margin-top:4px;letter-spacing:0.2px}
 
 /* HOLDINGS LIST */
-.wp-holdings-head{
- display:flex;justify-content:space-between;align-items:center;
- padding:22px 18px 10px;position:relative;z-index:2;
-}
+.wp-holdings-head{display:flex;justify-content:space-between;align-items:center;padding:22px 18px 10px;position:relative;z-index:2}
 .wp-h-label{
  font-family:inherit;font-size:11px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;
  background:none;
@@ -395,25 +339,12 @@ const WP_CSS = `
 .wp-h-value{font-family:ui-monospace,Menlo,monospace;font-size:16px;font-weight:700;line-height:1;color:var(--ink);font-variant-numeric:tabular-nums}
 
 /* LOADING */
-.wp-loading{
- margin:14px 18px 0;padding:60px 22px;border-radius:16px;text-align:center;
- background:#fff;backdrop-filter:none;border:1px solid var(--hairline);
-}
-.wp-loading-spinner{
- width:32px;height:32px;border-radius:50%;margin:0 auto 14px;
- border:2.5px solid var(--border);border-top-color:var(--ink);
- animation:wpSpin .8s linear infinite;
-}
-.wp-loading-text{
- font-size:10px;color:var(--ink-2);font-weight:700;letter-spacing:0.8px;text-transform:uppercase;
-}
+.wp-loading{margin:14px 18px 0;padding:60px 22px;border-radius:16px;text-align:center;background:#fff;backdrop-filter:none;border:1px solid var(--hairline)}
+.wp-loading-spinner{width:32px;height:32px;border-radius:50%;margin:0 auto 14px;border:2.5px solid var(--border);border-top-color:var(--ink);animation:wpSpin .8s linear infinite}
+.wp-loading-text{font-size:10px;color:var(--ink-2);font-weight:700;letter-spacing:0.8px;text-transform:uppercase}
 
 /* ERROR */
-.wp-error{
- margin:14px 18px 0;padding:14px 16px;border-radius:12px;
- background:rgba(224,54,79,.08);border:1px solid rgba(224,54,79,.3);
- color:var(--red);font-size:12px;font-weight:600;
-}
+.wp-error{margin:14px 18px 0;padding:14px 16px;border-radius:12px;background:rgba(224,54,79,.08);border:1px solid rgba(224,54,79,.3);color:var(--red);font-size:12px;font-weight:600}
 
 /* EMPTY */
 .wp-empty{padding:24px 18px;text-align:center}
@@ -959,7 +890,6 @@ export default function GetStarted({ onConnectWallet, onSwitchTab }) {
          </div>
 
          <div className="wp-hero">
-           <p className="wp-desc"><b>Trade everything on Solana.</b> Stocks, tokens, and memes — non-custodial, low fees, your keys.</p>
            <button type="button" onClick={() => onConnectWallet?.()} className="wp-hero-connect">
              Already have a wallet? Connect
              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
