@@ -687,7 +687,48 @@ function useTokenIcon(token) {
   return resolved;
 }
 
-// ── Token detail chart: DexScreener embed, resolves mint → highest-liquidity Solana pair ──
+// ── Token detail chart ──────────────────────────────────────────────
+// Resolves a mint → its best pool and embeds a candlestick chart.
+//
+// Provider order:
+//   1. GeckoTerminal — indexes pump.fun BONDING-CURVE pools (the …pump
+//      tokens that DexScreener has no pair for until graduation). This is
+//      why fresh pump.fun launches now chart instead of showing blank.
+//   2. DexScreener — fallback for graduated / older pairs.
+//
+// In BOTH providers we enforce the same two rules:
+//   • Contract match: only accept a pool whose BASE token is exactly this
+//     mint (quote-side-only matches are a last resort, never preferred), so
+//     the chart can never be for a look-alike token.
+//   • Highest liquidity: among valid pools, pick the deepest by USD
+//     liquidity. The reduce is seeded with the first candidate so a single
+//     pool with 0 / unknown liquidity (brand-new tokens) still charts.
+
+// GeckoTerminal: pools come back with relationships.base_token.data.id of
+// the form "solana_<mint>" and attributes.{address, reserve_in_usd}.
+function pickBestGeckoPool(pools, mint) {
+  if (!Array.isArray(pools) || !pools.length) return null;
+  const wanted = ('solana_' + mint).toLowerCase();
+  const baseId  = p => p?.relationships?.base_token?.data?.id;
+  const quoteId = p => p?.relationships?.quote_token?.data?.id;
+  const hasAddr = p => !!p?.attributes?.address;
+
+  const baseMatches = pools.filter(p => hasAddr(p) && String(baseId(p) || '').toLowerCase() === wanted);
+  const pool = baseMatches.length
+    ? baseMatches
+    : pools.filter(p => hasAddr(p) && (
+        String(baseId(p) || '').toLowerCase() === wanted ||
+        String(quoteId(p) || '').toLowerCase() === wanted));
+  if (!pool.length) return null;
+  return pool.reduce(
+    (best, p) =>
+      (Number(p?.attributes?.reserve_in_usd) || 0) > (Number(best?.attributes?.reserve_in_usd) || 0) ? p : best,
+    pool[0],
+  );
+}
+
+// DexScreener: pairs have chainId, pairAddress, baseToken.address,
+// quoteToken.address, liquidity.usd.
 function pickBestPair(pairs, mint) {
   if (!Array.isArray(pairs) || !pairs.length) return null;
   const wanted = String(mint).toLowerCase();
@@ -703,36 +744,76 @@ function pickBestPair(pairs, mint) {
               p.quoteToken?.address?.toLowerCase() === wanted),
       );
   if (!pool.length) return null;
-  return pool.reduce((best, p) => {
-    const liq = Number(p.liquidity?.usd) || 0;
-    const bestLiq = Number(best?.liquidity?.usd) || 0;
-    return liq > bestLiq ? p : best;
-  }, null);
+  return pool.reduce(
+    (best, p) => (Number(p.liquidity?.usd) || 0) > (Number(best.liquidity?.usd) || 0) ? p : best,
+    pool[0],
+  );
 }
 
 function LrTokenChart({ mint, symbol = '' }) {
   const [status, setStatus] = useState('loading'); // loading | ok | none | fail
-  const [pair, setPair] = useState(null);
+  const [embed, setEmbed]   = useState(null);       // { src, provider }
   const [copied, setCopied] = useState(false);
   const reqRef = useRef(0);
 
   useEffect(() => {
     if (!mint) { setStatus('none'); return; }
     const id = ++reqRef.current;
-    setStatus('loading'); setPair(null);
+    setStatus('loading'); setEmbed(null);
+
     (async () => {
+      let networkOk = false;
+
+      // 1) GeckoTerminal — covers pump.fun bonding-curve pools.
       try {
-        const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mint}`,
+        const r = await fetch(
+          `https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}/pools`,
           { headers: { Accept: 'application/json' } });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const json = await res.json();
         if (id !== reqRef.current) return;
-        const best = pickBestPair(json?.pairs, mint);
-        if (!best) { setStatus('none'); return; }
-        setPair(best.pairAddress); setStatus('ok');
-      } catch {
-        if (id === reqRef.current) setStatus('fail');
-      }
+        if (r.ok) {
+          networkOk = true;
+          const j = await r.json();
+          if (id !== reqRef.current) return;
+          const best = pickBestGeckoPool(j?.data, mint);
+          const addr = best?.attributes?.address;
+          if (addr) {
+            setEmbed({
+              src: `https://www.geckoterminal.com/solana/pools/${addr}?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&bg_color=ffffff`,
+              provider: 'GECKOTERMINAL',
+            });
+            setStatus('ok');
+            return;
+          }
+        }
+      } catch {}
+      if (id !== reqRef.current) return;
+
+      // 2) DexScreener — fallback for graduated / older pairs.
+      try {
+        const r = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mint}`,
+          { headers: { Accept: 'application/json' } });
+        if (id !== reqRef.current) return;
+        if (r.ok) {
+          networkOk = true;
+          const j = await r.json();
+          if (id !== reqRef.current) return;
+          const best = pickBestPair(j?.pairs, mint);
+          if (best?.pairAddress) {
+            setEmbed({
+              src: `https://dexscreener.com/solana/${best.pairAddress}?embed=1&theme=light&info=0&trades=0`,
+              provider: 'DEXSCREENER',
+            });
+            setStatus('ok');
+            return;
+          }
+        }
+      } catch {}
+      if (id !== reqRef.current) return;
+
+      // Neither provider had a pool. If at least one responded, the token
+      // just isn't indexed yet (typical for a seconds-old bonding curve);
+      // otherwise it's a network failure.
+      setStatus(networkOk ? 'none' : 'fail');
     })();
   }, [mint]);
 
@@ -740,10 +821,6 @@ function LrTokenChart({ mint, symbol = '' }) {
   const copyCa = async () => {
     try { await navigator.clipboard.writeText(mint); setCopied(true); setTimeout(() => setCopied(false), 1400); } catch {}
   };
-
-  const src = pair
-    ? `https://dexscreener.com/solana/${pair}?embed=1&theme=light&info=0&trades=0`
-    : null;
 
   return (
     <div className="lr-chart">
@@ -753,16 +830,17 @@ function LrTokenChart({ mint, symbol = '' }) {
           <span className="lr-chart-ca-v">{shortCa}</span>
           <button type="button" className="lr-chart-ca-copy" onClick={copyCa}>{copied ? 'COPIED' : 'COPY'}</button>
         </div>
-        <span className="lr-chart-src">DEXSCREENER</span>
+        <span className="lr-chart-src">{embed?.provider || 'CHART'}</span>
       </div>
-      {status === 'ok' && src ? (
+      {status === 'ok' && embed ? (
         <div className="lr-chart-frame-wrap">
-          <iframe className="lr-chart-frame" src={src} title={(symbol || 'Token') + ' price chart'} loading="lazy" />
+          <iframe className="lr-chart-frame" src={embed.src} title={(symbol || 'Token') + ' price chart'}
+            loading="lazy" allow="clipboard-write" />
         </div>
       ) : status === 'loading' ? (
         <div className="lr-chart-state"><div className="lr-chart-spin" /></div>
       ) : status === 'none' ? (
-        <div className="lr-chart-state">No liquid market for {symbol || 'this token'} yet.</div>
+        <div className="lr-chart-state">Chart appears once {symbol || 'this token'} is indexed — trading on the bonding curve for now.</div>
       ) : (
         <div className="lr-chart-state">Couldn’t load the chart. Try again shortly.</div>
       )}
