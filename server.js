@@ -682,6 +682,89 @@ app.get('/api/jupiter/tokens/v2/recent', async (req, res) => {
   }
 });
 
+/* ------------------------------------------------------------------------
+ * /api/dex/discover — "all of Solana" discovery universe (additive).
+ *
+ * Uses Jupiter's v2 ranked token lists as the universe (every tradable
+ * Solana token, already ranked), normalized into the same token shape the
+ * Ape feed uses so the client can filter/sort with identical logic. The mint
+ * is read VERBATIM from Jupiter's `id` field (confirmed by the working swap
+ * widget: `t.id || t.address || t.mint`) and is the join key everywhere
+ * downstream (DexScreener detail on tap, trade path). Nothing is re-derived.
+ *
+ * sort: 'new'  -> Jupiter /recent
+ *       else   -> Jupiter /toporganicscore/<tf>  (tf from ?tf=, default 24h)
+ *
+ * NOTE: Jupiter v2 market field names are mapped defensively with fallbacks
+ * because the exact live schema can vary; numeric fields default to 0 when
+ * absent. Accurate liquidity/holders for a specific token still come from the
+ * existing /api/dex/token/:mint (top-liquidity pair) when the user opens it.
+ * ---------------------------------------------------------------------- */
+function _normalizeJupToken(t) {
+  if (!t || typeof t !== 'object') return null;
+  const mint = t.id || t.address || t.mint;
+  if (!mint || typeof mint !== 'string' || !PUMP_BASE58_RE.test(mint)) return null;
+  // Defensive field mapping — Jupiter v2 nests some market data; try the
+  // common shapes and fall back to 0 rather than guessing one name.
+  const num = (...vals) => { for (const v of vals) { const n = Number(v); if (Number.isFinite(n) && n !== 0) return n; } return 0; };
+  const stats24 = t.stats24h || t.stats || {};
+  const mcap = num(t.mcap, t.marketCap, t.fdv, t.usdMarketCap);
+  const liquidity = num(t.liquidity, (t.liquidity && t.liquidity.usd), t.liquidityUsd);
+  const volume24h = num(stats24.volume, stats24.v, t.volume24h, (t.volume && t.volume.h24), t.v24hUSD);
+  const holders = num(t.holderCount, t.holder_count, t.holders, t.numHolders);
+  const price = num(t.usdPrice, t.price, t.priceUsd);
+  const change = num(stats24.priceChange, stats24.priceChange24h, t.priceChange24h, (t.priceChange && t.priceChange.h24));
+  const createdAtMs = t.firstPool && t.firstPool.createdAt ? new Date(t.firstPool.createdAt).getTime()
+    : (t.createdAt ? new Date(t.createdAt).getTime() : (t.created_at ? new Date(t.created_at).getTime() : null));
+  return {
+    mint,
+    sym: t.symbol || t.sym || '???',
+    name: t.name || t.symbol || 'Unknown',
+    icon: t.icon || t.logoURI || null,
+    price, change,
+    mcap, fdv: num(t.fdv, mcap),
+    volume24h, liquidity, holders,
+    decimals: Number(t.decimals != null ? t.decimals : 6),
+    pairCreatedAtMs: Number.isFinite(createdAtMs) ? createdAtMs : null,
+    organicScore: num(t.organicScore, t.organic_score),
+    dex: t.dex || null,
+    source: 'jupiter',
+  };
+}
+
+app.get('/api/dex/discover', async (req, res) => {
+  try {
+    const sort = String(req.query.sort || 'organic');
+    const tf = String(req.query.tf || '24h');
+    const upstream = (sort === 'new')
+      ? `${JUPITER_TOKENS_BASE}/recent`
+      : `${JUPITER_TOKENS_BASE}/toporganicscore/${encodeURIComponent(tf)}`;
+
+    const cacheKey = 'dex:discover:' + sort + ':' + tf;
+    const cached = getCachedJson(cacheKey);
+    if (cached) return res.status(cached.status).json(cached.payload);
+
+    const r = await fetchWithTimeout(upstream, { headers: { Accept: 'application/json' } }, 12_000);
+    if (!r.ok) {
+      const payload = { tokens: [] };
+      setCachedJson(cacheKey, r.status, payload, 15_000);
+      return res.status(r.status).json(payload);
+    }
+    const data = await r.json();
+    const raw = Array.isArray(data) ? data : (data && Array.isArray(data.tokens) ? data.tokens : []);
+    const tokens = raw.map(_normalizeJupToken).filter(Boolean);
+
+    const payload = { tokens };
+    // 'new' refreshes fast; organic ranking is stable, cache longer.
+    setCachedJson(cacheKey, 200, payload, sort === 'new' ? 5_000 : 30_000);
+    return res.json(payload);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'Discover timed out' });
+    logError('dex-discover', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+
 app.get('/api/jupiter/tokens/v2/tag', async (req, res) => {
   try {
     const url = `https://token.jup.ag/tokens/v2/tag${buildForwardedQuery(req)}`;
@@ -1316,6 +1399,99 @@ app.get('/api/dex/chart/:mint', async (req, res) => {
   } catch (e) {
     if (e.name === 'AbortError') return res.status(504).json({ error: 'Chart timed out' });
     logError('dex-chart', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+
+/* ------------------------------------------------------------------------
+ * /api/dex/candles/:mint — full OHLCV candlesticks (additive).
+ *
+ * The existing /api/dex/chart returns close-only points (a line). For real
+ * candlestick charts the client needs open/high/low/close/volume per bar.
+ * GeckoTerminal already returns all of that in ohlcv_list — this route keeps
+ * every field instead of discarding O/H/L/V. Does NOT touch /api/dex/chart.
+ * ohlcv_list row = [ts, open, high, low, close, volume].
+ * ---------------------------------------------------------------------- */
+app.get('/api/dex/candles/:mint', async (req, res) => {
+  try {
+    const mint = String(req.params.mint || '');
+    if (!PUMP_BASE58_RE.test(mint)) return res.status(400).json({ error: 'Invalid mint' });
+    const tf = String(req.query.tf || '5m');
+    const tfDef = _chartTfs[tf];
+    if (!tfDef) return res.status(400).json({ error: 'Invalid tf (use 5m, 1H, 6H, 24H)' });
+
+    const cacheKey = 'dex:candles:' + mint + ':' + tf;
+    const cached = getCachedJson(cacheKey);
+    if (cached) return res.status(cached.status).json(cached.payload);
+
+    const dexR = await fetchWithTimeout(
+      DEX_BASE + '/latest/dex/tokens/' + mint,
+      { headers: { Accept: 'application/json' } },
+      8_000,
+    );
+    if (!dexR.ok) {
+      const payload = { candles: [] };
+      setCachedJson(cacheKey, 404, payload, 60_000);
+      return res.status(404).json(payload);
+    }
+    const dexData = await dexR.json();
+    const pairs = (dexData?.pairs || []).filter(p => p?.chainId === 'solana' && p?.pairAddress);
+    if (pairs.length === 0) {
+      const payload = { candles: [] };
+      setCachedJson(cacheKey, 404, payload, 60_000);
+      return res.status(404).json(payload);
+    }
+    const best = pairs.reduce(
+      (a, b) => (Number(b.liquidity?.usd || 0) > Number(a.liquidity?.usd || 0) ? b : a),
+      pairs[0],
+    );
+
+    const gtUrl = GECKOTERMINAL_BASE
+      + '/networks/solana/pools/' + best.pairAddress
+      + '/ohlcv/' + tfDef.timeframe
+      + '?aggregate=' + tfDef.aggregate
+      + '&limit=' + tfDef.limit
+      + '&currency=usd';
+    const gtR = await fetchWithTimeout(gtUrl, { headers: GT_HEADERS }, 8_000);
+    if (!gtR.ok) {
+      const payload = { candles: [] };
+      setCachedJson(cacheKey, 404, payload, 60_000);
+      return res.status(404).json(payload);
+    }
+    const gtData = await gtR.json();
+    const raw = gtData?.data?.attributes?.ohlcv_list;
+    if (!Array.isArray(raw) || raw.length === 0) {
+      const payload = { candles: [] };
+      setCachedJson(cacheKey, 404, payload, 60_000);
+      return res.status(404).json(payload);
+    }
+
+    const candles = raw
+      .slice()
+      .reverse()
+      .map(row => ({
+        ts: Number(row[0]) * 1000,
+        o:  Number(row[1]),
+        h:  Number(row[2]),
+        l:  Number(row[3]),
+        c:  Number(row[4]),
+        v:  Number(row[5] || 0),
+      }))
+      .filter(k => Number.isFinite(k.ts) && Number.isFinite(k.o) && Number.isFinite(k.h)
+        && Number.isFinite(k.l) && Number.isFinite(k.c) && k.c > 0);
+
+    if (candles.length < 2) {
+      const payload = { candles: [] };
+      setCachedJson(cacheKey, 404, payload, 60_000);
+      return res.status(404).json(payload);
+    }
+
+    const payload = { candles };
+    setCachedJson(cacheKey, 200, payload, 30_000);
+    return res.json(payload);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'Candles timed out' });
+    logError('dex-candles', e);
     return res.status(500).json({ error: e.message || 'Unknown error' });
   }
 });
@@ -1957,4 +2133,3 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('  Rate limits:     none (removed)');
   console.log('  Allowed origins: ' + allowedOrigins.join(', '));
 });
- 
