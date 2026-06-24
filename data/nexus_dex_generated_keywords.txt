@@ -1,19 +1,49 @@
 aave exchange
+aave swap
+aave trading
 aggregated liquidity
 ai16z exchange
+ai16z swap
+ai16z trading
+altcoin exchange
+altcoin swap
 amazon stock token
 amazon token
 amazon token chart
 amazon token price
 amazon token swap
+anonymous bridge crypto
 anonymous crypto exchange
 anonymous crypto swap
 anonymous crypto swapping
+anonymous defi
+anonymous solana token swap
+anonymous token swap
 apple stock token
 apple token
 apple token chart
 apple token price
 apple token swap
+aptos bridge from solana
+aptos network swap
+arbitrum bridge from solana
+arbitrum dex
+arbitrum network swap
+arbitrum to solana
+atlas solana dex swap
+avalanche bridge from solana
+avalanche dex
+avalanche network swap
+avalanche to solana
+ban solana dex swap
+base bridge from solana
+base dex
+base network swap
+base to solana
+beginner mistakes solana swap
+best altcoin dex
+best birdeye alternative low fees
+best bridge for solana
 best crypto bridge
 best meme coins today
 best route ada swap
