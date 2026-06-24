@@ -269,6 +269,69 @@ const AP_CSS = `
 .ap-tshead .sub{font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--ink2);font-weight:600;margin-top:5px}
 
 .ap-chart-wrap{margin:14px 22px 0;padding:12px 0 6px;border-top:1px solid var(--hairline)}
+.ap-chart-toprow{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.ap-chart-read{display:flex;align-items:baseline;gap:8px}
+.ap-chart-read .px{font-family:'Instrument Serif',serif;font-size:20px;letter-spacing:-.01em;color:var(--ink)}
+.ap-chart-read .ts{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;color:var(--ink3)}
+.ap-chart-read .chg{font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:800}
+.ap-chart-read .chg.up{color:var(--green)}
+.ap-chart-read .chg.dn{color:var(--red)}
+.ap-chart-unit{display:flex;gap:2px;background:var(--glass);border:1px solid var(--hairline);border-radius:9px;padding:2px}
+.ap-chart-unit .u{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--ink3);background:none;border:none;padding:4px 9px;border-radius:7px;cursor:pointer}
+.ap-chart-unit .u.on{background:var(--cyan);color:#fff}
+.ap-candles{height:120px !important}
+.ap-research{margin:12px 22px 0;padding:14px;background:var(--glass);border:1px solid var(--hairline);border-radius:16px}
+.ap-research-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px 10px}
+.ap-rstat{display:flex;flex-direction:column;gap:3px}
+.ap-rstat .k{font-family:'JetBrains Mono',monospace;font-size:8.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--ink3)}
+.ap-rstat .v{font-family:'Instrument Serif',serif;font-size:17px;letter-spacing:-.01em;color:var(--ink)}
+.ap-research-links{display:flex;align-items:center;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid var(--hairline)}
+.ap-rlink{flex:1;font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;letter-spacing:.02em;color:var(--cyan);text-decoration:none;text-align:center;padding:9px;background:rgba(61,212,245,.10);border:1px solid var(--border);border-radius:10px}
+.ap-rlink:hover{background:rgba(61,212,245,.18)}
+.ap-rcopy{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--ink2);background:var(--glass-strong);border:1px solid var(--hairline);border-radius:10px;padding:9px 12px;cursor:pointer}
+.ap-watch{position:fixed;left:50%;bottom:0;transform:translateX(-50%);width:100%;max-width:480px;max-height:88dvh;overflow-y:auto;background:linear-gradient(180deg,#FBF7FF 0%,#F2F6FF 100%);border-top-left-radius:26px;border-top-right-radius:26px;border:1px solid var(--hairline);padding:18px 18px calc(env(safe-area-inset-bottom,0) + 22px);z-index:9999;animation:ap-sheet .34s cubic-bezier(.2,1.1,.4,1)}
+.ap-watch-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+.ap-watch-title{font-family:'Instrument Serif',serif;font-size:26px;letter-spacing:-.015em;color:var(--ink)}
+.ap-watch-title .it{font-style:italic}
+.ap-watch-add{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}
+.ap-watch-in{grid-column:1/2;padding:12px 14px;background:#fff;border:1.5px solid var(--hairline);border-radius:12px;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--ink);outline:none}
+.ap-watch-in.label{grid-column:1/2}
+.ap-watch-in:focus{border-color:var(--cyan)}
+.ap-watch-addbtn{grid-row:1/3;grid-column:2/3;padding:0 18px;background:linear-gradient(135deg,#A0E7FF,#FF8FBE);border:none;border-radius:12px;font-family:'Instrument Serif',serif;font-size:16px;color:var(--ink);cursor:pointer}
+.ap-watch-err{margin-top:8px;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--red);font-weight:600}
+.ap-watch-empty{text-align:center;padding:36px 20px;display:flex;flex-direction:column;align-items:center;gap:7px}
+.ap-watch-empty .glyph{font-size:30px;opacity:.4}
+.ap-watch-empty b{font-family:'Instrument Serif',serif;font-size:18px;color:var(--ink)}
+.ap-watch-empty .sub{font-size:12px;color:var(--ink2);max-width:280px;line-height:1.5}
+.ap-watch-list{display:flex;flex-direction:column;gap:10px;margin-top:14px}
+.ap-watch-row{padding:13px 14px;background:var(--glass);border:1px solid var(--hairline);border-radius:15px}
+.ap-watch-row-top{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.ap-watch-id{display:flex;flex-direction:column;gap:2px;min-width:0}
+.ap-watch-id .lbl{font-family:'Instrument Serif',serif;font-size:17px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ap-watch-id .addr{font-family:'JetBrains Mono',monospace;font-size:9.5px;color:var(--ink3)}
+.ap-watch-actions{display:flex;align-items:center;gap:10px;flex-shrink:0}
+.ap-watch-actions .sol{font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:var(--ink)}
+.ap-watch-actions .rm{width:24px;height:24px;border-radius:50%;border:1px solid var(--hairline);background:var(--glass-strong);color:var(--ink3);font-size:15px;line-height:1;cursor:pointer}
+.ap-watch-holds{display:flex;flex-wrap:wrap;gap:5px;margin-top:10px}
+.ap-watch-holds .hold{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;color:var(--ink2);background:var(--glass-strong);border:1px solid var(--hairline);border-radius:7px;padding:3px 8px}
+.ap-watch-links{display:flex;gap:8px;margin-top:11px;padding-top:10px;border-top:1px solid var(--hairline)}
+.ap-watch-links a{flex:1;text-align:center;font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;color:var(--cyan);text-decoration:none;padding:7px;background:rgba(61,212,245,.08);border:1px solid var(--border);border-radius:9px}
+.ap-hotwin{display:flex;align-items:center;gap:6px;padding:10px 22px 0}
+.ap-hotwin-pill{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:800;letter-spacing:.04em;color:var(--ink3);background:var(--glass);border:1px solid var(--hairline);border-radius:8px;padding:5px 11px;cursor:pointer}
+.ap-hotwin-pill.on{background:linear-gradient(135deg,#FF8FBE,#FFB17A);color:#fff;border-color:transparent}
+.ap-hotwin-meta{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink3);margin-left:auto}
+.ap-disc{padding:4px 22px 10px}
+.ap-disc-sorts{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.ap-disc-sort{font-family:'JetBrains Mono',monospace;font-size:10.5px;font-weight:800;letter-spacing:.03em;color:var(--ink3);background:var(--glass);border:1px solid var(--hairline);border-radius:8px;padding:6px 12px;cursor:pointer}
+.ap-disc-sort.on{background:linear-gradient(135deg,var(--sky),var(--pink));color:var(--ink);border-color:transparent}
+.ap-disc-ftoggle{margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--ink2);background:var(--glass-strong);border:1px solid var(--hairline);border-radius:8px;padding:6px 12px;cursor:pointer}
+.ap-disc-ftoggle.on{color:var(--cyan);border-color:var(--border-hi)}
+.ap-disc-filters{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:11px;padding:13px;background:var(--glass);border:1px solid var(--hairline);border-radius:14px}
+.ap-disc-f{display:flex;flex-direction:column;gap:4px}
+.ap-disc-f span{font-family:'JetBrains Mono',monospace;font-size:8.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--ink3)}
+.ap-disc-f select{font-family:'Space Grotesk',sans-serif;font-size:12.5px;font-weight:600;color:var(--ink);background:#fff;border:1px solid var(--hairline);border-radius:9px;padding:8px 10px;outline:none;cursor:pointer}
+.ap-disc-f select:focus{border-color:var(--cyan)}
+.ap-disc-clear{grid-column:1/3;font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--red);background:rgba(209,75,106,.08);border:1px solid rgba(209,75,106,.2);border-radius:9px;padding:9px;cursor:pointer}
 .ap-chart{position:relative;width:100%;height:84px;display:block}
 .ap-chart svg{display:block;width:100%;height:100%}
 .ap-chart-empty{height:84px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;text-align:center}
@@ -811,26 +874,36 @@ const IconDs = () => (<svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.
 const CHART_TFS = ['5m', '1H', '6H', '24H'];
 const FRESH_FLOOR_MS = 5 * 60 * 1000;
 
-function TokenChart({ token }) {
+function TokenChart({ token, solPrice }) {
   const [tf, setTf] = useState('5m');
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [unit, setUnit] = useState('price'); // 'price' | 'mcap'
+  const [hover, setHover] = useState(null);   // index of hovered candle
   const ageMs = token && token.pairCreatedAtMs ? Date.now() - token.pairCreatedAtMs : null;
   const tooFresh = ageMs != null && ageMs < FRESH_FLOOR_MS;
+
   useEffect(() => {
     if (!token || !token.mint) return;
     if (tooFresh) { setData(null); setLoading(false); return; }
     let cancelled = false;
-    setLoading(true);
-    fetch('/api/dex/chart/' + encodeURIComponent(token.mint) + '?tf=' + encodeURIComponent(tf))
-      .then(r => r.ok ? r.json() : null)
-      .then(d => { if (!cancelled) { setData(d); setLoading(false); } })
-      .catch(() => { if (!cancelled) { setData(null); setLoading(false); } });
-    return () => { cancelled = true; };
+    const load = (showSpin) => {
+      if (showSpin) setLoading(true);
+      fetch('/api/dex/candles/' + encodeURIComponent(token.mint) + '?tf=' + encodeURIComponent(tf))
+        .then(r => r.ok ? r.json() : null)
+        .then(d => { if (!cancelled) { setData(d); setLoading(false); } })
+        .catch(() => { if (!cancelled) { setLoading(false); } });
+    };
+    load(true);
+    // Live refresh: short interval on fast timeframes so candles "move" like GMGN.
+    const ms = tf === '5m' ? 6000 : tf === '1H' ? 15000 : 30000;
+    const id = setInterval(() => load(false), ms);
+    return () => { cancelled = true; clearInterval(id); };
   }, [token && token.mint, tf, tooFresh]);
 
-  const points = (data && Array.isArray(data.points)) ? data.points.filter(p => p && Number.isFinite(p.price)) : [];
-  const hasChart = points.length >= 2;
+  const candles = (data && Array.isArray(data.candles)) ? data.candles.filter(k => k && Number.isFinite(k.c) && k.c > 0) : [];
+  const hasChart = candles.length >= 2;
+
   if (tooFresh || (!loading && !hasChart)) {
     return (
       <div className="ap-chart-wrap">
@@ -842,7 +915,7 @@ function TokenChart({ token }) {
       </div>
     );
   }
-  if (loading) {
+  if (loading && !hasChart) {
     return (
       <div className="ap-chart-wrap">
         <div className="ap-chart-loading"><span className="sp" /></div>
@@ -853,31 +926,75 @@ function TokenChart({ token }) {
       </div>
     );
   }
-  const first = points[0].price, last = points[points.length - 1].price;
+
+  // Convert price → display unit. mcap mode scales each candle by the
+  // (mcap / price) ratio from the live token, so the candle shape is identical
+  // but the axis reads in market cap — same trick GMGN uses for its toggle.
+  const mcapMult = (unit === 'mcap' && token.price > 0 && token.mcap > 0) ? (token.mcap / token.price) : 1;
+  const conv = (v) => v * mcapMult;
+
+  const first = conv(candles[0].o);
+  const last = conv(candles[candles.length - 1].c);
   const isUp = last >= first;
-  const color = isUp ? '#0a7a4c' : '#D14B6A';
+  const upColor = '#0a7a4c', dnColor = '#D14B6A';
   const tfClass = isUp ? ' on up' : ' on dn';
-  const minP = Math.min.apply(null, points.map(p => p.price));
-  const maxP = Math.max.apply(null, points.map(p => p.price));
+
+  const lows  = candles.map(k => conv(k.l));
+  const highs = candles.map(k => conv(k.h));
+  const minP = Math.min.apply(null, lows);
+  const maxP = Math.max.apply(null, highs);
   const range = (maxP - minP) || (maxP * 0.001) || 1;
-  const W = 320, H = 84, pad = 6;
-  const xStep = W / Math.max(1, points.length - 1);
-  const coords = points.map((p, i) => [i * xStep, H - pad - ((p.price - minP) / range) * (H - 2 * pad)]);
-  const linePath = coords.map((c, i) => (i === 0 ? 'M' : 'L') + c[0].toFixed(1) + ',' + c[1].toFixed(1)).join(' ');
-  const fillPath = linePath + ' L ' + W + ',' + H + ' L 0,' + H + ' Z';
-  const gradId = 'ap-cg-' + (token.mint || 'x').slice(0, 8);
+  const W = 320, H = 120, padY = 8, padX = 2;
+  const n = candles.length;
+  const slot = (W - padX * 2) / n;
+  const bodyW = Math.max(1.2, Math.min(slot * 0.66, 9));
+  const yOf = (v) => H - padY - ((v - minP) / range) * (H - 2 * padY);
+
+  const hv = hover != null && candles[hover] ? candles[hover] : null;
+  const lastPx = conv(candles[candles.length - 1].c);
+
   return (
     <div className="ap-chart-wrap">
-      <div className="ap-chart">
-        <svg viewBox={'0 0 ' + W + ' ' + H} preserveAspectRatio="none">
-          <defs><linearGradient id={gradId} x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity="0.28" /><stop offset="100%" stopColor={color} stopOpacity="0" /></linearGradient></defs>
-          <path d={fillPath} fill={'url(#' + gradId + ')'} />
-          <path d={linePath} fill="none" stroke={color} strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />
+      <div className="ap-chart-toprow">
+        <div className="ap-chart-read">
+          <span className="px">{unit === 'mcap' ? '$' + format(hv ? conv(hv.c) : lastPx) : formatPrice(hv ? conv(hv.c) : lastPx)}</span>
+          {hv ? <span className="ts">{new Date(hv.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span> : <span className={'chg' + (isUp ? ' up' : ' dn')}>{formatPct(((last - first) / (first || 1)) * 100)}</span>}
+        </div>
+        <div className="ap-chart-unit">
+          <button className={'u' + (unit === 'price' ? ' on' : '')} onClick={() => setUnit('price')}>Price</button>
+          <button className={'u' + (unit === 'mcap' ? ' on' : '')} onClick={() => setUnit('mcap')}>MCap</button>
+        </div>
+      </div>
+      <div className="ap-chart ap-candles">
+        <svg viewBox={'0 0 ' + W + ' ' + H} preserveAspectRatio="none"
+          onMouseLeave={() => setHover(null)}
+          onMouseMove={(e) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            const x = ((e.clientX - r.left) / r.width) * W;
+            const idx = Math.max(0, Math.min(n - 1, Math.floor((x - padX) / slot)));
+            setHover(idx);
+          }}
+        >
+          {candles.map((k, i) => {
+            const o = conv(k.o), c = conv(k.c), h = conv(k.h), l = conv(k.l);
+            const up = c >= o;
+            const col = up ? upColor : dnColor;
+            const cx = padX + i * slot + slot / 2;
+            const yO = yOf(o), yC = yOf(c), yH = yOf(h), yL = yOf(l);
+            const top = Math.min(yO, yC), bh = Math.max(1, Math.abs(yC - yO));
+            return (
+              <g key={i} opacity={hover != null && hover !== i ? 0.5 : 1}>
+                <line x1={cx} x2={cx} y1={yH} y2={yL} stroke={col} strokeWidth="1" />
+                <rect x={cx - bodyW / 2} y={top} width={bodyW} height={bh} fill={col} />
+              </g>
+            );
+          })}
+          {hover != null && <line x1={padX + hover * slot + slot / 2} x2={padX + hover * slot + slot / 2} y1="0" y2={H} stroke="#1A1B4E" strokeOpacity="0.18" strokeWidth="1" strokeDasharray="2 2" />}
         </svg>
       </div>
       <div className="ap-tf-pills">
         {CHART_TFS.map(t => (<button key={t} className={'ap-tf' + (t === tf ? tfClass : '')} onClick={() => setTf(t)}>{t}</button>))}
-        <span className="ap-tf-meta">Dexscreener</span>
+        <span className="ap-tf-meta">Live · Dexscreener</span>
       </div>
     </div>
   );
@@ -1006,13 +1123,22 @@ const SpecimenRow = React.memo(function SpecimenRow({ token, ageMsLive, owned, c
   // Live P&L from real cost basis (sol_in - sol_out), same math as the open-
   // positions strip. Only shown when we have a logged basis and a SOL price.
   let pnl = null;
+  let pnlMiss = null; // why P&L can't show, in owned mode (diagnostic)
   if (costBasis && solPrice > 0 && (token.price || 0) > 0) {
     const costSol = Math.max(0, (costBasis.sol_in || 0) - (costBasis.sol_out || 0));
     if (costSol > 0) {
       const curValSol = (ownedUi * token.price) / solPrice;
       const gainSol = curValSol - costSol;
       pnl = { gainSol, pct: (gainSol / costSol) * 100, up: gainSol > 0.0001, dn: gainSol < -0.0001 };
+    } else {
+      pnlMiss = 'no cost';
     }
+  } else if (!costBasis) {
+    pnlMiss = 'no basis';
+  } else if (!(token.price > 0)) {
+    pnlMiss = 'no price';
+  } else if (!(solPrice > 0)) {
+    pnlMiss = 'no SOL px';
   }
   const ape = (e) => { e.stopPropagation(); if (busy) return; onApe(token); };
   const sell = (e) => { e.stopPropagation(); if (busy) return; onSell(token); };
@@ -1041,6 +1167,8 @@ const SpecimenRow = React.memo(function SpecimenRow({ token, ageMsLive, owned, c
           <span className="pct">{(pnl.pct >= 0 ? '+' : '') + pnl.pct.toFixed(1)}%</span>
           <span className="sol">{formatSolSigned(pnl.gainSol)} SOL</span>
         </div>
+      ) : (ownedMode && pnlMiss) ? (
+        <div className="ap-row-pnl dim"><span className="pct" style={{ fontSize: '10px', opacity: 0.6 }}>{pnlMiss}</span></div>
       ) : null}
       <div className="ap-row-action">
         {ownedMode ? (
@@ -1293,7 +1421,7 @@ function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPr
             </div>
           </div>
         </div>
-        <TokenChart token={token} />
+        <TokenChart token={token} solPrice={solPrice} />
         <div className={'ap-safety ' + tierClass}>
           <div className="ap-safety-top">
             <span className="ap-safety-l">Safety read</span>
@@ -1303,6 +1431,20 @@ function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPr
           <div className="ap-safety-chks">{read.knowns.map((c,i)=><span key={i} className={'ap-chk '+c[0]}>{c[1]}</span>)}</div>
         </div>
         <div className="ap-dyor">Can't be checked: {read.unknowns.join(' · ')}. Even a clean read can rug — only trade what you can lose.</div>
+        <div className="ap-research">
+          <div className="ap-research-grid">
+            <div className="ap-rstat"><span className="k">Market cap</span><span className="v">{token.mcap > 0 ? '$' + format(token.mcap) : '—'}</span></div>
+            <div className="ap-rstat"><span className="k">Liquidity</span><span className="v">{token.liquidity > 0 ? '$' + format(token.liquidity) : '—'}</span></div>
+            <div className="ap-rstat"><span className="k">Volume 24h</span><span className="v">{token.volume24h > 0 ? '$' + format(token.volume24h) : '—'}</span></div>
+            <div className="ap-rstat"><span className="k">Holders</span><span className="v">{token.holders > 0 ? format(token.holders) : '—'}</span></div>
+            <div className="ap-rstat"><span className="k">Age</span><span className="v">{token.pairCreatedAtMs ? fmtAgeShort(Date.now() - token.pairCreatedAtMs) : '—'}</span></div>
+            <div className="ap-rstat"><span className="k">Bonding</span><span className="v">{token.bond != null ? token.bond.toFixed(0) + '%' : (token.dex && token.dex !== 'pump.fun' ? 'graduated' : '—')}</span></div>
+          </div>
+          <div className="ap-research-links">
+            <a className="ap-rlink" href={'https://dexscreener.com/solana/' + encodeURIComponent(token.mint)} target="_blank" rel="noreferrer">Live transactions on DexScreener ↗</a>
+            <button className="ap-rcopy" onClick={() => { try { navigator.clipboard.writeText(token.mint); } catch (e) {} }} title="Copy contract address">Copy CA</button>
+          </div>
+        </div>
         <div className={'ap-mode-tabs' + (isBuy?'':' sell')}>
           <div className="ap-mode-ind" />
           <button className={'ap-mode-tab'+(isBuy?' active':'')} onClick={()=>setMode('buy')}>Buy</button>
@@ -1343,6 +1485,131 @@ function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPr
           {confirming ? (isBuy?'Buying…':'Selling…') : !amount||Number(amount)<=0 ? (isBuy?'Enter SOL amount':'Enter percentage') : belowBuyMin ? ('Minimum 0.03 SOL') : !hasFunds ? (isBuy?'Not enough SOL':(ownedUi<=0?('No '+token.sym+' to sell'):'Need ~0.003 SOL for fees')) : (isBuy?('Buy '+amount+' SOL → '+token.sym):('Sell '+Math.min(100,Number(amount))+'% of '+token.sym))}
         </button>
         <p className="ap-tfoot">{token.dex || 'pump.fun'} · 3% fee · settles in seconds</p>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   WATCHED WALLETS — user-curated wallet tracker.
+   Users paste any Solana address; we show its live SOL + token
+   holdings (via RPC, the same call balances use) and deep-link to
+   Solscan / GMGN for full trade history + PnL. No hardcoded list,
+   no scraping — the user curates who's worth watching.
+   ============================================================ */
+const WATCH_KEY = 'lr_watched_wallets_v1';
+const BASE58_WALLET_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+
+function loadWatched() {
+  try { const r = localStorage.getItem(WATCH_KEY); if (!r) return []; const a = JSON.parse(r); return Array.isArray(a) ? a.filter(w => w && BASE58_WALLET_RE.test(w.addr)) : []; }
+  catch (e) { return []; }
+}
+function saveWatched(list) { try { localStorage.setItem(WATCH_KEY, JSON.stringify(list)); } catch (e) {} }
+
+function WatchedWallets({ open, onClose, solPrice, resolveToken }) {
+  const [list, setList] = useState(() => loadWatched());
+  const [input, setInput] = useState('');
+  const [label, setLabel] = useState('');
+  const [err, setErr] = useState(null);
+  const [holdings, setHoldings] = useState({}); // addr -> { sol, tokens:[{mint,uiAmount}], loading, error }
+
+  useEffect(() => { saveWatched(list); }, [list]);
+
+  const refreshOne = useCallback(async (addr) => {
+    setHoldings(prev => ({ ...prev, [addr]: { ...(prev[addr] || {}), loading: true, error: null } }));
+    try {
+      const conn = getConn();
+      const owner = new PublicKey(addr);
+      const [lamports, tk, tk22] = await Promise.all([
+        conn.getBalance(owner, BAL_COMMITMENT),
+        conn.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, BAL_COMMITMENT),
+        conn.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, BAL_COMMITMENT),
+      ]);
+      const tokens = [];
+      for (const accs of [tk, tk22]) {
+        for (const acc of (accs.value || [])) {
+          const info = acc.account && acc.account.data && acc.account.data.parsed && acc.account.data.parsed.info;
+          const uiAmount = info && info.tokenAmount && info.tokenAmount.uiAmount;
+          if (info && info.mint && uiAmount > 0) tokens.push({ mint: info.mint, uiAmount });
+        }
+      }
+      tokens.sort((a, b) => b.uiAmount - a.uiAmount);
+      setHoldings(prev => ({ ...prev, [addr]: { sol: lamports / 1e9, tokens: tokens.slice(0, 12), loading: false, error: null } }));
+    } catch (e) {
+      setHoldings(prev => ({ ...prev, [addr]: { ...(prev[addr] || {}), loading: false, error: 'Could not load' } }));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    for (const w of list) refreshOne(w.addr);
+    const id = setInterval(() => { for (const w of list) refreshOne(w.addr); }, 30000);
+    return () => clearInterval(id);
+  }, [open, list, refreshOne]);
+
+  if (!open) return null;
+
+  const add = () => {
+    const addr = input.trim();
+    if (!BASE58_WALLET_RE.test(addr)) { setErr('That does not look like a Solana address.'); return; }
+    if (list.some(w => w.addr === addr)) { setErr('Already watching that wallet.'); return; }
+    setList(prev => [{ addr, label: label.trim() || null, addedAt: Date.now() }, ...prev]);
+    setInput(''); setLabel(''); setErr(null);
+  };
+  const remove = (addr) => { setList(prev => prev.filter(w => w.addr !== addr)); };
+
+  return (
+    <div className="ap-overlay" onClick={onClose}>
+      <div className="ap-watch" onClick={e => e.stopPropagation()}>
+        <div className="ap-watch-head">
+          <div className="ap-watch-title">Watched <span className="it">wallets</span></div>
+          <button className="ap-x" onClick={onClose}>×</button>
+        </div>
+        <div className="ap-watch-add">
+          <input className="ap-watch-in" placeholder="Paste a Solana wallet address" value={input} onChange={e => { setInput(e.target.value); setErr(null); }} />
+          <input className="ap-watch-in label" placeholder="Label (optional)" value={label} onChange={e => setLabel(e.target.value)} />
+          <button className="ap-watch-addbtn" onClick={add}>Track</button>
+        </div>
+        {err ? <div className="ap-watch-err">{err}</div> : null}
+        {list.length === 0 ? (
+          <div className="ap-watch-empty">
+            <span className="glyph">◎</span>
+            <b>No wallets yet</b>
+            <span className="sub">Paste any Solana address to track what it holds. Find smart-money wallets on Nansen, Dune, or by watching who buys early.</span>
+          </div>
+        ) : (
+          <div className="ap-watch-list">
+            {list.map(w => {
+              const h = holdings[w.addr] || {};
+              return (
+                <div className="ap-watch-row" key={w.addr}>
+                  <div className="ap-watch-row-top">
+                    <div className="ap-watch-id">
+                      <span className="lbl">{w.label || (w.addr.slice(0, 4) + '…' + w.addr.slice(-4))}</span>
+                      <span className="addr">{w.addr.slice(0, 6)}…{w.addr.slice(-6)}</span>
+                    </div>
+                    <div className="ap-watch-actions">
+                      <span className="sol">{h.loading ? '…' : h.sol != null ? formatSol(h.sol) + ' SOL' : (h.error || '—')}</span>
+                      <button className="rm" onClick={() => remove(w.addr)} title="Stop watching">×</button>
+                    </div>
+                  </div>
+                  {h.tokens && h.tokens.length > 0 ? (
+                    <div className="ap-watch-holds">
+                      {h.tokens.map(t => {
+                        const tok = resolveToken ? resolveToken(t.mint) : null;
+                        return <span className="hold" key={t.mint}>{tok && tok.sym && tok.sym !== '???' ? '$' + tok.sym : (t.mint.slice(0, 4) + '…')}</span>;
+                      })}
+                    </div>
+                  ) : null}
+                  <div className="ap-watch-links">
+                    <a href={'https://solscan.io/account/' + w.addr} target="_blank" rel="noreferrer">Trades on Solscan ↗</a>
+                    <a href={'https://gmgn.ai/sol/address/' + w.addr} target="_blank" rel="noreferrer">PnL ↗</a>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1412,6 +1679,25 @@ export default function Ape({ mainWalletPubkey }) {
   const [showStats, setShowStats] = useState(false);
   const [statsTab, setStatsTab] = useState('referrals');
   const [showAuto, setShowAuto] = useState(false);
+  const [showWatch, setShowWatch] = useState(false);
+  const [hotWindow, setHotWindow] = useState('1h'); // 5m | 1h | 24h
+  // Discovery view: a research lens over the same feed. Sort toggle decides the
+  // lead (no default bias); filters narrow the live launch set. Reuses riskRead
+  // + normalize so mint discipline and safety scoring are identical to the feed.
+  const [discSort, setDiscSort] = useState('new'); // new | hot | gainers | safest
+  const [discMinLiq, setDiscMinLiq] = useState(0);
+  const [discMinMcap, setDiscMinMcap] = useState(0);
+  const [discMaxMcap, setDiscMaxMcap] = useState(0); // 0 = no cap
+  const [discMinHolders, setDiscMinHolders] = useState(0);
+  const [discMinScore, setDiscMinScore] = useState(0);
+  const [discAge, setDiscAge] = useState('any'); // any | 5m | 1h | 6h | 24h
+  const [discFiltersOpen, setDiscFiltersOpen] = useState(false);
+  // Discover pulls its own universe (all tradable Solana via Jupiter), separate
+  // from the launch feed. Sort 'new' hits Jupiter /recent; others hit the
+  // organic-ranked list. Client-side filters then narrow it.
+  const [discTokens, setDiscTokens] = useState([]);
+  const [discLoading, setDiscLoading] = useState(false);
+  const [discError, setDiscError] = useState(null);
   const [showLure, setShowLure] = useState(() => { try { return localStorage.getItem(HAS_TRADED_KEY) !== '1'; } catch (e) { return true; } });
 
   const [busyMints, setBusyMints] = useState({});
@@ -1462,6 +1748,33 @@ export default function Ape({ mainWalletPubkey }) {
     const id = setInterval(load, POLL_RECENT);
     return () => { cancelled = true; clearInterval(id); };
   }, []);
+
+  // Discover universe — all tradable Solana via Jupiter. Only fetches while the
+  // Discover tab is open. 'new' sort -> Jupiter /recent; the momentum/safety
+  // sorts all draw from the organic-ranked universe and re-sort client-side.
+  useEffect(() => {
+    if (activeTab !== 'discovery') return;
+    let cancelled = false;
+    const srt = discSort === 'new' ? 'new' : 'organic';
+    const load = async () => {
+      try {
+        setDiscLoading(true);
+        const r = await fetch('/api/dex/discover?sort=' + srt + '&tf=24h');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        if (cancelled) return;
+        // Server already normalized to our token shape; keep mint verbatim.
+        const list = Array.isArray(d?.tokens) ? d.tokens.filter(t => t && t.mint) : [];
+        setDiscTokens(list);
+        setTokenIndex(prev => { const next = { ...prev }; for (const t of list) if (t && t.mint && !next[t.mint]) next[t.mint] = t; return next; });
+        setDiscError(null);
+      } catch (e) { if (!cancelled) setDiscError(String(e.message || 'Network').slice(0, 100)); }
+      finally { if (!cancelled) setDiscLoading(false); }
+    };
+    load();
+    const id = setInterval(load, srt === 'new' ? 8000 : 30000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [activeTab, discSort]);
 
   useEffect(() => { const id = setInterval(() => setNow(Date.now()), 5000); return () => clearInterval(id); }, []);
 
@@ -1717,8 +2030,59 @@ export default function Ape({ mainWalletPubkey }) {
     let list = recent;
     if (wildOnly) list = list.filter(t => riskRead(t).tier === 'high');
     if (minLiq > 0) list = list.filter(t => (t.liquidity || 0) >= minLiq);
+
+    // HOT tab = same feed data (so mints stay identical to "New"), re-lensed by
+    // momentum: recent + moving + liquid. No new fetch, no second mint source.
+    if (activeTab === 'hot') {
+      const now2 = Date.now();
+      // Time-window filter: only tokens created within the window. Falls back to
+      // "no age = include" so tokens missing a timestamp still surface.
+      const winMs = hotWindow === '5m' ? 5 * 60000 : hotWindow === '1h' ? 60 * 60000 : 24 * 60 * 60000;
+      const windowed = list.filter(t => {
+        if (!t.pairCreatedAtMs) return hotWindow === '24h'; // unknown age only in the widest window
+        return (now2 - t.pairCreatedAtMs) <= winMs;
+      });
+      const score = (t) => {
+        const chg = Math.abs(Number(t.change) || 0);            // movement
+        const vol = Math.log10(Math.max(1, t.volume24h || 0));  // traded
+        const liq = Math.log10(Math.max(1, t.liquidity || 0));  // tradable
+        const ageMin = t.pairCreatedAtMs ? (now2 - t.pairCreatedAtMs) / 60000 : 9999;
+        const fresh = ageMin < 720 ? (1 - ageMin / 720) : 0;     // decays over 12h
+        return chg * 0.5 + vol * 8 + liq * 4 + fresh * 20;
+      };
+      return [...windowed].sort((a, b) => score(b) - score(a)).slice(0, 15);
+    }
+
+    // DISCOVERY = research lens over the FULL Jupiter universe (all tradable
+    // Solana), not just the launch feed. Apply each filter (0/'any' = off),
+    // then sort. Same mint keys, same riskRead. discTokens is server-normalized.
+    if (activeTab === 'discovery') {
+      const now2 = Date.now();
+      let d = discTokens.slice();
+      if (discMinLiq > 0) d = d.filter(t => (t.liquidity || 0) >= discMinLiq);
+      if (discMinMcap > 0) d = d.filter(t => (t.mcap || 0) >= discMinMcap);
+      if (discMaxMcap > 0) d = d.filter(t => (t.mcap || 0) <= discMaxMcap);
+      if (discMinHolders > 0) d = d.filter(t => (t.holders || 0) >= discMinHolders);
+      if (discMinScore > 0) d = d.filter(t => riskRead(t).score >= discMinScore);
+      if (discAge !== 'any') {
+        const winMs = discAge === '5m' ? 5 * 60000 : discAge === '1h' ? 60 * 60000 : discAge === '6h' ? 6 * 60 * 60000 : 24 * 60 * 60000;
+        d = d.filter(t => t.pairCreatedAtMs ? (now2 - t.pairCreatedAtMs) <= winMs : false);
+      }
+      const byHot = (t) => {
+        const chg = Math.abs(Number(t.change) || 0);
+        const vol = Math.log10(Math.max(1, t.volume24h || 0));
+        const liq = Math.log10(Math.max(1, t.liquidity || 0));
+        return chg * 0.5 + vol * 8 + liq * 4;
+      };
+      if (discSort === 'hot') d.sort((a, b) => byHot(b) - byHot(a));
+      else if (discSort === 'gainers') d.sort((a, b) => (Number(b.change) || 0) - (Number(a.change) || 0));
+      else if (discSort === 'safest') d.sort((a, b) => riskRead(b).score - riskRead(a).score);
+      // 'new' arrives already newest-first from Jupiter /recent; keep order.
+      return d.slice(0, 30);
+    }
+
     return list.slice(0, 15);
-  }, [recent, wildOnly, minLiq, activeTab, balances, resolveToken]);
+  }, [recent, discTokens, wildOnly, minLiq, activeTab, hotWindow, discSort, discMinLiq, discMinMcap, discMaxMcap, discMinHolders, discMinScore, discAge, balances, resolveToken]);
 
   const trending = useMemo(() => {
     return [...recent]
@@ -1737,6 +2101,7 @@ export default function Ape({ mainWalletPubkey }) {
 
   const ownedCount = useMemo(() => Object.keys(balances).filter(m => m !== SOL_MINT && balances[m].uiAmount > 0).length, [balances]);
   const activeFiltersCount = (wildOnly ? 1 : 0) + (minLiq > 0 ? 1 : 0);
+  const discActiveCount = (discMinLiq > 0 ? 1 : 0) + (discMinMcap > 0 ? 1 : 0) + (discMaxMcap > 0 ? 1 : 0) + (discMinHolders > 0 ? 1 : 0) + (discMinScore > 0 ? 1 : 0) + (discAge !== 'any' ? 1 : 0);
   const burnerHasNoSol = !solBalance || solBalance.uiAmount < 0.01;
 
   return (
@@ -1749,7 +2114,8 @@ export default function Ape({ mainWalletPubkey }) {
           </div>
           <div className="ap-nav-live"><span className="d" /><span>LIVE FEED</span></div>
           <button className="ap-nav-btn" onClick={() => setShowAuto(true)}>Auto-trade</button>
-          <button className="ap-nav-btn" onClick={() => { setStatsTab('referrals'); setShowStats(true); }}>Referrals</button>
+          <button className="ap-nav-btn" onClick={() => setShowWatch(true)}>Wallets</button>
+          <button className="ap-nav-btn" onClick={() => { setStatsTab('referrals'); setShowStats(true); }}>Earnings</button>
           <button className="ap-nav-wallet" onClick={() => setShowWallet(true)}>
             <span className="glyph">◎</span>
             <span>{solBalance ? formatSol(solBalance.uiAmount) : '—'} SOL</span>
@@ -1823,16 +2189,55 @@ export default function Ape({ mainWalletPubkey }) {
             <div className="ap-list-head">
               <div className="ap-list-title">
                 <span className="e">§ The feed</span>
-                <span className="t">{activeTab === 'owned' ? <>Your <span className="it">bag</span></> : <>Fresh <span className="it">tokens</span></>}</span>
+                <span className="t">{activeTab === 'owned' ? <>Your <span className="it">bag</span></> : activeTab === 'hot' ? <>Hot <span className="it">right now</span></> : activeTab === 'discovery' ? <>Discover <span className="it">tokens</span></> : <>Fresh <span className="it">tokens</span></>}</span>
               </div>
               <div className="ap-list-filters">
+                <button className={'ap-chip' + (activeTab === 'hot' ? ' on' : '')} onClick={() => setActiveTab('hot')}>🔥 Hot</button>
                 <button className={'ap-chip' + (activeTab === 'feed' ? ' on' : '')} onClick={() => setActiveTab('feed')}>All new</button>
+                <button className={'ap-chip' + (activeTab === 'discovery' ? ' on' : '')} onClick={() => setActiveTab('discovery')}>🔎 Discover</button>
                 <button className={'ap-chip owned' + (activeTab === 'owned' ? ' on' : '')} onClick={() => setActiveTab('owned')}>You own{ownedCount > 0 ? ' · ' + ownedCount : ''}</button>
                 <button className="ap-filter-btn" onClick={() => setShowFilters(true)}>
                   <span>Filters</span>{activeFiltersCount > 0 ? <span className="ct">{activeFiltersCount}</span> : null}
                 </button>
               </div>
             </div>
+
+            {activeTab === 'discovery' ? (
+              <div className="ap-disc">
+                <div className="ap-disc-sorts">
+                  {[['new','New'],['hot','Hot'],['gainers','Gainers'],['safest','Safest']].map(([k,lbl]) => (
+                    <button key={k} className={'ap-disc-sort' + (discSort === k ? ' on' : '')} onClick={() => setDiscSort(k)}>{lbl}</button>
+                  ))}
+                  <button className={'ap-disc-ftoggle' + (discFiltersOpen ? ' on' : '')} onClick={() => setDiscFiltersOpen(v => !v)}>Filters {discActiveCount > 0 ? '· ' + discActiveCount : ''}</button>
+                </div>
+                {discFiltersOpen ? (
+                  <div className="ap-disc-filters">
+                    <label className="ap-disc-f"><span>Min liquidity</span><select value={discMinLiq} onChange={e => setDiscMinLiq(Number(e.target.value))}>
+                      <option value={0}>Any</option><option value={5000}>$5K+</option><option value={20000}>$20K+</option><option value={50000}>$50K+</option><option value={100000}>$100K+</option></select></label>
+                    <label className="ap-disc-f"><span>Min market cap</span><select value={discMinMcap} onChange={e => setDiscMinMcap(Number(e.target.value))}>
+                      <option value={0}>Any</option><option value={50000}>$50K+</option><option value={250000}>$250K+</option><option value={1000000}>$1M+</option></select></label>
+                    <label className="ap-disc-f"><span>Max market cap</span><select value={discMaxMcap} onChange={e => setDiscMaxMcap(Number(e.target.value))}>
+                      <option value={0}>Any</option><option value={250000}>$250K</option><option value={1000000}>$1M</option><option value={10000000}>$10M</option></select></label>
+                    <label className="ap-disc-f"><span>Min holders</span><select value={discMinHolders} onChange={e => setDiscMinHolders(Number(e.target.value))}>
+                      <option value={0}>Any</option><option value={50}>50+</option><option value={200}>200+</option><option value={500}>500+</option></select></label>
+                    <label className="ap-disc-f"><span>Min safety</span><select value={discMinScore} onChange={e => setDiscMinScore(Number(e.target.value))}>
+                      <option value={0}>Any</option><option value={40}>40+</option><option value={60}>60+</option><option value={75}>75+</option></select></label>
+                    <label className="ap-disc-f"><span>Age</span><select value={discAge} onChange={e => setDiscAge(e.target.value)}>
+                      <option value="any">Any</option><option value="5m">≤ 5m</option><option value="1h">≤ 1h</option><option value="6h">≤ 6h</option><option value="24h">≤ 24h</option></select></label>
+                    {discActiveCount > 0 ? <button className="ap-disc-clear" onClick={() => { setDiscMinLiq(0); setDiscMinMcap(0); setDiscMaxMcap(0); setDiscMinHolders(0); setDiscMinScore(0); setDiscAge('any'); }}>Clear filters</button> : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {activeTab === 'hot' ? (
+              <div className="ap-hotwin">
+                {['5m', '1h', '24h'].map(w => (
+                  <button key={w} className={'ap-hotwin-pill' + (hotWindow === w ? ' on' : '')} onClick={() => setHotWindow(w)}>{w}</button>
+                ))}
+                <span className="ap-hotwin-meta">Momentum · last {hotWindow}</span>
+              </div>
+            ) : null}
 
             <div className="ap-list">
               {feedError ? (
@@ -1873,7 +2278,7 @@ export default function Ape({ mainWalletPubkey }) {
                 <span className="d" />
                 <span>{feedError ? 'Reconnecting…' : 'Live · refreshing every ' + (POLL_RECENT / 1000) + 's'}</span>
               </span>
-              <span>{activeTab === 'owned' ? (filtered.length + (filtered.length === 1 ? ' token held' : ' tokens held')) : (filtered.length + ' of ' + recent.length + ' shown')}</span>
+              <span>{activeTab === 'owned' ? (filtered.length + (filtered.length === 1 ? ' token held' : ' tokens held')) : activeTab === 'hot' ? (filtered.length + ' hot now') : activeTab === 'discovery' ? (discLoading && filtered.length === 0 ? 'Loading Solana…' : filtered.length + ' of ' + discTokens.length + (discActiveCount > 0 ? ' · ' + discActiveCount + ' filter' + (discActiveCount === 1 ? '' : 's') : '')) : (filtered.length + ' of ' + recent.length + ' shown')}</span>
             </div>
           </div>
         </div>
@@ -1897,6 +2302,7 @@ export default function Ape({ mainWalletPubkey }) {
       {showWallet && (<WalletDrawer wallet={wallet} solBalance={solBalance} solPrice={solPrice} onWithdraw={onWithdraw} onClose={() => setShowWallet(false)} busy={withdrawBusy} balances={balances} resolveToken={resolveToken} />)}
       <StatsPanel open={showStats} onClose={() => setShowStats(false)} wallet={wallet} mainWalletPubkey={mainWalletPubkey} solPrice={solPrice} initialTab={statsTab} />
       <AutoPanel open={showAuto} onClose={() => setShowAuto(false)} auto={auto} solBalance={solBalance} solPrice={solPrice} />
+      <WatchedWallets open={showWatch} onClose={() => setShowWatch(false)} solPrice={solPrice} resolveToken={resolveToken} />
 
       <div className="ap-toasts">
         {toasts.map(t => (
@@ -2585,4 +2991,3 @@ function AutoPanel({ open, onClose, auto, solBalance, solPrice }) {
     </div>
   );
 }
- 
