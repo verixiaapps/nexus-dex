@@ -81,6 +81,7 @@ body.nexus-scroll-locked{overflow:hidden}
 .st-tile{display:flex;align-items:center;gap:12px;padding:13px 16px;border:none;border-bottom:1px solid var(--hairline);background:none;width:100%;text-align:left;cursor:pointer;transition:background .15s;animation:st-rise .4s cubic-bezier(.2,1,.3,1) backwards}
 .st-tile:last-child{border-bottom:none}
 .st-tile:hover{background:var(--fill-2)}
+.st-tile:active{background:#efeff1}
 .st-badge{flex-shrink:0;display:grid;place-items:center;font-weight:800;color:#fff;letter-spacing:-.02em;background:#0b0b0c}
 .st-badge.st-sec-tech{background:linear-gradient(135deg,#2f6bff,#1e49c9)}
 .st-badge.st-sec-crypto{background:linear-gradient(135deg,#f5921b,#d4760a)}
@@ -184,6 +185,10 @@ body.nexus-scroll-locked{overflow:hidden}
 .st-chart-tf:hover{color:var(--ink)}
 .st-chart-tf.on{background:var(--fill);color:var(--ink)}
 .st-chart-tf:disabled{opacity:.4;cursor:default}
+.st-chart-canvas{cursor:crosshair}
+.st-chart-cross{stroke:var(--ink-3);stroke-width:1;stroke-dasharray:4 4;opacity:.5;vector-effect:non-scaling-stroke;pointer-events:none}
+.st-chart-cross-dot{position:absolute;width:11px;height:11px;border-radius:50%;border:2px solid #fff;box-shadow:0 1px 5px rgba(11,11,12,.28);transform:translate(-50%,-50%);pointer-events:none;z-index:3}
+.st-chart-scrub{position:absolute;inset:0;z-index:4;touch-action:none}
 
 /* sheet body / side switch */
 .st-sheet-body{padding:14px 20px 0}
@@ -797,8 +802,9 @@ function stkBuildPath(pts, w, h, pad = 2) {
   const area = line + 'L' + xAt(n - 1).toFixed(2) + ',' + h + ' L' + xAt(0).toFixed(2) + ',' + h + ' Z';
   let hiI = 0, loI = 0;
   pts.forEach((p, i) => { if (p.c > pts[hiI].c) hiI = i; if (p.c < pts[loI].c) loI = i; });
+  const coords = pts.map((p, i) => ({ x: xAt(i), y: yAt(p.c), c: p.c, t: p.t }));
   return {
-    line: line.trim(), area, w, h,
+    line: line.trim(), area, w, h, coords,
     lastX: xAt(n - 1), lastY: yAt(pts[n - 1].c),
     hi, lo, hiX: xAt(hiI), hiY: yAt(pts[hiI].c), loX: xAt(loI), loY: yAt(pts[loI].c), openY: yAt(pts[0].c),
   };
@@ -809,8 +815,12 @@ function StockChart({ mint, price, symbol }) {
   const [pts, setPts]         = useState(null);
   const [loading, setLoading] = useState(true);
   const [ticks, setTicks]     = useState([]);
+  const [hover, setHover]     = useState(null); // scrub index (UI only)
   const tickMintRef = useRef(null);
   const gidRef = useRef('stk-area-' + Math.random().toString(36).slice(2));
+
+  // reset the crosshair whenever the underlying series changes
+  useEffect(() => { setHover(null); }, [tf, mint]);
 
   // accumulate live ticks so the chart is never blank while history loads
   useEffect(() => {
@@ -838,18 +848,44 @@ function StockChart({ mint, price, symbol }) {
   const first = series ? series[0].c : null;
   const last  = series ? series[series.length - 1].c : (Number(price) || null);
   const chg   = (first && last) ? ((last - first) / first) * 100 : null;
-  const up    = chg == null ? true : chg >= 0;
-  const col   = up ? '#11b87f' : '#f0425a';
+  const periodUp = chg == null ? true : chg >= 0;
+  const col   = periodUp ? '#11b87f' : '#f0425a';     // line colour stays stable while scrubbing
   const gid   = gidRef.current;
+
+  // hovered point (scrub) — pure presentation, reads the already-fetched series
+  const hv = (built && hover != null && built.coords[hover]) ? built.coords[hover] : null;
+  const dispC   = hv ? hv.c : last;
+  const dispChg = (first && dispC != null) ? ((dispC - first) / first) * 100 : chg;
+  const dispUp  = dispChg == null ? true : dispChg >= 0;
+
+  const fmtT = (t) => {
+    if (!t) return '';
+    const ms = t < 1e12 ? t * 1000 : t;
+    const d = new Date(ms);
+    if (Number.isNaN(d.getTime())) return '';
+    return (tf === '1H' || tf === '1D')
+      ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+      : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  };
+
+  const onScrub = (e) => {
+    if (!series || series.length < 2) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    if (!rect.width) return;
+    const frac = (e.clientX - rect.left) / rect.width;
+    const idx = Math.max(0, Math.min(series.length - 1, Math.round(frac * (series.length - 1))));
+    setHover(idx);
+  };
+  const clearScrub = () => setHover(null);
 
   return (
     <div className="st-chart">
       <div className="st-chart-px">
-        <div className="st-chart-price">{fmtUsd(last != null ? last : price)}</div>
-        {chg != null && (
-          <div className={'st-chart-chg ' + (up ? 'up' : 'dn')}>
-            {(up ? '+' : '') + chg.toFixed(2) + '%'}
-            <span className="win">{live ? 'LIVE' : tf}</span>
+        <div className="st-chart-price">{fmtUsd(dispC != null ? dispC : price)}</div>
+        {dispChg != null && (
+          <div className={'st-chart-chg ' + (dispUp ? 'up' : 'dn')}>
+            {(dispUp ? '+' : '') + dispChg.toFixed(2) + '%'}
+            <span className="win">{hv ? fmtT(hv.t) : (live ? 'LIVE' : tf)}</span>
           </div>
         )}
       </div>
@@ -857,7 +893,7 @@ function StockChart({ mint, price, symbol }) {
         {loading && !series ? (
           <div className="st-chart-load"><span className="st-spinner" /></div>
         ) : !series ? (
-          <div className="st-chart-none">No chart indexed yet  it will draw live as trades land.</div>
+          <div className="st-chart-none">No chart indexed yet — it will draw live as trades land.</div>
         ) : (
           <>
             <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
@@ -869,11 +905,25 @@ function StockChart({ mint, price, symbol }) {
               </defs>
               <path d={built.area} fill={`url(#${gid})`} />
               <path d={built.line} fill="none" stroke={col} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+              {hv && <line className="st-chart-cross" x1={hv.x} y1="0" x2={hv.x} y2={H} />}
               <circle cx={built.lastX} cy={built.lastY} r="3.2" fill={col} stroke="#fff" strokeWidth="2" />
             </svg>
             <div className="st-chart-base" style={{ top: (built.openY / H * 100) + '%' }} />
-            <div className="st-chart-hl" style={{ left: Math.max(12, Math.min(88, built.hiX / W * 100)) + '%', top: (built.hiY / H * 100) + '%' }}>{fmtUsd(built.hi)}</div>
-            <div className="st-chart-hl lo" style={{ left: Math.max(12, Math.min(88, built.loX / W * 100)) + '%', top: (built.loY / H * 100) + '%' }}>{fmtUsd(built.lo)}</div>
+            {!hv && (
+              <>
+                <div className="st-chart-hl" style={{ left: Math.max(12, Math.min(88, built.hiX / W * 100)) + '%', top: Math.max(15, built.hiY / H * 100) + '%' }}>{fmtUsd(built.hi)}</div>
+                <div className="st-chart-hl lo" style={{ left: Math.max(12, Math.min(88, built.loX / W * 100)) + '%', top: Math.min(85, built.loY / H * 100) + '%' }}>{fmtUsd(built.lo)}</div>
+              </>
+            )}
+            {hv && <div className="st-chart-cross-dot" style={{ left: (hv.x / W * 100) + '%', top: (hv.y / H * 100) + '%', background: col }} />}
+            <div
+              className="st-chart-scrub"
+              onPointerDown={onScrub}
+              onPointerMove={onScrub}
+              onPointerUp={clearScrub}
+              onPointerLeave={clearScrub}
+              onPointerCancel={clearScrub}
+            />
           </>
         )}
       </div>
