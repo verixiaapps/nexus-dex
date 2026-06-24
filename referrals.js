@@ -623,4 +623,3 @@ function mount(app, options) {
 }
 
 module.exports = mount;
- 
