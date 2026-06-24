@@ -7,66 +7,72 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 
+// GMGN-toned palette. Keys kept identical so all JSX/inline references still resolve;
+// only the values changed. cyan = primary green accent, pink/lav = gradient hues.
 const C = {
-  ink:  '#1A1B4E',
-  ink2: 'rgba(26,27,78,0.7)',
-  ink3: 'rgba(26,27,78,0.45)',
-  cyan: '#3DD4F5',
-  pink: '#FF8FBE',
-  lav:  '#B794F6',
-  gold: '#FFD46B',
-  green:'#0a7a4c',
-  red:  '#D14B6A',
-  glass:'rgba(255,255,255,0.85)',
-  hair: 'rgba(26,27,78,0.08)',
+  ink:  '#0b0b0c',
+  ink2: '#86868b',
+  ink3: '#aeaeb2',
+  cyan: '#16c08a',
+  pink: '#7c5cff',
+  lav:  '#2f6bff',
+  gold: '#f5921b',
+  green:'#11b87f',
+  red:  '#f0425a',
+  glass:'#ffffff',
+  hair: '#ececee',
 };
 
+const SANS = `-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text","Helvetica Neue",system-ui,sans-serif`;
+
 const ADM_CSS = `
-.adm-root{font-family:'Space Grotesk',-apple-system,system-ui,sans-serif;color:${C.ink};max-width:1100px;margin:0 auto;padding:28px 18px 64px;-webkit-font-smoothing:antialiased}
+.adm-root{--sans:${SANS};font-family:var(--sans);color:${C.ink};max-width:1100px;margin:0 auto;padding:28px 18px 64px;-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
+.adm-root .lbl{font-family:var(--sans)!important;letter-spacing:.04em!important}
 .adm-h{display:flex;align-items:baseline;justify-content:space-between;gap:14px;margin-bottom:6px}
-.adm-h h1{font-family:'Instrument Serif',serif;font-style:italic;font-size:42px;letter-spacing:-.02em;margin:0;line-height:1}
-.adm-h .ts{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:${C.ink3};font-weight:700;letter-spacing:.08em}
-.adm-sub{font-family:'JetBrains Mono',monospace;font-size:11.5px;color:${C.ink2};margin-bottom:24px;font-weight:600}
-.adm-sub b{color:${C.green}}
-.adm-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:22px}
-.adm-card{background:${C.glass};border:1px solid rgba(255,255,255,0.85);border-radius:18px;padding:18px;box-shadow:0 4px 16px rgba(26,27,78,0.04)}
-.adm-card .lbl{font-family:'JetBrains Mono',monospace;font-size:9.5px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:${C.ink3};margin-bottom:8px}
-.adm-card .val{font-family:'Instrument Serif',serif;font-size:34px;letter-spacing:-.01em;line-height:1;color:${C.ink}}
-.adm-card .val .u{font-family:'Space Grotesk',sans-serif;font-size:14px;color:${C.ink3};font-weight:600;margin-left:5px}
-.adm-card .sub{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:${C.ink2};margin-top:10px;font-weight:700;letter-spacing:.04em}
-.adm-card.accent{background:linear-gradient(135deg,rgba(160,231,255,0.30),rgba(255,143,190,0.20));border:1px solid rgba(61,212,245,0.30)}
-.adm-card.accent .val{font-style:italic;color:${C.ink}}
-.adm-section{background:${C.glass};border:1px solid rgba(255,255,255,0.85);border-radius:18px;padding:20px 22px;margin-bottom:18px;box-shadow:0 4px 16px rgba(26,27,78,0.04)}
-.adm-section h2{font-family:'Instrument Serif',serif;font-style:italic;font-size:24px;letter-spacing:-.01em;margin:0 0 14px;color:${C.ink}}
-.adm-section h2 .pill{font-family:'JetBrains Mono',monospace;font-style:normal;font-size:10px;font-weight:800;letter-spacing:.12em;color:${C.ink3};background:rgba(26,27,78,0.06);padding:3px 9px;border-radius:999px;margin-left:8px;vertical-align:middle;text-transform:uppercase}
-.adm-table{width:100%;border-collapse:collapse;font-family:'JetBrains Mono',monospace;font-size:12px}
-.adm-table th{text-align:left;font-weight:700;color:${C.ink3};font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:6px 8px;border-bottom:1px solid ${C.hair}}
+.adm-h h1{font-family:var(--sans);font-weight:800;font-size:38px;letter-spacing:-.03em;margin:0;line-height:1.02}
+.adm-h .ts{font-family:var(--sans);font-size:11px;color:${C.ink3};font-weight:700;letter-spacing:.01em}
+.adm-sub{font-family:var(--sans);font-size:12.5px;color:${C.ink2};margin-bottom:24px;font-weight:600}
+.adm-sub b{color:${C.green};font-weight:800}
+.adm-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:22px}
+.adm-card{background:${C.glass};border:1px solid ${C.hair};border-radius:16px;padding:16px 18px;box-shadow:0 1px 2px rgba(11,11,12,.04)}
+.adm-card .lbl{font-family:var(--sans);font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:${C.ink3};margin-bottom:9px}
+.adm-card .val{font-family:var(--sans);font-weight:800;font-size:32px;letter-spacing:-.025em;line-height:1;color:${C.ink}}
+.adm-card .val .u{font-family:var(--sans);font-size:14px;color:${C.ink3};font-weight:700;margin-left:5px;letter-spacing:0}
+.adm-card .sub{font-family:var(--sans);font-size:12px;color:${C.ink2};margin-top:10px;font-weight:600;letter-spacing:0}
+.adm-card.accent{background:linear-gradient(135deg,rgba(22,192,138,.12),rgba(62,224,127,.05));border:1px solid rgba(22,192,138,.28)}
+.adm-card.accent .val{color:${C.ink}}
+.adm-section{background:${C.glass};border:1px solid ${C.hair};border-radius:16px;padding:18px 20px;margin-bottom:14px;box-shadow:0 1px 2px rgba(11,11,12,.04)}
+.adm-section h2{font-family:var(--sans);font-weight:800;font-size:21px;letter-spacing:-.02em;margin:0 0 14px;color:${C.ink}}
+.adm-section h2 .pill{font-family:var(--sans);font-weight:700;font-size:10.5px;letter-spacing:.02em;color:${C.ink2};background:#f4f4f5;padding:4px 9px;border-radius:999px;margin-left:8px;vertical-align:middle;text-transform:none}
+.adm-table{width:100%;border-collapse:collapse;font-family:var(--sans);font-size:13px;font-variant-numeric:tabular-nums}
+.adm-table th{text-align:left;font-weight:700;color:${C.ink3};font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;padding:8px 8px;border-bottom:1px solid ${C.hair}}
 .adm-table th.r{text-align:right}
-.adm-table td{padding:9px 8px;border-bottom:1px solid ${C.hair};color:${C.ink};font-weight:600}
+.adm-table td{padding:11px 8px;border-bottom:1px solid ${C.hair};color:${C.ink};font-weight:600}
 .adm-table td.r{text-align:right}
-.adm-table tr:hover td{background:rgba(255,255,255,0.55)}
-.adm-table td.wal{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:-.005em}
-.adm-table td.wal .copy{cursor:pointer;color:${C.cyan};margin-left:6px;font-weight:800;font-size:9.5px}
+.adm-table tr:hover td{background:#fafafa}
+.adm-table td.wal{font-family:var(--sans);font-size:12.5px;letter-spacing:0}
+.adm-table td.wal .copy{cursor:pointer;color:${C.cyan};margin-left:6px;font-weight:800;font-size:10px}
 .adm-spark{display:flex;align-items:flex-end;gap:3px;height:60px;margin-top:6px}
-.adm-spark .b{flex:1;background:linear-gradient(180deg,${C.cyan},${C.pink});border-radius:3px 3px 0 0;min-height:2px;transition:height .2s}
-.adm-spark .b.zero{background:rgba(26,27,78,0.06)}
-.adm-axis{display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:9px;color:${C.ink3};font-weight:700;margin-top:6px;letter-spacing:.04em}
-.adm-empty{padding:32px 0;text-align:center;color:${C.ink3};font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+.adm-spark .b{flex:1;background:linear-gradient(180deg,${C.cyan},#9fe7c8);border-radius:3px 3px 0 0;min-height:2px;transition:height .2s}
+.adm-spark .b.zero{background:#f1f1f2}
+.adm-axis{display:flex;justify-content:space-between;font-family:var(--sans);font-size:10px;color:${C.ink3};font-weight:700;margin-top:6px;letter-spacing:.01em}
+.adm-empty{padding:32px 0;text-align:center;color:${C.ink3};font-family:var(--sans);font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
 .adm-locked{max-width:520px;margin:0 auto;padding:80px 16px;text-align:center}
 .adm-locked .lk{font-size:48px;margin-bottom:18px}
-.adm-locked h1{font-family:'Instrument Serif',serif;font-size:32px;font-style:italic;color:${C.ink};margin:0 0 10px;letter-spacing:-.015em}
+.adm-locked h1{font-family:var(--sans);font-size:30px;font-weight:800;color:${C.ink};margin:0 0 10px;letter-spacing:-.02em}
 .adm-locked p{color:${C.ink2};font-size:14px;font-weight:500;line-height:1.5}
-.adm-locked button{margin-top:18px;padding:13px 22px;border-radius:14px;border:none;cursor:pointer;background:linear-gradient(135deg,${C.cyan},${C.pink});color:#fff;font-weight:700;font-size:14px;font-family:'Space Grotesk',sans-serif;letter-spacing:.02em;box-shadow:0 6px 16px rgba(61,212,245,0.32)}
-.adm-loading{text-align:center;padding:80px 0;color:${C.ink3};font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase}
-.adm-note{background:linear-gradient(135deg,rgba(255,212,107,0.18),rgba(255,176,136,0.12));border:1px solid rgba(255,212,107,0.32);color:#7a5400;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;letter-spacing:.02em;padding:12px 16px;border-radius:12px;margin-bottom:22px;line-height:1.5}
-.adm-foot{text-align:center;color:${C.ink3};font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;letter-spacing:.08em;margin-top:28px}
-.adm-refresh{padding:8px 14px;border-radius:10px;border:1px solid rgba(26,27,78,0.14);background:rgba(255,255,255,0.65);font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:800;letter-spacing:.1em;color:${C.ink};cursor:pointer}
-.adm-refresh:hover{background:rgba(255,255,255,0.95)}
+.adm-locked button{margin-top:20px;padding:14px 24px;border-radius:999px;border:none;cursor:pointer;background:${C.cyan};color:#fff;font-weight:800;font-size:14px;font-family:var(--sans);letter-spacing:-.01em;box-shadow:0 8px 20px rgba(22,192,138,.30)}
+.adm-loading{text-align:center;padding:80px 0;color:${C.ink3};font-family:var(--sans);font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+.adm-note{background:rgba(245,146,27,.10);border:1px solid rgba(245,146,27,.28);color:#a25a00;font-family:var(--sans);font-size:12px;font-weight:600;letter-spacing:0;padding:12px 16px;border-radius:14px;margin-bottom:22px;line-height:1.5}
+.adm-note b{font-weight:800;color:#8a4d00}
+.adm-foot{text-align:center;color:${C.ink3};font-family:var(--sans);font-size:10.5px;font-weight:700;letter-spacing:.04em;margin-top:28px}
+.adm-refresh{padding:9px 15px;border-radius:10px;border:1px solid ${C.hair};background:#f4f4f5;font-family:var(--sans);font-size:11px;font-weight:800;letter-spacing:.02em;color:${C.ink};cursor:pointer}
+.adm-refresh:hover{background:#ececee}
 .adm-refresh.busy{opacity:0.5;cursor:wait}
 .adm-tab-row{display:flex;gap:6px;margin-bottom:14px}
-.adm-tab{padding:6px 12px;border-radius:8px;border:1px solid ${C.hair};background:transparent;font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:800;letter-spacing:.1em;color:${C.ink3};cursor:pointer;text-transform:uppercase}
+.adm-tab{padding:7px 13px;border-radius:999px;border:1px solid transparent;background:#f4f4f5;font-family:var(--sans);font-size:11px;font-weight:700;letter-spacing:.02em;color:${C.ink2};cursor:pointer;text-transform:none}
 .adm-tab.on{background:${C.ink};color:#fff;border-color:${C.ink}}
-@media(max-width:600px){.adm-h h1{font-size:32px}.adm-card .val{font-size:26px}.adm-section{padding:16px 14px}.adm-section h2{font-size:20px}.adm-table th,.adm-table td{padding:6px 4px;font-size:10.5px}}
+@media(max-width:600px){.adm-h h1{font-size:30px}.adm-card .val{font-size:26px}.adm-section{padding:16px 14px}.adm-section h2{font-size:18px}.adm-table th,.adm-table td{padding:7px 4px;font-size:11.5px}}
 `;
 
 function useCSS() {
