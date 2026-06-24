@@ -135,9 +135,9 @@ body.nexus-scroll-locked{overflow:hidden}
 .st-region-sub{font-size:14px;font-weight:500;line-height:1.5;color:var(--ink-2)}
 
 /* ===== trade sheet ===== */
-.st-modal-backdrop{position:fixed;inset:0;z-index:1000;background:rgba(11,11,12,.4);backdrop-filter:blur(6px);display:flex;align-items:flex-end;justify-content:center;animation:st-rise .2s}
+.st-modal-backdrop{position:fixed;inset:0;z-index:2000;background:rgba(11,11,12,.4);backdrop-filter:blur(6px);display:flex;align-items:flex-end;justify-content:center;animation:st-rise .2s}
 .st-modal-backdrop.st-busy{cursor:progress}
-.st-sheet{position:relative;width:100%;max-width:520px;background:#fff;border-radius:24px 24px 0 0;box-shadow:0 -18px 50px rgba(11,11,12,.2);max-height:96dvh;overflow-y:auto;padding-bottom:max(10px,env(safe-area-inset-bottom));animation:st-rise .3s cubic-bezier(.2,1.2,.4,1)}
+.st-sheet{position:fixed;left:0;right:0;bottom:0;margin:0 auto;z-index:2001;width:100%;max-width:520px;background:#fff;border-radius:24px 24px 0 0;box-shadow:0 -18px 50px rgba(11,11,12,.2);max-height:96dvh;overflow-y:auto;padding-bottom:max(10px,env(safe-area-inset-bottom));animation:st-rise .3s cubic-bezier(.2,1.2,.4,1)}
 .st-grabber{width:38px;height:4px;border-radius:3px;background:var(--border);margin:10px auto 2px}
 .st-sheet-head{padding:8px 20px 12px;position:relative}
 .st-sheet-head-row{display:flex;align-items:center;gap:12px}
