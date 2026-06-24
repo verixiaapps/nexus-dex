@@ -20,23 +20,23 @@ import AdminPage           from './components/AdminPage.jsx';
 // Wonderland-light design tokens
 // =====================================================================
 const C = {
-  ink:    '#1A1B4E',
-  ink2:   'rgba(26,27,78,0.7)',
-  ink3:   'rgba(26,27,78,0.45)',
-  cyan:   '#3DD4F5',
-  sky:    '#A0E7FF',
-  pink:   '#FF8FBE',
-  lav:    '#B794F6',
-  mint:   '#7FFFD4',
-  peach:  '#FFB088',
-  gold:   '#FFD46B',
-  green:  '#0a7a4c',
-  red:    '#D14B6A',
-  glass:        'rgba(255,255,255,0.6)',
-  glassStrong:  'rgba(255,255,255,0.80)',
-  border:       'rgba(61,212,245,0.20)',
-  borderHi:     'rgba(61,212,245,0.32)',
-  hairline:     'rgba(26,27,78,0.08)',
+  ink:    '#0b0b0c',
+  ink2:   '#86868b',
+  ink3:   '#aeaeb2',
+  cyan:   '#2f6bff',
+  sky:    '#2f6bff',
+  pink:   '#7c5cff',
+  lav:    '#7c5cff',
+  mint:   '#16c08a',
+  peach:  '#f5921b',
+  gold:   '#a67200',
+  green:  '#16c08a',
+  red:    '#f0425a',
+  glass:        '#ffffff',
+  glassStrong:  '#ffffff',
+  border:       '#e9e9eb',
+  borderHi:     '#0b0b0c',
+  hairline:     '#f1f1f2',
 };
 
 // ═════════════════════════════════════════════════════════════════════
@@ -89,7 +89,7 @@ input[type="text"],input[type="number"],input[type="email"],input[type="password
 @media(max-width:768px){ .desktop-nav{ display:none !important; } }
 @media(min-width:769px){ .mobile-nav{ display:none !important; } }
 
-.nx-fixed-blob{
+.nx-fixed-blob{display:none !important;
   position:fixed; border-radius:50%; filter:blur(70px); opacity:0.42;
   animation:nx-drift 14s ease-in-out infinite; pointer-events:none; z-index:0;
 }
@@ -270,22 +270,22 @@ function HomeBelow({ onSwitchTab, walletAddress }) {
 
   // Build the card list. Order: primary products first, then utility, then meta.
   const products = [
-    { tab: 'wonderland',  icon: '✨', name: 'Wonderland',     desc: 'Meme signal scanner. Catch runners before the herd.',           live: 'TRENDING',  grad: 'linear-gradient(135deg,#B794F6,#FFD46B)' },
-    { tab: 'markets',     icon: '📈', name: 'Markets',         desc: 'Tokenized Tesla, Apple, NVIDIA — trade 24/7 in USDC.',          live: '18 STOCKS', grad: 'linear-gradient(135deg,#FF8FBE,#B794F6)' },
-    { tab: 'ape',         icon: '⚡', name: 'Ape',             desc: 'Fresh pump.fun launches with burner-wallet one-tap trades.',    live: 'EARLY',     grad: 'linear-gradient(135deg,#FF8FBE,#FFB088)' },
-    { tab: 'holdings',    icon: '👜', name: 'Bags',            desc: 'Every token you own. Live prices. Buy SOL with USD.',           live: 'PORTFOLIO', grad: 'linear-gradient(135deg,#A0E7FF,#7FFFD4)' },
-    { tab: 'bridge',      icon: '🌉', name: 'Cross-Chain',     desc: 'Move any token across 71 chains. Native, ~2 min.',              live: '71 CHAINS', grad: 'linear-gradient(135deg,#A0E7FF,#B794F6)' },
-    { tab: 'solbtc',      icon: '₿',  name: 'SOL → BTC',       desc: 'Swap Solana straight to real Bitcoin on the BTC network.',      live: 'NATIVE',    grad: 'linear-gradient(135deg,#FFD46B,#FFB088)' },
-    { tab: 'launchradar', icon: '🚀', name: 'Radar',           desc: 'Every new token, the moment it lands on Solana.',               live: 'FRESH',     grad: 'linear-gradient(135deg,#FFD46B,#FFB088)' },
-    { tab: 'referrals',   icon: '§',  name: 'Referrals',       desc: '50% of every fee, on-chain, same block. Forever.',              live: '50% RATE',  grad: 'linear-gradient(135deg,#FF8FBE,#A0E7FF)' },
-    { tab: 'why',         icon: '◌',  name: 'Why Nexus',       desc: 'No email, no KYC, no limits. The three things we never do.',   live: 'READ',      grad: 'linear-gradient(135deg,#B794F6,#A0E7FF)' },
+    { tab: 'wonderland',  icon: '✨', name: 'Wonderland',     desc: 'Meme signal scanner. Catch runners before the herd.',           live: 'TRENDING',  grad: 'linear-gradient(135deg,#7c5cff,#5a3ed1)' },
+    { tab: 'markets',     icon: '📈', name: 'Markets',         desc: 'Tokenized Tesla, Apple, NVIDIA — trade 24/7 in USDC.',          live: '18 STOCKS', grad: 'linear-gradient(135deg,#2f6bff,#1e49c9)' },
+    { tab: 'ape',         icon: '⚡', name: 'Ape',             desc: 'Fresh pump.fun launches with burner-wallet one-tap trades.',    live: 'EARLY',     grad: 'linear-gradient(135deg,#f5921b,#d4760a)' },
+    { tab: 'holdings',    icon: '👜', name: 'Bags',            desc: 'Every token you own. Live prices. Buy SOL with USD.',           live: 'PORTFOLIO', grad: 'linear-gradient(135deg,#16c08a,#0f8f67)' },
+    { tab: 'bridge',      icon: '🌉', name: 'Cross-Chain',     desc: 'Move any token across 71 chains. Native, ~2 min.',              live: '71 CHAINS', grad: 'linear-gradient(135deg,#2f6bff,#7c5cff)' },
+    { tab: 'solbtc',      icon: '₿',  name: 'SOL → BTC',       desc: 'Swap Solana straight to real Bitcoin on the BTC network.',      live: 'NATIVE',    grad: 'linear-gradient(135deg,#f5921b,#a67200)' },
+    { tab: 'launchradar', icon: '🚀', name: 'Radar',           desc: 'Every new token, the moment it lands on Solana.',               live: 'FRESH',     grad: 'linear-gradient(135deg,#f5921b,#a67200)' },
+    { tab: 'referrals',   icon: '§',  name: 'Referrals',       desc: '50% of every fee, on-chain, same block. Forever.',              live: '50% RATE',  grad: 'linear-gradient(135deg,#16c08a,#2f6bff)' },
+    { tab: 'why',         icon: '◌',  name: 'Why Nexus',       desc: 'No email, no KYC, no limits. The three things we never do.',   live: 'READ',      grad: 'linear-gradient(135deg,#7c5cff,#2f6bff)' },
   ];
 
   if (canSeeFlipsy) {
     products.splice(4, 0, {
       tab: 'flipsy', icon: '🎯', name: 'Flipsy',
       desc: 'Predictions market. Currently in development.',
-      live: 'BETA · YOU', grad: 'linear-gradient(135deg,#7FFFD4,#A0E7FF)',
+      live: 'BETA · YOU', grad: 'linear-gradient(135deg,#16c08a,#3ee07f)',
     });
   }
 
@@ -429,7 +429,7 @@ function BridgeHero({ onSwitchTab }) {
     { sym: '◎', name: 'Solana',    bg: 'linear-gradient(135deg,#9945ff,#14f195)' },
     { sym: 'Ξ', name: 'Ethereum',  bg: 'linear-gradient(135deg,#627eea,#3c4f8c)' },
     { sym: 'B', name: 'Base',      bg: 'linear-gradient(135deg,#0052ff,#3aa0ff)' },
-    { sym: '+', name: '+68 More',  bg: 'linear-gradient(135deg,#A0E7FF,#B794F6)' },
+    { sym: '+', name: '+68 More',  bg: 'linear-gradient(135deg,#2f6bff,#7c5cff)' },
   ];
 
   return (
@@ -669,11 +669,11 @@ function TermsGate({ onAccept }) {
           <button onClick={canAccept ? onAccept : undefined} disabled={!canAccept}
             style={{
               width: '100%', padding: 14, borderRadius: 14, border: 'none',
-              background: canAccept ? 'linear-gradient(135deg, #A0E7FF, #FF8FBE)' : 'rgba(26,27,78,.06)',
-              color: canAccept ? C.ink : C.ink3,
-              fontFamily: "'Instrument Serif', serif", fontWeight: 400, fontSize: 18, letterSpacing: '-0.01em',
+              background: canAccept ? '#0b0b0c' : '#f4f4f5',
+              color: canAccept ? '#fff' : C.ink3,
+              fontFamily: "-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif", fontWeight: 800, fontSize: 15, letterSpacing: '-0.01em',
               cursor: canAccept ? 'pointer' : 'not-allowed',
-              boxShadow: canAccept ? '0 8px 24px rgba(160,231,255,.30)' : 'none',
+              boxShadow: 'none',
               transition: 'all .2s',
             }}>
             Accept &amp; Continue
@@ -938,12 +938,12 @@ function PageLocked({ title, body, connected, onConnectWallet }) {
   return (
     <div style={{ maxWidth: 520, margin: '0 auto', width: '100%', padding: '64px 16px', textAlign: 'center' }}>
       <div style={{ fontSize: 46, marginBottom: 14 }}>🔒</div>
-      <h2 style={{ fontFamily: "'Instrument Serif', serif", fontSize: 28, color: C.ink, margin: '0 0 8px', letterSpacing: '-0.015em' }}>{title}</h2>
+      <h2 style={{ fontFamily: "-apple-system,BlinkMacSystemFont,'SF Pro Display',system-ui,sans-serif", fontWeight: 800, fontSize: 26, color: C.ink, margin: '0 0 8px', letterSpacing: '-0.02em' }}>{title}</h2>
       <p style={{ color: C.ink2, fontSize: 14, fontWeight: 500, lineHeight: 1.5, maxWidth: 340, margin: '0 auto 18px' }}>{body}</p>
       <button onClick={onConnectWallet} style={{
         padding: '13px 22px', borderRadius: 14, border: 'none', cursor: 'pointer',
-        background: 'linear-gradient(135deg,#A0E7FF,#FF8FBE)', color: C.ink,
-        fontFamily: "'Instrument Serif', serif", fontSize: 18, boxShadow: '0 8px 24px rgba(160,231,255,.30)',
+        background: '#0b0b0c', color: '#fff',
+        fontFamily: "-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif", fontWeight: 800, fontSize: 15, boxShadow: 'none',
       }}>{connected ? 'Switch wallet' : 'Connect wallet'}</button>
     </div>
   );
@@ -955,6 +955,7 @@ function AppInner() {
   const wallet   = useAppWallet();
   const [tab, setTab] = useState(() => tabFromPathname(location.pathname));
   const [walletModalOpen, setWalletModalOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const swapWidgetRef = useRef(null);
 
   const [termsAccepted, setTermsAccepted] = useState(() => {
@@ -1040,29 +1041,34 @@ function AppInner() {
       <div className="nx-fixed-blob" style={{ width: 420, height: 420, background: C.pink, top: '35%', left: -160, animationDelay: '3s' }} />
       <div className="nx-fixed-blob" style={{ width: 300, height: 300, background: C.gold, bottom: '15%', right: -80, animationDelay: '6s' }} />
 
+      <div onClick={() => switchTab('referrals')} style={{ position: 'relative', zIndex: 101, maxWidth: 1100, margin: '0 auto', padding: '8px 16px 0', cursor: 'pointer' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(22,192,138,0.10)', border: '1px solid rgba(22,192,138,0.22)', borderRadius: 12, padding: '9px 12px' }}>
+          <span style={{ width: 22, height: 22, borderRadius: 7, background: '#16c08a', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 800, flexShrink: 0 }}>%</span>
+          <span style={{ flex: 1, fontSize: 12, fontWeight: 700, color: '#0b0b0c', fontFamily: "-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif" }}>Earn <b style={{ color: '#11b87f' }}>50% of every fee</b> — on-chain, same block</span>
+          <span style={{ color: '#11b87f', fontWeight: 800, fontSize: 15 }}>→</span>
+        </div>
+      </div>
       {/* HEADER */}
       <header style={{
         position: 'sticky', top: 0, zIndex: 100,
-        background: 'rgba(251,245,255,0.72)',
-        backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)',
-        borderBottom: '1px solid rgba(255,255,255,0.85)',
+        background: 'rgba(255,255,255,0.82)',
+        backdropFilter: 'blur(18px)', WebkitBackdropFilter: 'blur(18px)',
+        borderBottom: '1px solid #f1f1f2',
       }}>
         <div style={{ maxWidth: 1100, margin: '0 auto', padding: '12px 18px', display: 'flex', alignItems: 'center', gap: 12 }}>
           <div onClick={() => switchTab('swap')} style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', flexShrink: 0 }}>
             <div style={{
-              width: 30, height: 30, borderRadius: '50%',
-              background: 'linear-gradient(135deg, #A0E7FF 0%, #B794F6 50%, #FF8FBE 100%)',
-              boxShadow: '0 0 14px rgba(160,231,255,0.45)',
+              width: 30, height: 30, borderRadius: 9,
+              background: '#0b0b0c',
               display: 'grid', placeItems: 'center',
-              fontFamily: "'Instrument Serif', serif", fontStyle: 'italic', fontSize: 16, color: '#fff',
-              textShadow: '0 1px 2px rgba(26,27,78,0.20)',
+              fontFamily: "-apple-system,BlinkMacSystemFont,'SF Pro Display',system-ui,sans-serif", fontWeight: 800, fontSize: 15, color: '#fff',
             }}>N</div>
-            <span style={{ fontFamily: "'Instrument Serif', serif", fontStyle: 'italic', fontSize: 22, lineHeight: 1, color: C.ink }}>
+            <span style={{ fontFamily: "-apple-system,BlinkMacSystemFont,'SF Pro Display',system-ui,sans-serif", fontWeight: 800, fontSize: 18, letterSpacing: '-0.02em', lineHeight: 1, color: C.ink }}>
               nexus
               <span style={{
-                fontFamily: "'JetBrains Mono', monospace", fontStyle: 'normal', fontSize: 9, fontWeight: 700,
-                color: C.cyan, background: 'rgba(61,212,245,0.10)',
-                border: `1px solid ${C.border}`, borderRadius: 6, padding: '2px 6px', marginLeft: 6,
+                fontFamily: "-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif", fontStyle: 'normal', fontSize: 9, fontWeight: 800,
+                color: C.ink2, background: '#f4f4f5',
+                border: '1px solid #f1f1f2', borderRadius: 6, padding: '2px 6px', marginLeft: 6,
                 letterSpacing: '0.08em', verticalAlign: 'middle',
               }}>DEX</span>
             </span>
@@ -1072,10 +1078,8 @@ function AppInner() {
               const isActive = tab === t.id;
               return (
                 <button key={t.id} onClick={() => switchTab(t.id)} style={{
-                  background: isActive
-                    ? 'linear-gradient(135deg, rgba(160,231,255,.22), rgba(255,143,190,.22))'
-                    : 'transparent',
-                  border: isActive ? `1px solid ${C.border}` : '1px solid transparent',
+                  background: isActive ? '#f4f4f5' : 'transparent',
+                  border: '1px solid transparent',
                   borderRadius: 999, padding: '6px 14px',
                   color: isActive ? C.ink : C.ink2,
                   fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 12,
@@ -1086,16 +1090,23 @@ function AppInner() {
             })}
           </nav>
           <div className="mobile-nav" style={{ flex: 1 }} />
+          <button className="mobile-nav" aria-label="Menu" onClick={() => setMenuOpen(true)} style={{
+            display: 'flex', flexDirection: 'column', gap: 3.5, alignItems: 'center', justifyContent: 'center',
+            width: 44, height: 34, borderRadius: 11, background: '#f4f4f5', border: 'none', cursor: 'pointer', flexShrink: 0,
+          }}>
+            <span style={{ width: 18, height: 2, borderRadius: 2, background: '#0b0b0c' }} />
+            <span style={{ width: 18, height: 2, borderRadius: 2, background: '#0b0b0c' }} />
+            <span style={{ width: 18, height: 2, borderRadius: 2, background: '#0b0b0c' }} />
+          </button>
+          <div className="mobile-nav" style={{ flex: 1 }} />
           <button onClick={openWallet} style={{
             display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
-            background: wallet.isConnected
-              ? C.glassStrong
-              : 'linear-gradient(135deg, #A0E7FF, #FF8FBE)',
-            border: wallet.isConnected ? `1px solid ${C.border}` : 'none',
+            background: wallet.isConnected ? '#f4f4f5' : '#0b0b0c',
+            border: 'none',
             borderRadius: 999, padding: '8px 14px', cursor: 'pointer',
-            fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 12,
-            color: C.ink, whiteSpace: 'nowrap',
-            boxShadow: wallet.isConnected ? 'none' : '0 4px 14px rgba(160,231,255,.40)',
+            fontFamily: "-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif", fontWeight: 700, fontSize: 12,
+            color: wallet.isConnected ? C.ink : '#fff', whiteSpace: 'nowrap',
+            boxShadow: 'none',
             letterSpacing: '0.04em',
           }}>
             {wallet.isConnected ? (<><div style={{ width: 7, height: 7, borderRadius: '50%', background: C.green, boxShadow: `0 0 6px ${C.green}` }} /><span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11 }}>{displayAddress}</span></>) : 'Connect'}
@@ -1111,7 +1122,6 @@ function AppInner() {
       }}>
         {tab === 'swap' && (
           <>
-            <SwapHero onStartTrading={switchTab} onScrollToWidget={scrollToSwapWidget} />
             <div ref={swapWidgetRef}>
               <SwapWidget {...sharedProps} />
             </div>
@@ -1123,7 +1133,7 @@ function AppInner() {
           ? <Ape onConnectWallet={openWallet} mainWalletPubkey={wallet.walletAddress} onSwitchTab={switchTab} />
           : <ApeLocked connected={wallet.isConnected} onConnectWallet={openWallet} />
         )}
-        {tab === 'bridge'      && <><BridgeHero onSwitchTab={switchTab} /><CrossChainSwap onConnectWallet={openWallet} /></>}
+        {tab === 'bridge'      && <CrossChainSwap onConnectWallet={openWallet} />}
         {tab === 'solbtc'      && <SolToBtcChainflip onConnectWallet={openWallet} />}
         {tab === 'wonderland'  && <MemeWonderland onConnectWallet={openWallet} />}
         {tab === 'markets'     && <Stocks {...sharedProps} />}
@@ -1140,12 +1150,13 @@ function AppInner() {
 
       {/* MOBILE BOTTOM NAV */}
       <nav className="mobile-nav" style={{
-        position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100,
-        background: 'rgba(251,245,255,0.85)',
+        position: 'fixed', bottom: 'calc(12px + env(safe-area-inset-bottom))', left: 14, right: 14, zIndex: 100,
+        background: 'rgba(255,255,255,0.82)',
         backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)',
-        borderTop: '1px solid rgba(255,255,255,0.85)',
+        border: '1px solid #f1f1f2', borderRadius: 24,
         display: 'flex', alignItems: 'stretch',
-        paddingBottom: 'env(safe-area-inset-bottom)',
+        boxShadow: '0 8px 28px rgba(11,11,12,0.12)',
+        padding: 7,
       }}>
         {navTabs.map(t => {
           // FIX 2: fallback to IconSwap if the tab has no icon registered.
@@ -1155,12 +1166,12 @@ function AppInner() {
           const isActive = tab === t.id;
           return (
             <button key={t.id} onClick={() => switchTab(t.id)} style={{
-              flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2,
-              background: 'transparent', border: 'none', cursor: 'pointer',
+              flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3,
+              background: isActive ? '#f4f4f5' : 'transparent', border: 'none', cursor: 'pointer',
               color: isActive ? C.ink : C.ink3,
-              fontFamily: "'Space Grotesk', sans-serif", fontSize: 9, fontWeight: 700,
-              padding: '8px 2px', minHeight: 54, position: 'relative',
-              transition: 'color .15s',
+              fontFamily: "-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif", fontSize: 9.5, fontWeight: 700,
+              padding: '8px 2px', minHeight: 48, position: 'relative', borderRadius: 16,
+              transition: 'all .15s',
               letterSpacing: '0.2px',
             }}>
               {isActive && (<div style={{ position: 'absolute', top: 0, left: '25%', right: '25%', height: 2, borderRadius: '0 0 2px 2px', background: 'linear-gradient(90deg, #A0E7FF, #FF8FBE)' }} />)}
@@ -1178,6 +1189,34 @@ function AppInner() {
         }} />
       )}
 
+      {menuOpen && (
+        <>
+          <div onClick={() => setMenuOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(11,11,12,0.28)', zIndex: 200 }} />
+          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 201, background: '#fff', borderBottom: '1px solid #f1f1f2', borderRadius: '0 0 20px 20px', boxShadow: '0 24px 60px rgba(11,11,12,0.22)', maxHeight: '88vh', overflowY: 'auto', paddingTop: 'env(safe-area-inset-top)', fontFamily: "-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif" }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px 8px' }}>
+              <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: '-0.01em', color: '#0b0b0c' }}>Go to</span>
+              <button onClick={() => setMenuOpen(false)} aria-label="Close" style={{ width: 30, height: 30, borderRadius: 9, background: '#f4f4f5', border: 'none', fontSize: 16, color: '#0b0b0c', cursor: 'pointer' }}>×</button>
+            </div>
+            {[
+              { grp: 'Trade', items: [['swap', 'Swap'], ['ape', 'Ape'], ['wonderland', 'Wonderland'], ['markets', 'Markets'], ['holdings', 'Bags']] },
+              { grp: 'Tools', items: [['bridge', 'Cross-Chain'], ['solbtc', 'SOL → BTC'], ['launchradar', 'Radar'], ['flipsy', 'Flipsy']] },
+              { grp: 'Earn & info', items: [['referrals', 'Referrals'], ['why', 'Why Nexus'], ['getstarted', 'Get Started']] },
+            ].map(section => (
+              <div key={section.grp}>
+                <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#aeaeb2', padding: '12px 18px 4px' }}>{section.grp}</div>
+                {section.items.map(([id, label]) => (
+                  <button key={id} onClick={() => { switchTab(id); setMenuOpen(false); }} style={{
+                    width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '12px 18px',
+                    background: tab === id ? '#fafafa' : 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left',
+                    fontFamily: 'inherit', fontSize: 14, fontWeight: 700, letterSpacing: '-0.01em', color: '#0b0b0c',
+                  }}>{label}</button>
+                ))}
+              </div>
+            ))}
+            <div style={{ height: 'calc(16px + env(safe-area-inset-bottom))' }} />
+          </div>
+        </>
+      )}
       <WalletModal open={walletModalOpen} onClose={() => setWalletModalOpen(false)} />
     </div>
   );
