@@ -1487,7 +1487,11 @@ app.get('/api/dex/candles/:mint', async (req, res) => {
     }
 
     const payload = { candles };
-    setCachedJson(cacheKey, 200, payload, 30_000);
+    // Timeframe-aware cache: short TTL on fast frames so the chart can actually
+    // refresh near-live (no point the client polling faster than this). Slow
+    // frames change rarely, so cache them longer to save upstream calls.
+    const candleTtl = tf === '5m' ? 4_000 : tf === '1H' ? 10_000 : 30_000;
+    setCachedJson(cacheKey, 200, payload, candleTtl);
     return res.json(payload);
   } catch (e) {
     if (e.name === 'AbortError') return res.status(504).json({ error: 'Candles timed out' });
