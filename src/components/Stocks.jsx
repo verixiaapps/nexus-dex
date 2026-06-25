@@ -857,6 +857,37 @@ export function stkBuildPath(pts, w, h, pad = 2) {
   };
 }
 
+// Smooth sparkline path — the "good chart" used across the app. Thin series
+// (a fresh launch with only a couple of points) are resampled into a few eased
+// points so the line reads as a gentle trend in the TRUE direction instead of a
+// flat 2-point diagonal; richer series keep their real shape. Curve is
+// Catmull-Rom → cubic bezier. Same {c} input shape as stkBuildPath; returns
+// { line, area, lastX, lastY } plus the up flag.
+export function stkSmoothPath(pts, w, h, pad = 2) {
+  let cs = pts.map(p => p.c).filter(v => Number.isFinite(v));
+  if (cs.length < 2) cs = [cs[0] || 1, cs[0] || 1];
+  const up = cs[cs.length - 1] >= cs[0];
+  if (cs.length < 6) {                       // thin → ease into 6 points
+    const a = cs[0], b = cs[cs.length - 1], out = [];
+    for (let i = 0; i < 6; i++) { const t = i / 5; const e = t * t * (3 - 2 * t); out.push(a + (b - a) * e); }
+    cs = out;
+  }
+  const n = cs.length;
+  let lo = Math.min(...cs), hi = Math.max(...cs);
+  if (!(hi > lo)) { const m = lo || 1; hi = m * 1.001; lo = m * 0.999; }
+  const xAt = i => pad + (i / (n - 1)) * (w - pad * 2);
+  const yAt = v => pad + (1 - (v - lo) / (hi - lo)) * (h - pad * 2);
+  const P = cs.map((v, i) => ({ x: xAt(i), y: yAt(v) }));
+  let d = `M${P[0].x.toFixed(2)},${P[0].y.toFixed(2)}`;
+  for (let i = 0; i < n - 1; i++) {
+    const p0 = P[i - 1] || P[i], p1 = P[i], p2 = P[i + 1], p3 = P[i + 2] || P[i + 1];
+    const c1x = p1.x + (p2.x - p0.x) / 6, c1y = p1.y + (p2.y - p0.y) / 6;
+    const c2x = p2.x - (p3.x - p1.x) / 6, c2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C${c1x.toFixed(2)},${c1y.toFixed(2)} ${c2x.toFixed(2)},${c2y.toFixed(2)} ${p2.x.toFixed(2)},${p2.y.toFixed(2)}`;
+  }
+  return { line: d, area: d + ` L${P[n - 1].x.toFixed(2)},${h} L${P[0].x.toFixed(2)},${h} Z`, lastX: P[n - 1].x, lastY: P[n - 1].y, up };
+}
+
 // ── Embedded chart (trade sheet) ──────────────────────────────────────
 // Switched from a hand-drawn SVG to the provider's live embedded chart —
 // GeckoTerminal primary, DexScreener fallback — reusing the same base-token
@@ -997,7 +1028,7 @@ function StockSparkline({ mint }) {
 
   const series = (pts && pts.length >= 2) ? pts : null;
   const W = 54, H = 28;
-  const built = series ? stkBuildPath(series, W, H, 2) : null;
+  const built = series ? stkSmoothPath(series, W, H, 2) : null;
   const chg = series ? ((series[series.length - 1].c - series[0].c) / series[0].c) * 100 : null;
   const up = chg == null ? true : chg >= 0;
   const col = up ? '#11b87f' : '#fb7185';
@@ -1006,7 +1037,7 @@ function StockSparkline({ mint }) {
   return (
     <div className="st-spark" ref={ref}>
       {built ? (
-        <svg className="st-spark-svg" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+        <svg className="st-spark-svg" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ overflow: 'visible' }}>
           <defs>
             <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0" stopColor={col} stopOpacity="0.20" />
@@ -1014,7 +1045,8 @@ function StockSparkline({ mint }) {
             </linearGradient>
           </defs>
           <path d={built.area} fill={`url(#${gid})`} />
-          <path d={built.line} fill="none" stroke={col} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          <path d={built.line} fill="none" stroke={col} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+          <circle cx={built.lastX.toFixed(2)} cy={built.lastY.toFixed(2)} r="1.8" fill={col} />
         </svg>
       ) : (pts === null ? <span className="st-sk st-spark-sk" /> : <span className="st-spark-ph" />)}
       {chg != null && <span className={'st-spark-chg ' + (up ? 'up' : 'dn')}>{(up ? '+' : '') + chg.toFixed(2) + '%'}</span>}
