@@ -43,7 +43,7 @@ const WP_CSS = `
  --glass:#ffffff; --glass-strong:#fafafa;
  --border:#e4e4e7; --hairline:#efeff1;
 
- position:relative;min-height:100vh;min-height:100dvh;
+ position:relative;min-height:100dvh;min-height:100dvh;
  padding:0 0 40px;overflow-x:hidden;
  color:var(--ink);
  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",system-ui,sans-serif;
