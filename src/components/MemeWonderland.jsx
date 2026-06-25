@@ -2,7 +2,6 @@
 // Sections: Hero · Top Signal · Narratives · Whale Radar · Breaking Out · New Launches · Trending · Live Feed.
    
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { stkFetchSeries, stkBuildPath, stkThrottle } from './Stocks.jsx';
 import { Buffer } from 'buffer';
 import {
   Connection,
@@ -784,46 +783,103 @@ function BreakingOut({ tokens, whaleByMint, excludeMint, onOpen, onTrade }) {
   );
 }
 
-// Row sparkline — REAL DATA ONLY, no synthetic fallback. Two real sources:
-//   1) GeckoTerminal/DexScreener OHLCV via stkFetchSeries (contract-matched,
-//      highest-liquidity pool, cached + throttled) — immediate real history.
-//   2) Live observed price the feed already polls, accumulated per mint.
-// Whichever is available draws; if neither has ≥2 points yet, nothing renders
-// (no straight-line / wiggle fakery). Every priced token charts as soon as its
-// real data exists.
-const _sparkHist = new Map(); // mint -> number[] (observed prices)
-function recordSpark(mint, price) {
-  if (!mint || !(price > 0)) return _sparkHist.get(mint) || [];
-  let pts = _sparkHist.get(mint);
-  if (!pts) { pts = []; _sparkHist.set(mint, pts); }
-  if (pts[pts.length - 1] !== price) { pts.push(price); if (pts.length > 32) pts.shift(); }
-  return pts;
+// Real-data sparkline — fetches actual OHLCV closes for the token's BEST pool
+// (resolved BY CONTRACT, highest USD liquidity) from GeckoTerminal, DexScreener
+// fallback. No synthetic price+change line. Lazy (IntersectionObserver) +
+// in-memory cached so a list of rows doesn't hammer the API. If there's no real
+// series yet, the row simply shows nothing rather than a fabricated shape.
+const MWS_GT = 'https://api.geckoterminal.com/api/v2';
+const MWS_DS = 'https://api.dexscreener.com/latest/dex';
+const mwsSeriesCache = new Map();   // mint -> pts[] | null
+const mwsInflight    = new Map();   // mint -> Promise
+
+function mwsPickGeckoPool(pools, mint) {
+  if (!Array.isArray(pools) || !pools.length) return null;
+  const wanted = ('solana_' + mint).toLowerCase();
+  const baseId  = p => String(p?.relationships?.base_token?.data?.id || '').toLowerCase();
+  const quoteId = p => String(p?.relationships?.quote_token?.data?.id || '').toLowerCase();
+  const addr    = p => p?.attributes?.address;
+  const liq     = p => Number(p?.attributes?.reserve_in_usd) || 0;
+  const base = pools.filter(p => addr(p) && baseId(p) === wanted);
+  const any  = pools.filter(p => addr(p) && (baseId(p) === wanted || quoteId(p) === wanted));
+  const set  = base.length ? base : any;
+  if (!set.length) return null;
+  return set.reduce((b, p) => liq(p) > liq(b) ? p : b, set[0]);
 }
-function MwSparkline({ mint, price, change, w = 50, h = 22, full = false }) {
-  const [series, setSeries] = useState(null);
+async function mwsFetchSeries(mint) {
+  if (!mint) return null;
+  if (mwsSeriesCache.has(mint)) return mwsSeriesCache.get(mint);
+  if (mwsInflight.has(mint)) return mwsInflight.get(mint);
+  const p = (async () => {
+    let pool = null;
+    try {
+      const r = await fetch(`${MWS_GT}/networks/solana/tokens/${mint}/pools`, { headers: { Accept: 'application/json' } });
+      if (r.ok) { const j = await r.json(); const best = mwsPickGeckoPool(j?.data, mint); if (best?.attributes?.address) pool = best.attributes.address; }
+    } catch (e) {}
+    let out = null;
+    if (pool) {
+      try {
+        const r = await fetch(`${MWS_GT}/networks/solana/pools/${pool}/ohlcv/hour?aggregate=1&limit=24&currency=usd`, { headers: { Accept: 'application/json' } });
+        if (r.ok) {
+          const j = await r.json();
+          const list = j?.data?.attributes?.ohlcv_list;
+          if (Array.isArray(list) && list.length >= 2) {
+            const pts = list.map(x => Number(x[4])).filter(v => Number.isFinite(v) && v > 0).reverse();
+            if (pts.length >= 2) out = pts;
+          }
+        }
+      } catch (e) {}
+    }
+    mwsSeriesCache.set(mint, out);
+    return out;
+  })();
+  mwsInflight.set(mint, p);
+  try { return await p; } finally { mwsInflight.delete(mint); }
+}
+function mwSparkPath(vals, w, h, pad) {
+  const xs = vals.length - 1, mn = Math.min(...vals), mx = Math.max(...vals), rg = (mx - mn) || 1;
+  const X = i => (i / xs) * w, Y = v => h - pad - ((v - mn) / rg) * (h - 2 * pad);
+  let d = 'M' + X(0).toFixed(1) + ' ' + Y(vals[0]).toFixed(1);
+  for (let i = 1; i < vals.length; i++) d += ' L' + X(i).toFixed(1) + ' ' + Y(vals[i]).toFixed(1);
+  return { line: d, area: d + ' L' + w + ' ' + h + ' L0 ' + h + ' Z' };
+}
+function MwSparkline({ mint, change, w = 50, h = 22, full = false }) {
+  const [vals, setVals] = useState(() => (mint && mwsSeriesCache.get(mint)) || null);
+  const ref = useRef(null);
+  const done = useRef(false);
   useEffect(() => {
-    if (!mint) return;
-    let cancelled = false;
-    stkThrottle(() => stkFetchSeries(mint, '1D'))
-      .then(s => { if (!cancelled && Array.isArray(s) && s.length >= 2) setSeries(s); })
-      .catch(() => {});
-    return () => { cancelled = true; };
+    done.current = false;
+    const cached = mint ? mwsSeriesCache.get(mint) : undefined;
+    if (cached !== undefined) { setVals(cached); return; }
+    setVals(null);
+    if (!mint || !ref.current || typeof IntersectionObserver === 'undefined') return;
+    const el = ref.current;
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach(e => {
+        if (e.isIntersecting && !done.current) {
+          done.current = true; io.disconnect();
+          mwsFetchSeries(mint).then(s => setVals(s || null)).catch(() => {});
+        }
+      });
+    }, { rootMargin: '160px' });
+    io.observe(el);
+    return () => io.disconnect();
   }, [mint]);
 
-  const hist = recordSpark(mint, Number(price));
-  const obs = hist.length >= 2 ? hist.map(c => ({ c })) : null;
-  const pts = (series && series.length >= 2) ? series : obs;
-  if (!pts) return null;                       // real data only — nothing until it exists
-
-  const path = stkBuildPath(pts, w, h, 2);
-  const up = pts[pts.length - 1].c >= pts[0].c;
+  const ok = vals && vals.length >= 2;
+  const up = ok ? vals[vals.length - 1] >= vals[0] : (Number(change) || 0) >= 0;
   const col = up ? 'var(--green)' : 'var(--down)';
-  const id = 'mws' + (up ? 'u' : 'd') + (mint ? String(mint).slice(0, 8) : '');
+  const pa = ok ? mwSparkPath(vals, w, h, 2) : null;
+  const id = 'mws' + Math.random().toString(36).slice(2, 7);
   return (
-    <svg width={full ? '100%' : w} height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ flex: '0 0 auto', display: 'block' }}>
-      <defs><linearGradient id={id} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={col} stopOpacity={up ? '0.28' : '0.22'} /><stop offset="1" stopColor={col} stopOpacity="0" /></linearGradient></defs>
-      <path d={path.area} fill={`url(#${id})`} />
-      <path d={path.line} fill="none" stroke={col} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    <svg ref={ref} width={full ? '100%' : w} height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ flex: '0 0 auto', display: 'block' }}>
+      {pa && (
+        <>
+          <defs><linearGradient id={id} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={col} stopOpacity="0.18" /><stop offset="1" stopColor={col} stopOpacity="0" /></linearGradient></defs>
+          <path d={pa.area} fill={`url(#${id})`} />
+          <path d={pa.line} fill="none" stroke={col} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+        </>
+      )}
     </svg>
   );
 }
@@ -852,7 +908,7 @@ function NewLaunches({ tokens, onOpen, onTrade }) {
                   <div className="mw-launch-age">⏱ {t.age} OLD</div>
                 </div>
               </div>
-              <div style={{ margin: '8px 0 2px' }}><MwSparkline mint={t.mint} price={t.price} change={t.change} w={150} h={30} full /></div>
+              <div style={{ margin: '8px 0 2px' }}><MwSparkline mint={t.mint} change={t.change} w={150} h={30} full /></div>
               <div className="mw-launch-row"><span className="mw-launch-l">Holders</span><span className="mw-launch-v">{t.holders ? format(t.holders) : '—'}</span></div>
               <div className="mw-launch-row"><span className="mw-launch-l">Liquidity</span><span className="mw-launch-v">${format(t.liquidity)}</span></div>
               <div className="mw-launch-row"><span className="mw-launch-l">Signal</span><span className="mw-launch-v" style={{ color: 'var(--green)' }}>{signalScore(t)}</span></div>
@@ -890,7 +946,7 @@ function TrendingNow({ tokens, onOpen }) {
               <div className="mw-trend-sym">${t.sym}</div>
               <div className="mw-trend-sub">{tab === 'traded' ? `Vol $${format(t.volume24h)}` : tab === 'viewed' ? `Signal ${signalScore(t)}` : formatPrice(t.price)}</div>
             </div>
-            <MwSparkline mint={t.mint} price={t.price} change={t.change} w={50} h={22} />
+            <MwSparkline mint={t.mint} change={t.change} w={50} h={22} />
             <div className="mw-trend-right">
               <div className={'mw-trend-pct' + ((t.change || 0) < 0 ? ' mw-down' : '')}>{formatPct(t.change || 0)}</div>
               <div className="mw-trend-meta">${format(t.mcap)} mcap</div>
