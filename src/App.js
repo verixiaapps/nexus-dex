@@ -3,7 +3,7 @@ import { BrowserRouter, useNavigate, useLocation } from 'react-router-dom';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from './WalletContext.js';
 import SwapWidget          from './components/SwapWidget.jsx';
-import Stocks, { BRANDS, fetchBrandPrices, stkFetchSeries, stkBuildPath, stkThrottle } from './components/Stocks.jsx';
+import Stocks, { BRANDS, fetchBrandPrices, fetchBrandIcons, stkFetchSeries, stkBuildPath, stkThrottle, TradeModal as StockTradeModal } from './components/Stocks.jsx';
 import CrossChainSwap      from './components/CrossChainSwap.jsx';
 import SolToBtcChainflip   from './components/SolToBtcChainflip.jsx';
 import MemeWonderland      from './components/MemeWonderland.jsx';
@@ -131,10 +131,10 @@ input[type="text"],input[type="number"],input[type="email"],input[type="password
 function EcoStrip({ active, onGo }) {
   const items = [
     { ic: '⇅',  lbl: 'Swap',    tab: 'swap' },
-    { ic: '⚡', lbl: 'Ape',     tab: 'ape' },
-    { ic: '✨', lbl: 'Wonder',  tab: 'wonderland' },
-    { ic: '📈', lbl: 'Markets', tab: 'markets' },
-    { ic: '👜', lbl: 'Bags',    tab: 'holdings' },
+    { ic: '⚡', lbl: 'Launches', tab: 'ape' },
+    { ic: '✨', lbl: 'Memes',   tab: 'wonderland' },
+    { ic: '📈', lbl: 'Stocks',  tab: 'markets' },
+    { ic: '👜', lbl: 'Wallet',  tab: 'holdings' },
   ];
   return (
     <div className="hide-scrollbar" style={{ display: 'flex', gap: 8, overflowX: 'auto', padding: '0 0 4px' }}>
@@ -204,18 +204,15 @@ function SwapHero() {
         <span style={{ color: C.ink2, fontWeight: 800 }}>CHAINALYSIS</span>
       </div>
 
-      {/* SWAP label — serif kept only as a whisper */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 4px 6px' }}>
-        <div style={{ fontFamily: "'Instrument Serif', serif", fontWeight: 400, fontSize: 22, color: C.ink, letterSpacing: '-0.015em', lineHeight: 1 }}>Swap</div>
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 5,
-          fontFamily: "'JetBrains Mono', monospace", fontSize: 9, fontWeight: 700, color: C.green,
-          letterSpacing: '0.12em', background: 'rgba(22,192,138,.10)', border: `1px solid ${C.border}`,
-          padding: '4px 10px', borderRadius: 999,
-        }}>
-          <span style={{ width: 4, height: 4, borderRadius: '50%', background: C.green, boxShadow: `0 0 6px ${C.green}`, animation: 'nx-pulse 1.6s infinite' }} />LIVE QUOTE
-        </div>
+      {/* CREDENTIALS — all literally true: Jupiter programs audited (OtterSec & Sec3);
+          non-custodial (keys never leave the user); Chainalysis wallet sanctions screening. */}
+      <div style={{
+        marginTop: 5, textAlign: 'center', fontFamily: "'JetBrains Mono', monospace",
+        fontSize: 9, fontWeight: 700, color: C.ink3, letterSpacing: '0.05em',
+      }}>
+        Routing audited by OtterSec & Sec3 · Non-custodial · Wallets sanctions-screened
       </div>
+
     </div>
   );
 }
@@ -247,6 +244,19 @@ function pctFromSeries(pts) {
   const a = pts[0].c, b = pts[pts.length - 1].c;
   if (!(a > 0)) return null;
   return ((b - a) / a) * 100;
+}
+
+// Fallback sparkline for rows with no fetched series yet (e.g. seconds-old launches):
+// a clean directional line derived from the token's real % change — direction/magnitude
+// are truthful; it does NOT imply tick-level history.
+function synthSpark(price, pct) {
+  const p = Number(price);
+  if (!Number.isFinite(p) || p <= 0) return null;
+  const c = Number.isFinite(Number(pct)) ? Number(pct) : 0;
+  const start = c <= -100 ? p * 0.5 : p / (1 + c / 100);
+  const n = 7, out = [];
+  for (let i = 0; i < n; i++) { const f = i / (n - 1); out.push({ c: start + (p - start) * f }); }
+  return out;
 }
 
 // draw-only sparkline (data fetched by the strip so we never double-fetch)
@@ -323,6 +333,80 @@ function Row({ onClick, last, ico, grad, sym, tag, sub, price, pct, pts }) {
   );
 }
 
+// ── Token detail bottom-sheet: chart + stats + one-tap Buy (sets the home swap to SOL -> token) ──
+function SheetChart({ pts }) {
+  const ok = pts && pts.length >= 2;
+  const W = 320, H = 120;
+  const path = ok ? stkBuildPath(pts, W, H, 4) : null;
+  const up = ok ? pts[pts.length - 1].c >= pts[0].c : true;
+  const col = up ? C.green : C.red;
+  return (
+    <div style={{ width: '100%', height: H, marginTop: 14, borderRadius: 14, overflow: 'hidden', background: ok ? 'transparent' : '#f4f4f5', display: ok ? 'block' : 'grid', placeItems: 'center' }}>
+      {path ? (
+        <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none" style={{ display: 'block' }}>
+          <path d={path.area} fill={up ? 'rgba(22,192,138,.12)' : 'rgba(240,66,90,.12)'} />
+          <path d={path.line} fill="none" stroke={col} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      ) : (
+        <span style={{ fontFamily: MONO, fontSize: 11, color: C.ink3, letterSpacing: '0.08em' }}>LOADING CHART…</span>
+      )}
+    </div>
+  );
+}
+
+function TokenSheet({ token, onClose, onBuy, onOpenFull }) {
+  const [pts, setPts] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    setPts(null);
+    stkThrottle(() => stkFetchSeries(token.mint, token.tf || '1D'))
+      .then(s => { if (!cancelled && s && s.length >= 2) setPts(s); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [token.mint, token.tf]);
+
+  const up = Number.isFinite(token.pct) ? token.pct >= 0 : true;
+  const isImg = typeof token.ico === 'string' && /^https?:\/\//.test(token.ico);
+
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 600, background: 'rgba(26,27,78,0.45)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }} />
+      <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 601, background: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: '14px 18px 26px', maxWidth: 560, margin: '0 auto', boxShadow: '0 -12px 40px rgba(26,27,78,.18)' }}>
+        <div onClick={onClose} style={{ width: 40, height: 4, background: 'rgba(26,27,78,.18)', borderRadius: 99, margin: '0 auto 18px', cursor: 'pointer' }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ width: 44, height: 44, borderRadius: 13, display: 'grid', placeItems: 'center', color: '#fff', fontWeight: 800, fontSize: 17, background: token.grad, backgroundSize: 'cover', backgroundPosition: 'center', flex: '0 0 auto', ...(isImg ? { backgroundImage: `url(${token.ico})` } : {}) }}>{!isImg ? (token.ico || '?') : ''}</div>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ fontWeight: 800, fontSize: 18, color: C.ink, letterSpacing: '-0.01em' }}>{token.sym}</div>
+            <div style={{ fontSize: 12, color: C.ink3, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{token.name}</div>
+          </div>
+          <div style={{ textAlign: 'right', flex: '0 0 auto' }}>
+            <div style={{ fontFamily: MONO, fontSize: 17, fontWeight: 700, color: C.ink }}>{fmtUsd(token.price)}</div>
+            <div style={{ fontFamily: MONO, fontSize: 12, fontWeight: 700, marginTop: 1, color: up ? C.green : C.red }}>{fmtPct(token.pct)}</div>
+          </div>
+        </div>
+
+        <SheetChart pts={pts} />
+
+        {token.stats && (
+          <div style={{ marginTop: 12, fontFamily: MONO, fontSize: 11, color: C.ink3, letterSpacing: '0.02em' }}>{token.stats}</div>
+        )}
+
+        <button onClick={() => onBuy(token.mint)} style={{
+          marginTop: 18, width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: 'pointer',
+          background: 'linear-gradient(135deg,#2f6bff,#1e49c9)', color: '#fff', fontWeight: 800, fontSize: 15,
+          fontFamily: "'Space Grotesk', sans-serif", letterSpacing: '0.01em', boxShadow: '0 8px 22px rgba(47,107,255,.32)',
+        }}>Buy {token.sym} →</button>
+
+        <button onClick={onOpenFull} style={{
+          marginTop: 10, width: '100%', padding: 13, borderRadius: 14, cursor: 'pointer',
+          background: 'transparent', border: `1px solid ${C.hairline}`, color: C.ink3, fontWeight: 600, fontSize: 13,
+          fontFamily: "'Space Grotesk', sans-serif",
+        }}>Open full page</button>
+      </div>
+    </>
+  );
+}
+
 // ── Launch Radar strip — same /api/dex/launches feed ──────────────────
 // Self-contained normalizer for the Launch Radar strip: maps the
 // /api/dex/launches token shape to what Row needs. Inlined so App.js carries no
@@ -362,27 +446,35 @@ function normalize(t) {
   };
 }
 
-export function LaunchRadarStrip({ onSwitchTab }) {
+export function LaunchRadarStrip({ onSwitchTab, onOpenToken }) {
   const [toks, setToks] = useState([]);
   const [series, setSeries] = useState({});
+  const fetched = useRef({});               // mints whose sparkline we've already requested
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    const loadSeries = (list) => {
+      list.forEach(t => {
+        if (fetched.current[t.mint]) return;            // don't refetch on every 5s poll
+        fetched.current[t.mint] = true;
+        stkThrottle(() => stkFetchSeries(t.mint, '1D'))
+          .then(s => { if (!cancelled && s && s.length >= 2) setSeries(prev => ({ ...prev, [t.mint]: s })); })
+          .catch(() => { fetched.current[t.mint] = false; });
+      });
+    };
+    const pull = async () => {
       try {
         const r = await fetch('/api/dex/launches');
         if (!r.ok) return;
         const d = await r.json();
-        const list = (Array.isArray(d?.tokens) ? d.tokens : []).map(normalize).filter(Boolean).slice(0, 4);
+        const list = (Array.isArray(d?.tokens) ? d.tokens : []).map(normalize).filter(Boolean).slice(0, 6);
         if (cancelled) return;
         setToks(list);
-        list.forEach(t => {
-          stkThrottle(() => stkFetchSeries(t.mint, '1D'))
-            .then(s => { if (!cancelled && s && s.length >= 2) setSeries(prev => ({ ...prev, [t.mint]: s })); })
-            .catch(() => {});
-        });
+        loadSeries(list);
       } catch {}
-    })();
-    return () => { cancelled = true; };
+    };
+    pull();
+    const id = setInterval(pull, 5000);                 // live: refresh list every 5s (matches full page)
+    return () => { cancelled = true; clearInterval(id); };
   }, []);
 
   if (!toks.length) return null;
@@ -391,34 +483,44 @@ export function LaunchRadarStrip({ onSwitchTab }) {
     <>
       <SectionHead title="Launch" italic="Radar" meta="LIVE" onAll={() => onSwitchTab('launchradar')} />
       <ListShell>
-        {toks.map((t, i) => (
-          <Row
-            key={t.mint}
-            last={i === toks.length - 1}
-            onClick={() => onSwitchTab('launchradar')}
-            ico={t.icon || t.emoji}
-            grad="linear-gradient(135deg,#f5921b,#d4760a)"
-            sym={t.sym}
-            tag={t.age}
-            sub={`MC ${fmtUsd(t.mcap)} · Liq ${fmtUsd(t.liquidity)}`}
-            price={fmtUsd(t.price)}
-            pct={Number.isFinite(t.change) ? t.change : pctFromSeries(series[t.mint])}
-            pts={series[t.mint]}
-          />
-        ))}
+        {toks.map((t, i) => {
+          const pct = Number.isFinite(t.change) ? t.change : pctFromSeries(series[t.mint]);
+          return (
+            <Row
+              key={t.mint}
+              last={i === toks.length - 1}
+              onClick={() => onOpenToken({
+                mint: t.mint, sym: t.sym, name: t.name, ico: t.icon || t.emoji,
+                grad: 'linear-gradient(135deg,#f5921b,#d4760a)',
+                price: t.price, pct, tf: '1D',
+                stats: `MC ${fmtUsd(t.mcap)} · Liq ${fmtUsd(t.liquidity)}`, tab: 'launchradar',
+              })}
+              ico={t.icon || t.emoji}
+              grad="linear-gradient(135deg,#f5921b,#d4760a)"
+              sym={t.sym}
+              tag={t.age}
+              sub={`MC ${fmtUsd(t.mcap)} · Liq ${fmtUsd(t.liquidity)}`}
+              price={fmtUsd(t.price)}
+              pct={pct}
+              pts={series[t.mint] || synthSpark(t.price, pct)}
+            />
+          );
+        })}
       </ListShell>
     </>
   );
 }
 
 // ── xStocks strip — same BRANDS catalog + Jupiter price/v3 ─────────────
-export function XStocksStrip({ onSwitchTab }) {
-  const picks = BRANDS.slice(0, 4);
+export function XStocksStrip({ onSwitchTab, onOpenToken, onOpenStock }) {
+  const picks = BRANDS.slice(0, 6);
   const [prices, setPrices] = useState({});
   const [series, setSeries] = useState({});
+  const [icons,  setIcons]  = useState({});
   useEffect(() => {
     let cancelled = false;
     fetchBrandPrices(picks.map(b => b.mint)).then(p => { if (!cancelled) setPrices(p || {}); }).catch(() => {});
+    fetchBrandIcons(picks.map(b => b.mint)).then(ic => { if (!cancelled) setIcons(ic || {}); }).catch(() => {});
     picks.forEach(b => {
       stkThrottle(() => stkFetchSeries(b.mint, '1W'))
         .then(s => { if (!cancelled && s && s.length >= 2) setSeries(prev => ({ ...prev, [b.mint]: s })); })
@@ -437,19 +539,20 @@ export function XStocksStrip({ onSwitchTab }) {
           const live = prices[b.mint];
           const last = pts && pts.length ? pts[pts.length - 1].c : null;
           const price = Number.isFinite(live) ? live : last;
+          const pct = pctFromSeries(pts);
           return (
             <Row
               key={b.mint}
               last={i === picks.length - 1}
-              onClick={() => onSwitchTab('markets')}
-              ico={b.symbol.charAt(0)}
+              onClick={() => onOpenStock(b, price, icons[b.mint])}
+              ico={icons[b.mint] || b.symbol.charAt(0)}
               grad="linear-gradient(135deg,#2f6bff,#1e49c9)"
               sym={b.symbol}
               tag="24/7"
               sub={b.name}
               price={fmtUsd(price)}
-              pct={pctFromSeries(pts)}
-              pts={pts}
+              pct={pct}
+              pts={pts || synthSpark(price, pct)}
             />
           );
         })}
@@ -463,7 +566,26 @@ export function XStocksStrip({ onSwitchTab }) {
 // EXPANDED card grid: now includes Bridge, Sol→BTC, Radar, Referrals,
 // Why Nexus, and (gated to Flipsy access wallet only) Flipsy.
 // =====================================================================
-function HomeBelow({ onSwitchTab, walletAddress }) {
+function SwapLabel() {
+  return (
+    <div style={{ maxWidth: 520, margin: '0 auto', width: '100%' }}>
+      {/* SWAP label — serif whisper, sits right above the widget */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 4px 6px' }}>
+        <div style={{ fontFamily: "'Instrument Serif', serif", fontWeight: 400, fontSize: 22, color: C.ink, letterSpacing: '-0.015em', lineHeight: 1 }}>Swap</div>
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 5,
+          fontFamily: "'JetBrains Mono', monospace", fontSize: 9, fontWeight: 700, color: C.green,
+          letterSpacing: '0.12em', background: 'rgba(22,192,138,.10)', border: `1px solid ${C.border}`,
+          padding: '4px 10px', borderRadius: 999,
+        }}>
+          <span style={{ width: 4, height: 4, borderRadius: '50%', background: C.green, boxShadow: `0 0 6px ${C.green}`, animation: 'nx-pulse 1.6s infinite' }} />LIVE QUOTE
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LiveSwaps() {
   const trades = [
     ['SOL → USDC',   '+$1,420', '2s'],
     ['JUP → SOL',    '+$340',   '4s'],
@@ -474,7 +596,32 @@ function HomeBelow({ onSwitchTab, walletAddress }) {
     ['TSLAx → USDC', '+$420',   '24s'],
     ['SOL → USDC',   '+$2,950', '31s'],
   ];
+  return (
+    <div style={{ maxWidth: 520, margin: '0 auto', width: '100%' }}>
+      <SectionHead title="Live" italic="swaps" meta="UPDATED NOW" />
+      <div style={{ padding: 0, borderRadius: 18, overflow: 'hidden', background: C.glassStrong, backdropFilter: 'blur(10px)', border: `1px solid ${C.border}` }}>
+        <div style={{ height: 140, overflow: 'hidden', position: 'relative',
+          maskImage: 'linear-gradient(180deg,transparent,#000 14px,#000 calc(100% - 14px),transparent)',
+          WebkitMaskImage: 'linear-gradient(180deg,transparent,#000 14px,#000 calc(100% - 14px),transparent)' }}>
+          <div style={{ animation: 'nx-ticker 24s linear infinite' }}>
+            {[...trades, ...trades].map((r, i) => {
+              const isIn = r[1].startsWith('+');
+              return (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', borderBottom: `1px solid ${C.hairline}` }}>
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, fontWeight: 600, color: C.ink, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r[0]}</span>
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, fontWeight: 700, color: isIn ? C.green : '#8c1494', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{r[1]}</span>
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, color: C.ink3, fontWeight: 600, flexShrink: 0, minWidth: 36, textAlign: 'right', letterSpacing: '0.4px' }}>{r[2]}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
+function HomeBelow({ onSwitchTab, walletAddress, onOpenToken }) {
   const canSeeFlipsy = walletAddress === FLIPSY_ACCESS_WALLET;
 
   // Build the card list. Order: primary products first, then utility, then meta.
@@ -522,41 +669,6 @@ function HomeBelow({ onSwitchTab, walletAddress }) {
 
   return (
     <div style={{ maxWidth: 520, margin: '0 auto', width: '100%' }}>
-
-      {/* LIVE TICKER */}
-      {sectionHead('Live', 'swaps', 'UPDATED NOW', true)}
-      <div style={{
-        padding: 0, borderRadius: 18, overflow: 'hidden',
-        background: C.glassStrong, backdropFilter: 'blur(10px)',
-        border: `1px solid ${C.border}`,
-      }}>
-        <div style={{
-          height: 140, overflow: 'hidden', position: 'relative',
-          maskImage: 'linear-gradient(180deg,transparent,#000 14px,#000 calc(100% - 14px),transparent)',
-          WebkitMaskImage: 'linear-gradient(180deg,transparent,#000 14px,#000 calc(100% - 14px),transparent)',
-        }}>
-          <div style={{ animation: 'nx-ticker 24s linear infinite' }}>
-            {[...trades, ...trades].map((r, i) => {
-              const isIn = r[1].startsWith('+');
-              return (
-                <div key={i} style={{
-                  display: 'flex', alignItems: 'center', gap: 10,
-                  padding: '10px 16px',
-                  borderBottom: `1px solid ${C.hairline}`,
-                }}>
-                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, fontWeight: 600, color: C.ink, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r[0]}</span>
-                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, fontWeight: 700, color: isIn ? C.green : '#8c1494', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{r[1]}</span>
-                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, color: C.ink3, fontWeight: 600, flexShrink: 0, minWidth: 36, textAlign: 'right', letterSpacing: '0.4px' }}>{r[2]}</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
-      {/* TRADE LIVE — real Launch Radar + xStocks feeds (same calls) */}
-      <LaunchRadarStrip onSwitchTab={onSwitchTab} />
-      <XStocksStrip onSwitchTab={onSwitchTab} />
 
       {/* EXPANDED PRODUCT GRID */}
       {sectionHead('Explore the', 'super-app', 'TOOLS')}
@@ -1116,10 +1228,10 @@ const NAV_ICONS = { swap: IconSwap, ape: IconApe, wonderland: IconWonderland, ma
 // to wallets in ADMIN_WALLETS. The filter in AppInner handles the gating.
 const PRIMARY_NAV_TABS = [
   { id: 'swap',       label: 'Swap' },
-  { id: 'ape',        label: 'Ape' },
-  { id: 'wonderland', label: 'Wonder' },
-  { id: 'markets',    label: 'Markets' },
-  { id: 'holdings',   label: 'Bags' },
+  { id: 'ape',        label: 'Launches' },
+  { id: 'wonderland', label: 'Memes' },
+  { id: 'markets',    label: 'Stocks' },
+  { id: 'holdings',   label: 'Wallet' },
   { id: 'admin',      label: 'Admin' },
 ];
 
@@ -1155,6 +1267,8 @@ function AppInner() {
   const [walletModalOpen, setWalletModalOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const swapWidgetRef = useRef(null);
+  const [sheetToken, setSheetToken] = useState(null);
+  const [swapOutputMint, setSwapOutputMint] = useState(null);
 
   const [termsAccepted, setTermsAccepted] = useState(() => {
     try { return localStorage.getItem('nexus_terms_accepted_v3') === '1'; } catch { return false; }
@@ -1206,6 +1320,16 @@ function AppInner() {
     const y = el.getBoundingClientRect().top + window.scrollY - 80;
     window.scrollTo({ top: y, behavior: 'smooth' });
   }, []);
+
+  const openToken = useCallback(t => setSheetToken(t), []);
+  const [stockTrade, setStockTrade] = useState(null);
+  const openStockTrade = useCallback((brand, price, icon) => setStockTrade({ brand, price: price || 0, icon: icon || null }), []);
+  const buyToken = useCallback(mint => {
+    setSwapOutputMint(mint);
+    setSheetToken(null);
+    if (tab !== 'swap') { navigate(TAB_TO_PATH['swap'] || '/swap'); setTab('swap'); }
+    requestAnimationFrame(() => requestAnimationFrame(scrollToSwapWidget));
+  }, [tab, navigate, scrollToSwapWidget]);
 
   const sharedProps = {
     isConnected:      wallet.isConnected,
@@ -1321,10 +1445,14 @@ function AppInner() {
         {tab === 'swap' && (
           <>
             <SwapHero />
+            <LaunchRadarStrip onSwitchTab={switchTab} onOpenToken={openToken} />
+            <LiveSwaps />
+            <SwapLabel />
             <div ref={swapWidgetRef}>
-              <SwapWidget {...sharedProps} />
+              <SwapWidget key={swapOutputMint || 'default'} defaultOutputMint={swapOutputMint || undefined} {...sharedProps} />
             </div>
-            <HomeBelow onSwitchTab={switchTab} walletAddress={wallet.walletAddress} />
+            <XStocksStrip onSwitchTab={switchTab} onOpenToken={openToken} onOpenStock={openStockTrade} />
+            <HomeBelow onSwitchTab={switchTab} walletAddress={wallet.walletAddress} onOpenToken={openToken} />
           </>
         )}
         {tab === 'launchradar' && <LaunchRadar onConnectWallet={openWallet} />}
@@ -1417,6 +1545,23 @@ function AppInner() {
         </>
       )}
       <WalletModal open={walletModalOpen} onClose={() => setWalletModalOpen(false)} />
+      {sheetToken && (
+        <TokenSheet
+          token={sheetToken}
+          onClose={() => setSheetToken(null)}
+          onBuy={buyToken}
+          onOpenFull={() => { const tb = sheetToken.tab; setSheetToken(null); switchTab(tb); }}
+        />
+      )}
+      <StockTradeModal
+        open={!!stockTrade}
+        brand={stockTrade ? stockTrade.brand : null}
+        icon={stockTrade ? stockTrade.icon : null}
+        price={stockTrade ? stockTrade.price : 0}
+        onClose={() => setStockTrade(null)}
+        walletPubkey={wallet.walletAddress}
+        onConnectWallet={openWallet}
+      />
     </div>
   );
 }
