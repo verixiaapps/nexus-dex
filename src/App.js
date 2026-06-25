@@ -7,7 +7,7 @@ import Stocks, { BRANDS, fetchBrandPrices, stkFetchSeries, stkBuildPath, stkThro
 import CrossChainSwap      from './components/CrossChainSwap.jsx';
 import SolToBtcChainflip   from './components/SolToBtcChainflip.jsx';
 import MemeWonderland      from './components/MemeWonderland.jsx';
-import LaunchRadar, { normalize } from './components/LaunchRadar.jsx';
+import LaunchRadar from './components/LaunchRadar.jsx';
 import Ape                 from './components/Ape.jsx';
 import Flipsy              from './components/Flipsy.jsx';
 import GetStarted          from './components/GetStarted.jsx';
@@ -324,6 +324,44 @@ function Row({ onClick, last, ico, grad, sym, tag, sub, price, pct, pts }) {
 }
 
 // ── Launch Radar strip — same /api/dex/launches feed ──────────────────
+// Self-contained normalizer for the Launch Radar strip: maps the
+// /api/dex/launches token shape to what Row needs. Inlined so App.js carries no
+// named-export dependency on LaunchRadar.jsx (that coupling broke the build).
+const LR_EMOJI = ['\u{1F680}','\u{1FA99}','\u{1F438}','\u{1F525}','\u{26A1}','\u{1F311}','\u{1F48E}','\u{1F9B4}','\u{1F436}','\u{1F431}','\u{1F34C}','\u{1F451}','\u{1F9EA}','\u{1F3AF}','\u{1F6F8}','\u{1F30A}'];
+function lrEmojiFor(sym) {
+  sym = sym || ''; let h = 0;
+  for (let i = 0; i < sym.length; i++) h = (h * 31 + sym.charCodeAt(i)) | 0;
+  return LR_EMOJI[Math.abs(h) % LR_EMOJI.length];
+}
+function lrAgeStr(iso) {
+  const ms = iso ? Date.now() - new Date(iso).getTime() : Infinity;
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const m = ms / 60000;
+  if (m < 1)  return Math.max(1, Math.round(ms / 1000)) + 's';
+  if (m < 60) return Math.max(1, Math.round(m)) + 'm';
+  const h = m / 60;
+  if (h < 24) return Math.round(h) + 'h';
+  return Math.round(h / 24) + 'd';
+}
+function normalize(t) {
+  const mint = t && t.mint;
+  if (!mint || typeof mint !== 'string' || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) return null;
+  return {
+    mint,
+    sym:       t.sym || '???',
+    name:      t.name || t.sym || 'Unknown',
+    emoji:     lrEmojiFor(t.sym || ''),
+    icon:      t.icon || null,
+    price:     Number(t.price || 0),
+    change:    Number(t.priceChange24h || 0),
+    age:       lrAgeStr(t.pairCreatedAt),
+    mcap:      Number(t.mcap || t.fdv || 0),
+    volume24h: Number(t.volume24h || 0),
+    liquidity: Number(t.liquidity || 0),
+    decimals:  Number(t.decimals == null ? 6 : t.decimals),
+  };
+}
+
 export function LaunchRadarStrip({ onSwitchTab }) {
   const [toks, setToks] = useState([]);
   const [series, setSeries] = useState({});
