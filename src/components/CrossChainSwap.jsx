@@ -131,7 +131,7 @@ body.nexus-scroll-locked{overflow:hidden}
 @keyframes cc-modal-in{from{opacity:0;transform:translate(-50%,-48%)}to{opacity:1;transform:translate(-50%,-50%)}}
 
 .cc-page{
-  position:relative;min-height:100vh;min-height:100dvh;
+  position:relative;min-height:100dvh;min-height:100dvh;
   max-width:520px;margin:0 auto;width:100%;
   padding:0 0 calc(env(safe-area-inset-bottom) + 80px);
   border-radius:0;overflow-x:hidden;
