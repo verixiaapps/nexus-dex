@@ -219,10 +219,17 @@ const MW_CSS = `
 .mw-chart-ca-v{font-family:ui-monospace,Menlo,monospace;font-size:10px;font-weight:600;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mw-chart-ca-copy{flex-shrink:0;font-family:ui-monospace,Menlo,monospace;font-size:9px;font-weight:700;color:#fff;background:#0a0a0a;border:none;border-radius:6px;padding:5px 9px;letter-spacing:.4px;cursor:pointer}
 .mw-chart-src{font-family:ui-monospace,Menlo,monospace;font-size:9px;color:var(--ink-3);font-weight:600;letter-spacing:.4px;flex-shrink:0}
-.mw-chart-frame-wrap{position:relative;width:100%;aspect-ratio:16/11;min-height:240px;background:#fff}
+.mw-chart-frame-wrap{position:relative;width:100%;height:clamp(300px,42dvh,440px);background:#fff}
 .mw-chart-frame{width:100%;height:100%;border:0;display:block}
-.mw-chart-state{display:grid;place-items:center;width:100%;aspect-ratio:16/11;min-height:240px;background:#fafafa;color:var(--ink-2);font-size:12px;font-weight:500;text-align:center;padding:20px}
+.mw-chart-state{display:grid;place-items:center;width:100%;height:clamp(300px,42dvh,440px);background:#fafafa;color:var(--ink-2);font-size:12px;font-weight:500;text-align:center;padding:20px}
 .mw-chart-spin{width:26px;height:26px;border-radius:50%;border:2.5px solid var(--border);border-top-color:#0a0a0a;animation:mwSpin .8s linear infinite}
+.mw-tf-pills{display:flex;align-items:center;gap:4px;padding:8px 12px;border-top:1px solid var(--hairline)}
+.mw-tf{flex:0 0 auto;font-family:inherit;font-size:11px;font-weight:800;letter-spacing:.02em;color:var(--ink-2);background:transparent;border:none;border-radius:8px;padding:6px 11px;cursor:pointer;transition:.12s}
+.mw-tf:hover{color:var(--ink)}
+.mw-tf.on{background:var(--fill);color:var(--ink)}
+.mw-tf:disabled{opacity:.4;cursor:default}
+.mw-tf-meta{margin-left:auto;font-family:ui-monospace,Menlo,monospace;font-size:9px;font-weight:700;letter-spacing:.4px;color:var(--ink-3);text-transform:uppercase}
+@media(max-width:600px){.mw-chart{margin:0 14px 14px}.mw-chart-frame-wrap,.mw-chart-state{height:clamp(300px,48dvh,420px)}.mw-tf{padding:6px 9px;font-size:10px}}
 
 .mw-whale-banner{margin:0 18px 14px;background:#0a0a0a;border:1px solid #0a0a0a;border-radius:14px;padding:12px 14px;display:flex;align-items:center;gap:12px;color:#fff}
 .mw-whale-banner-emoji{font-size:24px}
@@ -1404,18 +1411,49 @@ function pickBestPair(pairs, mint) {
   );
 }
 
+/* ════════════════════════════════════════════════════════════════════
+   EMBEDDED CHART  (matches Ape: GeckoTerminal → DexScreener, base-token
+   pool match, resolution pills, 1s default, bigger frame). Resolution map
+   is centralized in MW_CHART_RES so a provider tweak is one edit.
+   ════════════════════════════════════════════════════════════════════ */
+const MW_CHART_RES = [
+  { key: '1s',  label: '1s', gecko: '1s',  dex: '1S'  },
+  { key: '15s', label: '15s', gecko: '15s', dex: '15S' },
+  { key: '1m',  label: '1m', gecko: '1m',  dex: '1'   },
+  { key: '5m',  label: '5m', gecko: '5m',  dex: '5'   },
+  { key: '1h',  label: '1H', gecko: '1h',  dex: '60'  },
+];
+const MW_RES_DEFAULT = '1s';
+
+function mwBuildEmbedSrc(pool, resKey) {
+  if (!pool) return null;
+  const r = MW_CHART_RES.find(x => x.key === resKey) || MW_CHART_RES[0];
+  if (pool.provider === 'GECKOTERMINAL') {
+    return 'https://www.geckoterminal.com/solana/pools/' + pool.addr +
+      '?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&bg_color=ffffff&resolution=' + r.gecko;
+  }
+  return 'https://dexscreener.com/solana/' + pool.addr +
+    '?embed=1&theme=light&info=0&trades=0&interval=' + r.dex;
+}
+
 function MwTokenChart({ mint, symbol = '' }) {
   const [status, setStatus] = useState('loading'); // loading | ok | none | fail
-  const [embed, setEmbed]   = useState(null);       // { src, provider }
+  const [pool, setPool]     = useState(null);       // { provider, addr }
+  const [res, setRes]       = useState(MW_RES_DEFAULT);
   const [copied, setCopied] = useState(false);
   const reqRef = useRef(0);
 
+  // Reset to the 1s view each time a different token opens.
+  useEffect(() => { setRes(MW_RES_DEFAULT); }, [mint]);
+
   useEffect(() => {
-    if (!mint) { setStatus('none'); return; }
+    if (!mint) { setStatus('none'); setPool(null); return; }
     const id = ++reqRef.current;
-    setStatus('loading'); setEmbed(null);
+    setStatus('loading'); setPool(null);
+
     (async () => {
       let networkOk = false;
+
       // 1) GeckoTerminal — covers pump.fun bonding-curve pools.
       try {
         const r = await fetch(
@@ -1428,17 +1466,11 @@ function MwTokenChart({ mint, symbol = '' }) {
           if (id !== reqRef.current) return;
           const best = pickBestGeckoPool(j?.data, mint);
           const addr = best?.attributes?.address;
-          if (addr) {
-            setEmbed({
-              src: `https://www.geckoterminal.com/solana/pools/${addr}?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&bg_color=ffffff`,
-              provider: 'GECKOTERMINAL',
-            });
-            setStatus('ok');
-            return;
-          }
+          if (addr) { setPool({ provider: 'GECKOTERMINAL', addr }); setStatus('ok'); return; }
         }
       } catch {}
       if (id !== reqRef.current) return;
+
       // 2) DexScreener — fallback for graduated / older pairs.
       try {
         const r = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mint}`,
@@ -1449,21 +1481,19 @@ function MwTokenChart({ mint, symbol = '' }) {
           const j = await r.json();
           if (id !== reqRef.current) return;
           const best = pickBestPair(j?.pairs, mint);
-          if (best?.pairAddress) {
-            setEmbed({
-              src: `https://dexscreener.com/solana/${best.pairAddress}?embed=1&theme=light&info=0&trades=0`,
-              provider: 'DEXSCREENER',
-            });
-            setStatus('ok');
-            return;
-          }
+          if (best?.pairAddress) { setPool({ provider: 'DEXSCREENER', addr: best.pairAddress }); setStatus('ok'); return; }
         }
       } catch {}
       if (id !== reqRef.current) return;
+
+      // Neither provider had a pool. If at least one responded, the token
+      // just isn't indexed yet (typical for a seconds-old bonding curve);
+      // otherwise it's a network failure.
       setStatus(networkOk ? 'none' : 'fail');
     })();
   }, [mint]);
 
+  const src = useMemo(() => mwBuildEmbedSrc(pool, res), [pool, res]);
   const shortCa = mint ? mint.slice(0, 4) + '…' + mint.slice(-4) : '';
   const copyCa = async () => {
     try { await navigator.clipboard.writeText(mint); setCopied(true); setTimeout(() => setCopied(false), 1400); } catch {}
@@ -1477,11 +1507,11 @@ function MwTokenChart({ mint, symbol = '' }) {
           <span className="mw-chart-ca-v">{shortCa}</span>
           <button type="button" className="mw-chart-ca-copy" onClick={copyCa}>{copied ? 'COPIED' : 'COPY'}</button>
         </div>
-        <span className="mw-chart-src">{embed?.provider || 'CHART'}</span>
+        <span className="mw-chart-src">{pool?.provider || 'CHART'}</span>
       </div>
-      {status === 'ok' && embed ? (
+      {status === 'ok' && src ? (
         <div className="mw-chart-frame-wrap">
-          <iframe className="mw-chart-frame" src={embed.src} title={(symbol || 'Token') + ' price chart'}
+          <iframe key={pool.provider + pool.addr + res} className="mw-chart-frame" src={src} title={(symbol || 'Token') + ' price chart'}
             loading="lazy" allow="clipboard-write" />
         </div>
       ) : status === 'loading' ? (
@@ -1491,6 +1521,12 @@ function MwTokenChart({ mint, symbol = '' }) {
       ) : (
         <div className="mw-chart-state">Couldn’t load the chart. Try again shortly.</div>
       )}
+      <div className="mw-tf-pills">
+        {MW_CHART_RES.map(r => (
+          <button key={r.key} className={'mw-tf' + (r.key === res ? ' on' : '')} disabled={status !== 'ok'} onClick={() => setRes(r.key)}>{r.label}</button>
+        ))}
+        <span className="mw-tf-meta">{status === 'ok' ? '● Live · ' + ((MW_CHART_RES.find(x => x.key === res) || {}).label || '') : 'Live'}</span>
+      </div>
     </div>
   );
 }
