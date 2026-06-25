@@ -252,19 +252,6 @@ function pctFromSeries(pts) {
   return ((b - a) / a) * 100;
 }
 
-// Fallback sparkline for rows with no fetched series yet (e.g. seconds-old launches):
-// a clean directional line derived from the token's real % change — direction/magnitude
-// are truthful; it does NOT imply tick-level history.
-function synthSpark(price, pct) {
-  const p = Number(price);
-  if (!Number.isFinite(p) || p <= 0) return null;
-  const c = Number.isFinite(Number(pct)) ? Number(pct) : 0;
-  const start = c <= -100 ? p * 0.5 : p / (1 + c / 100);
-  const n = 7, out = [];
-  for (let i = 0; i < n; i++) { const f = i / (n - 1); out.push({ c: start + (p - start) * f }); }
-  return out;
-}
-
 // draw-only sparkline (data fetched by the strip so we never double-fetch)
 function Spark({ pts, w = 54, h = 24 }) {
   const ok = pts && pts.length >= 2;
@@ -391,7 +378,7 @@ function TokenSheet({ token, onClose, onBuy, onOpenFull }) {
           </div>
         </div>
 
-        <SheetChart pts={pts || synthSpark(token.price, token.pct)} />
+        <SheetChart pts={pts} />
 
         {token.stats && (
           <div style={{ marginTop: 12, fontFamily: MONO, fontSize: 11, color: C.ink3, letterSpacing: '0.02em' }}>{token.stats}</div>
@@ -508,7 +495,7 @@ export function LaunchRadarStrip({ onSwitchTab, onOpenToken }) {
               sub={`MC ${fmtUsd(t.mcap)} · Liq ${fmtUsd(t.liquidity)}`}
               price={fmtUsd(t.price)}
               pct={pct}
-              pts={series[t.mint] || synthSpark(t.price, pct)}
+              pts={series[t.mint]}
             />
           );
         })}
@@ -520,7 +507,7 @@ export function LaunchRadarStrip({ onSwitchTab, onOpenToken }) {
 // ── Live token feeds — ONE /api/dex/launches poll powers Radar + Trending
 // + Gainers + the stats strip (so we don't triple-poll the same endpoint).
 // Radar = freshest (feed order), Trending = highest 24h volume, Gainers =
-// biggest 24h % move. Each row reuses the shared Row + synthSpark fallback.
+// biggest 24h % move. Each row reuses the shared Row (real OHLCV only).
 function LiveTokenFeeds({ onSwitchTab, onOpenToken }) {
   const [toks, setToks] = useState([]);
   const [series, setSeries] = useState({});
@@ -582,7 +569,7 @@ function LiveTokenFeeds({ onSwitchTab, onOpenToken }) {
         sub={sub(t)}
         price={fmtUsd(t.price)}
         pct={pct}
-        pts={series[t.mint] || synthSpark(t.price, pct)}
+        pts={series[t.mint]}
       />
     );
   };
@@ -732,7 +719,7 @@ export function XStocksStrip({ onSwitchTab, onOpenToken, onOpenStock }) {
               sub={b.name}
               price={fmtUsd(price)}
               pct={pct}
-              pts={pts || synthSpark(price, pct)}
+              pts={pts}
             />
           );
         })}
