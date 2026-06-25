@@ -3,7 +3,7 @@ import { BrowserRouter, useNavigate, useLocation } from 'react-router-dom';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from './WalletContext.js';
 import SwapWidget          from './components/SwapWidget.jsx';
-import Stocks, { BRANDS, fetchBrandPrices, fetchBrandIcons, stkFetchSeries, stkBuildPath, stkThrottle, TradeModal as StockTradeModal } from './components/Stocks.jsx';
+import Stocks, { BRANDS, fetchBrandPrices, stkFetchSeries, stkBuildPath, stkThrottle, TradeModal as StockTradeModal } from './components/Stocks.jsx';
 import CrossChainSwap      from './components/CrossChainSwap.jsx';
 import SolToBtcChainflip   from './components/SolToBtcChainflip.jsx';
 import MemeWonderland      from './components/MemeWonderland.jsx';
@@ -512,6 +512,32 @@ export function LaunchRadarStrip({ onSwitchTab, onOpenToken }) {
 }
 
 // ── xStocks strip — same BRANDS catalog + Jupiter price/v3 ─────────────
+// Self-contained xStock icon fetcher — inlined so App.js never depends on a
+// Stocks.jsx named export (keeps the build green even if the two files drift).
+async function appFetchBrandIcons(mints) {
+  if (!mints || !mints.length) return {};
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    const r = await fetch(
+      `/api/jupiter/tokens/search?query=${encodeURIComponent(mints.join(','))}`,
+      { headers: { Accept: 'application/json' }, signal: ctrl.signal },
+    );
+    clearTimeout(timer);
+    if (!r.ok) return {};
+    const data = await r.json();
+    const arr = Array.isArray(data) ? data : (data?.tokens || []);
+    const out = {};
+    for (const tk of arr) {
+      const id = tk?.id || tk?.address;
+      if (!id) continue;
+      const url = tk.icon || tk.logoURI || null;
+      if (url) out[id] = url;
+    }
+    return out;
+  } catch { return {}; }
+}
+
 export function XStocksStrip({ onSwitchTab, onOpenToken, onOpenStock }) {
   const picks = BRANDS.slice(0, 6);
   const [prices, setPrices] = useState({});
@@ -520,7 +546,7 @@ export function XStocksStrip({ onSwitchTab, onOpenToken, onOpenStock }) {
   useEffect(() => {
     let cancelled = false;
     fetchBrandPrices(picks.map(b => b.mint)).then(p => { if (!cancelled) setPrices(p || {}); }).catch(() => {});
-    fetchBrandIcons(picks.map(b => b.mint)).then(ic => { if (!cancelled) setIcons(ic || {}); }).catch(() => {});
+    appFetchBrandIcons(picks.map(b => b.mint)).then(ic => { if (!cancelled) setIcons(ic || {}); }).catch(() => {});
     picks.forEach(b => {
       stkThrottle(() => stkFetchSeries(b.mint, '1W'))
         .then(s => { if (!cancelled && s && s.length >= 2) setSeries(prev => ({ ...prev, [b.mint]: s })); })
