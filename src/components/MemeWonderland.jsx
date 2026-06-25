@@ -2,6 +2,7 @@
 // Sections: Hero · Top Signal · Narratives · Whale Radar · Breaking Out · New Launches · Trending · Live Feed.
    
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { stkFetchSeries, stkBuildPath, stkThrottle } from './Stocks.jsx';
 import { Buffer } from 'buffer';
 import {
   Connection,
@@ -783,37 +784,46 @@ function BreakingOut({ tokens, whaleByMint, excludeMint, onOpen, onTrade }) {
   );
 }
 
-// Always-on directional sparkline — drawn from a token's price + 24h change.
-// A trend line (not tick data), self-contained so it never needs a fetch or a
-// cross-file import. Guarantees every token row shows a chart.
-function mwSparkVals(price, change) {
-  const p = Number(price);
-  if (!Number.isFinite(p) || p <= 0) return null;
-  const c = Number.isFinite(Number(change)) ? Number(change) : 0;
-  const start = c <= -100 ? p * 0.5 : p / (1 + c / 100);
-  const n = 7, o = [];
-  for (let i = 0; i < n; i++) o.push(start + (p - start) * (i / (n - 1)));
-  return o;
+// Row sparkline — REAL DATA ONLY, no synthetic fallback. Two real sources:
+//   1) GeckoTerminal/DexScreener OHLCV via stkFetchSeries (contract-matched,
+//      highest-liquidity pool, cached + throttled) — immediate real history.
+//   2) Live observed price the feed already polls, accumulated per mint.
+// Whichever is available draws; if neither has ≥2 points yet, nothing renders
+// (no straight-line / wiggle fakery). Every priced token charts as soon as its
+// real data exists.
+const _sparkHist = new Map(); // mint -> number[] (observed prices)
+function recordSpark(mint, price) {
+  if (!mint || !(price > 0)) return _sparkHist.get(mint) || [];
+  let pts = _sparkHist.get(mint);
+  if (!pts) { pts = []; _sparkHist.set(mint, pts); }
+  if (pts[pts.length - 1] !== price) { pts.push(price); if (pts.length > 32) pts.shift(); }
+  return pts;
 }
-function mwSparkPath(vals, w, h, pad) {
-  const xs = vals.length - 1, mn = Math.min(...vals), mx = Math.max(...vals), rg = (mx - mn) || 1;
-  const X = i => (i / xs) * w, Y = v => h - pad - ((v - mn) / rg) * (h - 2 * pad);
-  let d = 'M' + X(0).toFixed(1) + ' ' + Y(vals[0]).toFixed(1);
-  for (let i = 1; i < vals.length; i++) d += ' L' + X(i).toFixed(1) + ' ' + Y(vals[i]).toFixed(1);
-  return { line: d, area: d + ' L' + w + ' ' + h + ' L0 ' + h + ' Z' };
-}
-function MwSparkline({ price, change, w = 50, h = 22, full = false }) {
-  const vals = mwSparkVals(price, change);
-  if (!vals) return null;
-  const up = (Number(change) || 0) >= 0;
+function MwSparkline({ mint, price, change, w = 50, h = 22, full = false }) {
+  const [series, setSeries] = useState(null);
+  useEffect(() => {
+    if (!mint) return;
+    let cancelled = false;
+    stkThrottle(() => stkFetchSeries(mint, '1D'))
+      .then(s => { if (!cancelled && Array.isArray(s) && s.length >= 2) setSeries(s); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [mint]);
+
+  const hist = recordSpark(mint, Number(price));
+  const obs = hist.length >= 2 ? hist.map(c => ({ c })) : null;
+  const pts = (series && series.length >= 2) ? series : obs;
+  if (!pts) return null;                       // real data only — nothing until it exists
+
+  const path = stkBuildPath(pts, w, h, 2);
+  const up = pts[pts.length - 1].c >= pts[0].c;
   const col = up ? 'var(--green)' : 'var(--down)';
-  const pa = mwSparkPath(vals, w, h, 2);
-  const id = 'mws' + Math.random().toString(36).slice(2, 7);
+  const id = 'mws' + (up ? 'u' : 'd') + (mint ? String(mint).slice(0, 8) : '');
   return (
     <svg width={full ? '100%' : w} height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ flex: '0 0 auto', display: 'block' }}>
-      <defs><linearGradient id={id} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={col} stopOpacity="0.18" /><stop offset="1" stopColor={col} stopOpacity="0" /></linearGradient></defs>
-      <path d={pa.area} fill={`url(#${id})`} />
-      <path d={pa.line} fill="none" stroke={col} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <defs><linearGradient id={id} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={col} stopOpacity={up ? '0.28' : '0.22'} /><stop offset="1" stopColor={col} stopOpacity="0" /></linearGradient></defs>
+      <path d={path.area} fill={`url(#${id})`} />
+      <path d={path.line} fill="none" stroke={col} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -842,7 +852,7 @@ function NewLaunches({ tokens, onOpen, onTrade }) {
                   <div className="mw-launch-age">⏱ {t.age} OLD</div>
                 </div>
               </div>
-              <div style={{ margin: '8px 0 2px' }}><MwSparkline price={t.price} change={t.change} w={150} h={30} full /></div>
+              <div style={{ margin: '8px 0 2px' }}><MwSparkline mint={t.mint} price={t.price} change={t.change} w={150} h={30} full /></div>
               <div className="mw-launch-row"><span className="mw-launch-l">Holders</span><span className="mw-launch-v">{t.holders ? format(t.holders) : '—'}</span></div>
               <div className="mw-launch-row"><span className="mw-launch-l">Liquidity</span><span className="mw-launch-v">${format(t.liquidity)}</span></div>
               <div className="mw-launch-row"><span className="mw-launch-l">Signal</span><span className="mw-launch-v" style={{ color: 'var(--green)' }}>{signalScore(t)}</span></div>
@@ -880,7 +890,7 @@ function TrendingNow({ tokens, onOpen }) {
               <div className="mw-trend-sym">${t.sym}</div>
               <div className="mw-trend-sub">{tab === 'traded' ? `Vol $${format(t.volume24h)}` : tab === 'viewed' ? `Signal ${signalScore(t)}` : formatPrice(t.price)}</div>
             </div>
-            <MwSparkline price={t.price} change={t.change} w={50} h={22} />
+            <MwSparkline mint={t.mint} price={t.price} change={t.change} w={50} h={22} />
             <div className="mw-trend-right">
               <div className={'mw-trend-pct' + ((t.change || 0) < 0 ? ' mw-down' : '')}>{formatPct(t.change || 0)}</div>
               <div className="mw-trend-meta">${format(t.mcap)} mcap</div>
