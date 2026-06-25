@@ -149,6 +149,7 @@ bonk swap
 bonk token swap
 borderless crypto exchange
 borderless finance
+bridge ada to arbitrum
 bridge ada to optimism
 bridge ada to polygon
 bridge any token to any chain
