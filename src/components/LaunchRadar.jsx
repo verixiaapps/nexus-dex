@@ -21,7 +21,7 @@
 //          no unwrap step.
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { stkFetchSeries, stkBuildPath, stkThrottle } from './Stocks.jsx';
+import { stkFetchSeries, stkBuildPath, stkSmoothPath, stkThrottle } from './Stocks.jsx';
 import { Buffer } from 'buffer';
 import {
   Connection,
@@ -1345,15 +1345,16 @@ function LrSparkline({ mint, price, w = 280, h = 40, full = true }) {
   const obs = hist.length >= 2 ? hist.map(c => ({ c })) : null;
   const pts = (series && series.length >= 2) ? series : obs;
   if (!pts) return null;
-  const path = stkBuildPath(pts, w, h, 2);
-  const up = pts[pts.length - 1].c >= pts[0].c;
+  const path = stkSmoothPath(pts, w, h, 2);
+  const up = path.up;
   const col = up ? 'var(--green)' : 'var(--red)';
   const id = 'lrs' + (up ? 'u' : 'd') + (mint ? String(mint).slice(0, 8) : '');
   return (
-    <svg width={full ? '100%' : w} height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: 'block', marginTop: 10 }}>
+    <svg width={full ? '100%' : w} height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: 'block', marginTop: 10, overflow: 'visible' }}>
       <defs><linearGradient id={id} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={col} stopOpacity={up ? '0.28' : '0.22'} /><stop offset="1" stopColor={col} stopOpacity="0" /></linearGradient></defs>
       <path d={path.area} fill={`url(#${id})`} />
-      <path d={path.line} fill="none" stroke={col} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <path d={path.line} fill="none" stroke={col} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx={path.lastX.toFixed(2)} cy={path.lastY.toFixed(2)} r="2.1" fill={col} />
     </svg>
   );
 }
