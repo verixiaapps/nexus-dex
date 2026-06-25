@@ -1016,6 +1016,7 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
     var FEE_BPS         = 300;
     var SOL_MINT        = 'So11111111111111111111111111111111111111112';
     var USDC_MINT       = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+    var GT_API          = 'https://api.geckoterminal.com/api/v2';
     var BLUE_CHIPS      = ['DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263','JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN','EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm']; // BONK, JUP, WIF (pinned fallbacks)
     var SLIPPAGE_BPS    = 500;
     var PRIORITY_FEE_MICROLAMPORTS = 50000;
@@ -1162,28 +1163,29 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
     function detectSubjectRaw() {
       var h1 = document.querySelector('h1');
       var h1Text = h1 ? h1.textContent : '';
-      // Bridge pages aren't about a specific Solana token — skip detection so no chart card renders
-      if (/bridge/i.test(h1Text)) return null;
-      var meta = window.__pageMeta || {};
-      if (meta.subject && typeof meta.subject === 'string' && meta.subject.trim().length >= 2) {
-        return meta.subject.trim();
-      }
       var kwMeta = document.querySelector('meta[name="keywords"]');
       var kw = kwMeta ? kwMeta.content : '';
-      var combined = h1Text + ' ' + kw;
-      var mintMatch = combined.match(/\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/);
+      var combinedRaw = h1Text + ' ' + kw;
+      // Explicit mint is case-sensitive base58 — match on the ORIGINAL text, never lowercased.
+      var mintMatch = combinedRaw.match(/\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/);
       if (mintMatch) return mintMatch[0];
-      var xMatch = combined.match(/\b[A-Z]{2,6}x\b/);
-      if (xMatch) return xMatch[0];
-      var noise = { USA:1,USD:1,DEX:1,CEX:1,API:1,SEO:1,FAQ:1,ETF:1,NFT:1,DAO:1,KYC:1,SPL:1,RPC:1,SDK:1,NEW:1,TOP:1,BEST:1,ALL:1 };
-      var allMatches = combined.match(/\b[A-Z]{3,6}\b/g) || [];
-      var filtered = [];
-      for (var ii = 0; ii < allMatches.length; ii++) {
-        if (!noise[allMatches[ii]]) filtered.push(allMatches[ii]);
+      // Everything else is CASE-INSENSITIVE: lowercase, drop action/stop words, keep the
+      // token term(s). "Buy BONK", "buy bonk" and "Buy Bonk" all resolve the same.
+      var STOP = { buy:1,sell:1,swap:1,swaps:1,trade:1,trades:1,trading:1,bridge:1,move:1,convert:1,
+        exchange:1,get:1,send:1,receive:1,to:1,from:1,into:1,for:1,with:1,on:1,in:1,at:1,of:1,
+        the:1,a:1,an:1,and:1,or:1,vs:1,price:1,prices:1,chart:1,charts:1,live:1,best:1,cheap:1,
+        cheapest:1,instant:1,instantly:1,fast:1,now:1,today:1,how:1,where:1,what:1,is:1,are:1,
+        solana:1,sol:1,token:1,tokens:1,coin:1,coins:1,crypto:1,dex:1,defi:1,no:1,kyc:1,account:1,
+        limits:1,wallet:1,non:1,custodial:1,your:1,my:1,app:1 };
+      var words = combinedRaw.toLowerCase().replace(/[^a-z0-9$\s]/g, ' ').split(/\s+/);
+      var cand = [];
+      for (var i = 0; i < words.length; i++) {
+        var w = words[i].replace(/^\$+/, '');   // allow $TICKER style
+        if (w.length >= 2 && !STOP[w]) cand.push(w);
       }
-      if (filtered.length >= 2) return filtered[1];
-      if (filtered.length === 1) return filtered[0];
-      return null;
+      if (!cand.length) return null;
+      // Pass the surviving term(s) to DexScreener/GeckoTerminal search.
+      return cand.join(' ');
     }
 
     // --- Always-show-a-chart: pick a good, liquid Solana token when the page
@@ -1228,54 +1230,110 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
     }
     async function useRandomChartToken(){
       if(_hasExplicitOutput) return;                          // respect an explicit per-page output token
-      var h1=document.querySelector('h1');
-      if(h1&&/bridge/i.test(h1.textContent||'')) return;      // bridge pages stay token-less by design
       try{
         var mint=await pickRandomSolanaToken();
         if(mint&&mint!==SOL_MINT&&mint!==USDC_MINT){ _chartIsRandom=true; applyOutputMint(mint); }  // SOL (pay) -> token (receive) + chart
       }catch(e){ console.warn('[verixia] random chart token failed', e); }
     }
 
+    // Resolve a keyword term to a real Solana mint by going DIRECTLY to DexScreener
+    // (then GeckoTerminal) and taking the HIGHEST-LIQUIDITY Solana pair. The winning
+    // contract is used for BOTH the chart and the swap receive token, so the contract
+    // always matches the token named in the keyword.
+    async function dexDecimalsFor(mint) {
+      var t = tokenBy(mint);
+      if (t && t.decimals != null) return t.decimals;
+      try {
+        var r = await fetch(GT_API + '/networks/solana/tokens/' + encodeURIComponent(mint));
+        var d = await r.json();
+        var dec = d && d.data && d.data.attributes && d.data.attributes.decimals;
+        if (dec != null) return Number(dec);
+      } catch (e) {}
+      return null;
+    }
+    async function geckoTokenMeta(mint) {
+      try {
+        var r = await fetch(GT_API + '/networks/solana/tokens/' + encodeURIComponent(mint));
+        var d = await r.json();
+        var at = (d && d.data && d.data.attributes) || {};
+        return { symbol: at.symbol || '', name: at.name || '', logoURI: at.image_url || null,
+                 decimals: at.decimals != null ? Number(at.decimals) : null };
+      } catch (e) { return null; }
+    }
+    async function bestSolanaPairDexscreener(q) {
+      try {
+        var r = await fetch('https://api.dexscreener.com/latest/dex/search?q=' + encodeURIComponent(q));
+        var d = await r.json();
+        var pairs = (d && d.pairs) || [];
+        pairs = pairs.filter(function (p) {
+          return p && p.chainId === 'solana' && p.baseToken && p.baseToken.address
+              && p.baseToken.address !== SOL_MINT && p.baseToken.address !== USDC_MINT;
+        });
+        if (!pairs.length) return null;
+        pairs.sort(function (a, b) { return ((b.liquidity && b.liquidity.usd) || 0) - ((a.liquidity && a.liquidity.usd) || 0); });
+        var p = pairs[0];
+        return { address: p.baseToken.address, symbol: p.baseToken.symbol || '',
+                 name: p.baseToken.name || p.baseToken.symbol || '',
+                 logoURI: (p.info && p.info.imageUrl) || null };
+      } catch (e) { return null; }
+    }
+    async function bestSolanaPairGecko(q) {
+      try {
+        var r = await fetch(GT_API + '/search/pools?query=' + encodeURIComponent(q) + '&network=solana&page=1');
+        var d = await r.json();
+        var pools = (d && d.data) || [];
+        var best = null, bestLiq = -1;
+        for (var i = 0; i < pools.length; i++) {
+          var a = pools[i].attributes || {};
+          var rel = pools[i].relationships || {};
+          var bt = rel.base_token && rel.base_token.data && rel.base_token.data.id; // "solana_<mint>"
+          var liq = Number(a.reserve_in_usd || 0);
+          if (bt && liq > bestLiq) { bestLiq = liq; best = bt; }
+        }
+        if (!best) return null;
+        var mint = String(best).replace(/^solana_/, '');
+        if (!mint || mint === SOL_MINT || mint === USDC_MINT) return null;
+        return { address: mint, symbol: '', name: '', logoURI: null };
+      } catch (e) { return null; }
+    }
+    async function resolveTermToMint(term) {
+      if (!term) return null;
+      var hit = await bestSolanaPairDexscreener(term);
+      if (!hit) {
+        var parts = term.split(/\s+/);
+        if (parts.length > 1) hit = await bestSolanaPairDexscreener(parts[parts.length - 1]);
+      }
+      if (!hit) hit = await bestSolanaPairGecko(term);
+      if (!hit) return null;
+      var dec = await dexDecimalsFor(hit.address);
+      if (dec == null) return null;                       // no decimals -> can't swap safely -> skip
+      if (!hit.symbol) {
+        var meta = await geckoTokenMeta(hit.address);
+        if (meta) { hit.symbol = meta.symbol || 'TOKEN'; hit.name = hit.name || meta.name || hit.symbol; hit.logoURI = hit.logoURI || meta.logoURI; }
+        else hit.symbol = 'TOKEN';
+      }
+      return { address: hit.address, symbol: hit.symbol, name: hit.name || hit.symbol, decimals: dec, logoURI: hit.logoURI || null };
+    }
+
     async function resolveSubjectFromTokens() {
-      if (!_subjectRaw) { await useRandomChartToken(); return; }
+      if (_hasExplicitOutput) return;                     // explicit per-page output token wins
       var raw = _subjectRaw;
-      // Mint address? Use directly.
-      if (MINT_RE.test(raw)) { applyOutputMint(raw); return; }
-      // Exact symbol match in loaded list?
-      var rawU = raw.toUpperCase();
-      for (var i = 0; i < S.tokens.length; i++) {
-        if (S.tokens[i].symbol && S.tokens[i].symbol.toUpperCase() === rawU) {
-          applyOutputMint(S.tokens[i].address);
-          return;
+      if (!raw) { await useRandomChartToken(); return; }
+      // Explicit mint in the keyword -> use that contract directly.
+      if (MINT_RE.test(raw)) {
+        var dec0 = await dexDecimalsFor(raw);
+        if (dec0 != null) {
+          var ex = tokenBy(raw), m = ex || (await geckoTokenMeta(raw)) || {};
+          upsertToken({ address: raw, symbol: (ex && ex.symbol) || m.symbol || 'TOKEN',
+                        name: (ex && ex.name) || m.name || (ex && ex.symbol) || 'Token',
+                        decimals: dec0, logoURI: (ex && ex.logoURI) || m.logoURI || null });
+          applyOutputMint(raw); return;
         }
       }
-      // Probe Jupiter search.
-      try {
-        var r = await fetch(ORIGIN + '/api/jupiter/tokens/search?query=' + encodeURIComponent(raw));
-        var data = await r.json();
-        var list = Array.isArray(data) ? data : (data && data.tokens || []);
-        var hit = null;
-        for (var j = 0; j < list.length; j++) {
-          var t = list[j];
-          if (t && t.symbol && String(t.symbol).toUpperCase() === rawU) { hit = t; break; }
-        }
-        if (!hit && list[0]) hit = list[0];
-        if (hit) {
-          var norm = {
-            address:  hit.id || hit.address || hit.mint,
-            symbol:   hit.symbol,
-            name:     hit.name,
-            decimals: hit.decimals,
-            logoURI:  hit.icon || hit.logoURI || null
-          };
-          if (norm.address && norm.symbol && norm.decimals != null) {
-            upsertToken(norm);
-            applyOutputMint(norm.address);
-            return;
-          }
-        }
-      } catch (e) { console.warn('[verixia] subject search failed', e); }
-      // subject named but nothing matched -> still show a chart
+      // Keyword names a token -> DexScreener/GeckoTerminal highest-liquidity Solana pair.
+      var resolved = await resolveTermToMint(raw);
+      if (resolved) { upsertToken(resolved); applyOutputMint(resolved.address); return; }
+      // Nothing matched -> still show a chart.
       await useRandomChartToken();
     }
 
@@ -2262,9 +2320,10 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       if (!name && tok) name = tok.name;
       if (!icon && tok) icon = tok.logoURI;
 
-      // Retry once with a different token if a RANDOM pick returned no market data
-      // (never swaps away from a page's actual subject token).
-      if (price == null && _chartIsRandom && _chartTries < 2) {
+      // No market data for this token (e.g. a non-Solana subject like "Arbitrum"
+      // on a bridge/cross-chain page, or a dead pool)? Fall back to a random good
+      // Solana token so a chart ALWAYS renders. Capped so it can never loop.
+      if (price == null && _chartTries < 2) {
         _chartTries++;
         try {
           var altMint = await pickRandomSolanaToken(mint);
