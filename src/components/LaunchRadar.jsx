@@ -222,10 +222,17 @@ const LR_CSS = `
 .lr-chart-ca-v{font-family:ui-monospace,Menlo,monospace;font-size:10px;font-weight:600;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lr-chart-ca-copy{flex-shrink:0;font-family:ui-monospace,Menlo,monospace;font-size:9px;font-weight:700;color:#fff;background:#0a0a0a;border:none;border-radius:6px;padding:5px 9px;letter-spacing:.4px;cursor:pointer}
 .lr-chart-src{font-family:ui-monospace,Menlo,monospace;font-size:9px;color:var(--ink-3);font-weight:600;letter-spacing:.4px;flex-shrink:0}
-.lr-chart-frame-wrap{position:relative;width:100%;aspect-ratio:16/11;min-height:240px;background:#fff}
+.lr-chart-frame-wrap{position:relative;width:100%;height:clamp(300px,42dvh,440px);background:#fff}
 .lr-chart-frame{width:100%;height:100%;border:0;display:block}
-.lr-chart-state{display:grid;place-items:center;width:100%;aspect-ratio:16/11;min-height:240px;background:#fafafa;color:var(--ink-2);font-size:12px;font-weight:500;text-align:center;padding:20px}
+.lr-chart-state{display:grid;place-items:center;width:100%;height:clamp(300px,42dvh,440px);background:#fafafa;color:var(--ink-2);font-size:12px;font-weight:500;text-align:center;padding:20px}
 .lr-chart-spin{width:26px;height:26px;border-radius:50%;border:2.5px solid var(--border);border-top-color:#0a0a0a;animation:lrSpin .8s linear infinite}
+.lr-tf-pills{display:flex;align-items:center;gap:4px;padding:8px 12px;border-top:1px solid var(--hairline)}
+.lr-tf{flex:0 0 auto;font-family:inherit;font-size:11px;font-weight:800;letter-spacing:.02em;color:var(--ink-2);background:transparent;border:none;border-radius:8px;padding:6px 11px;cursor:pointer;transition:.12s}
+.lr-tf:hover{color:var(--ink)}
+.lr-tf.on{background:#f1f1f4;color:var(--ink)}
+.lr-tf:disabled{opacity:.4;cursor:default}
+.lr-tf-meta{margin-left:auto;font-family:ui-monospace,Menlo,monospace;font-size:9px;font-weight:700;letter-spacing:.4px;color:var(--ink-3);text-transform:uppercase}
+@media(max-width:600px){.lr-chart{margin:0 14px 14px}.lr-chart-frame-wrap,.lr-chart-state{height:clamp(300px,48dvh,420px)}.lr-tf{padding:6px 9px;font-size:10px}}
 
 .lr-trade-overlay{position:fixed;inset:0;background:rgba(10,10,10,.4);backdrop-filter:blur(4px);z-index:1000;display:flex;align-items:flex-end;justify-content:center;padding:0 0 calc(120px + env(safe-area-inset-bottom)) 0;animation:lrFade .2s}
 @media(min-width:640px){.lr-trade-overlay{align-items:center;padding:16px}}
@@ -750,16 +757,45 @@ function pickBestPair(pairs, mint) {
   );
 }
 
+/* ════════════════════════════════════════════════════════════════════
+   EMBEDDED CHART  (matches Ape: GeckoTerminal → DexScreener, base-token
+   pool match, resolution pills, 1s default, bigger frame). Resolution map
+   is centralized in LR_CHART_RES so a provider tweak is one edit.
+   ════════════════════════════════════════════════════════════════════ */
+const LR_CHART_RES = [
+  { key: '1s',  label: '1s', gecko: '1s',  dex: '1S'  },
+  { key: '15s', label: '15s', gecko: '15s', dex: '15S' },
+  { key: '1m',  label: '1m', gecko: '1m',  dex: '1'   },
+  { key: '5m',  label: '5m', gecko: '5m',  dex: '5'   },
+  { key: '1h',  label: '1H', gecko: '1h',  dex: '60'  },
+];
+const LR_RES_DEFAULT = '1s';
+
+function lrBuildEmbedSrc(pool, resKey) {
+  if (!pool) return null;
+  const r = LR_CHART_RES.find(x => x.key === resKey) || LR_CHART_RES[0];
+  if (pool.provider === 'GECKOTERMINAL') {
+    return 'https://www.geckoterminal.com/solana/pools/' + pool.addr +
+      '?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&bg_color=ffffff&resolution=' + r.gecko;
+  }
+  return 'https://dexscreener.com/solana/' + pool.addr +
+    '?embed=1&theme=light&info=0&trades=0&interval=' + r.dex;
+}
+
 function LrTokenChart({ mint, symbol = '' }) {
   const [status, setStatus] = useState('loading'); // loading | ok | none | fail
-  const [embed, setEmbed]   = useState(null);       // { src, provider }
+  const [pool, setPool]     = useState(null);       // { provider, addr }
+  const [res, setRes]       = useState(LR_RES_DEFAULT);
   const [copied, setCopied] = useState(false);
   const reqRef = useRef(0);
 
+  // Reset to the 1s view each time a different token opens.
+  useEffect(() => { setRes(LR_RES_DEFAULT); }, [mint]);
+
   useEffect(() => {
-    if (!mint) { setStatus('none'); return; }
+    if (!mint) { setStatus('none'); setPool(null); return; }
     const id = ++reqRef.current;
-    setStatus('loading'); setEmbed(null);
+    setStatus('loading'); setPool(null);
 
     (async () => {
       let networkOk = false;
@@ -776,14 +812,7 @@ function LrTokenChart({ mint, symbol = '' }) {
           if (id !== reqRef.current) return;
           const best = pickBestGeckoPool(j?.data, mint);
           const addr = best?.attributes?.address;
-          if (addr) {
-            setEmbed({
-              src: `https://www.geckoterminal.com/solana/pools/${addr}?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&bg_color=ffffff`,
-              provider: 'GECKOTERMINAL',
-            });
-            setStatus('ok');
-            return;
-          }
+          if (addr) { setPool({ provider: 'GECKOTERMINAL', addr }); setStatus('ok'); return; }
         }
       } catch {}
       if (id !== reqRef.current) return;
@@ -798,14 +827,7 @@ function LrTokenChart({ mint, symbol = '' }) {
           const j = await r.json();
           if (id !== reqRef.current) return;
           const best = pickBestPair(j?.pairs, mint);
-          if (best?.pairAddress) {
-            setEmbed({
-              src: `https://dexscreener.com/solana/${best.pairAddress}?embed=1&theme=light&info=0&trades=0`,
-              provider: 'DEXSCREENER',
-            });
-            setStatus('ok');
-            return;
-          }
+          if (best?.pairAddress) { setPool({ provider: 'DEXSCREENER', addr: best.pairAddress }); setStatus('ok'); return; }
         }
       } catch {}
       if (id !== reqRef.current) return;
@@ -817,6 +839,7 @@ function LrTokenChart({ mint, symbol = '' }) {
     })();
   }, [mint]);
 
+  const src = useMemo(() => lrBuildEmbedSrc(pool, res), [pool, res]);
   const shortCa = mint ? mint.slice(0, 4) + '…' + mint.slice(-4) : '';
   const copyCa = async () => {
     try { await navigator.clipboard.writeText(mint); setCopied(true); setTimeout(() => setCopied(false), 1400); } catch {}
@@ -830,11 +853,11 @@ function LrTokenChart({ mint, symbol = '' }) {
           <span className="lr-chart-ca-v">{shortCa}</span>
           <button type="button" className="lr-chart-ca-copy" onClick={copyCa}>{copied ? 'COPIED' : 'COPY'}</button>
         </div>
-        <span className="lr-chart-src">{embed?.provider || 'CHART'}</span>
+        <span className="lr-chart-src">{pool?.provider || 'CHART'}</span>
       </div>
-      {status === 'ok' && embed ? (
+      {status === 'ok' && src ? (
         <div className="lr-chart-frame-wrap">
-          <iframe className="lr-chart-frame" src={embed.src} title={(symbol || 'Token') + ' price chart'}
+          <iframe key={pool.provider + pool.addr + res} className="lr-chart-frame" src={src} title={(symbol || 'Token') + ' price chart'}
             loading="lazy" allow="clipboard-write" />
         </div>
       ) : status === 'loading' ? (
@@ -844,6 +867,12 @@ function LrTokenChart({ mint, symbol = '' }) {
       ) : (
         <div className="lr-chart-state">Couldn’t load the chart. Try again shortly.</div>
       )}
+      <div className="lr-tf-pills">
+        {LR_CHART_RES.map(r => (
+          <button key={r.key} className={'lr-tf' + (r.key === res ? ' on' : '')} disabled={status !== 'ok'} onClick={() => setRes(r.key)}>{r.label}</button>
+        ))}
+        <span className="lr-tf-meta">{status === 'ok' ? '● Live · ' + ((LR_CHART_RES.find(x => x.key === res) || {}).label || '') : 'Live'}</span>
+      </div>
     </div>
   );
 }
