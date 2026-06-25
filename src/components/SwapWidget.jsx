@@ -414,10 +414,17 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
   };
 
   const setMax = () => {
-    if (!inputBalance) return;
+    if (!inputBalance || !inputBalance.uiAmount || inputBalance.uiAmount <= 0) { setAmount('0'); return; }
     let maxAmt = inputBalance.uiAmount;
-    if (inputMint === SOL_MINT) maxAmt = Math.max(0, maxAmt - 0.01);
-    setAmount(String(maxAmt));
+    if (inputMint === SOL_MINT) maxAmt = Math.max(0, maxAmt - 0.01); // leave ~0.01 SOL for fees
+    // Floor to the token's decimals so MAX can never exceed the real balance,
+    // and emit a plain decimal string — no float artifacts, no scientific notation.
+    const dp = Math.min(Number.isFinite(inputBalance.decimals) ? inputBalance.decimals : 9, 9);
+    const factor = Math.pow(10, dp);
+    maxAmt = Math.floor(maxAmt * factor) / factor;
+    let s = maxAmt.toFixed(dp);
+    if (s.indexOf('.') !== -1) s = s.replace(/0+$/, '').replace(/\.$/, '');
+    setAmount(s);
   };
 
   /* SWAP — UNCHANGED */
