@@ -270,12 +270,12 @@ function Spark({ pts, w = 54, h = 24 }) {
   const ok = pts && pts.length >= 2;
   const path = ok ? stkBuildPath(pts, w, h, 2) : null;
   const up = ok ? pts[pts.length - 1].c >= pts[0].c : true;
-  const col = up ? C.green : C.down;
+  const col = up ? C.green : C.lav;
   return (
     <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: 'block', flex: '0 0 auto' }}>
       {path && (
         <>
-          <path d={path.area} fill={up ? 'rgba(22,192,138,.12)' : 'rgba(251,113,133,.14)'} />
+          <path d={path.area} fill={up ? 'rgba(22,192,138,.12)' : 'rgba(124,92,255,.13)'} />
           <path d={path.line} fill="none" stroke={col} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
         </>
       )}
@@ -333,7 +333,7 @@ function Row({ onClick, last, ico, grad, sym, tag, sub, price, pct, pts }) {
       <Spark pts={pts} />
       <div style={{ textAlign: 'right', flex: '0 0 auto', minWidth: 74 }}>
         <div style={{ fontFamily: MONO, fontSize: 13, fontWeight: 700, color: C.ink }}>{price}</div>
-        <div style={{ fontFamily: MONO, fontSize: 11, fontWeight: 700, marginTop: 1, color: up ? C.green : C.down }}>{fmtPct(pct)}</div>
+        <div style={{ fontFamily: MONO, fontSize: 11, fontWeight: 700, marginTop: 1, color: up ? C.green : C.lav }}>{fmtPct(pct)}</div>
       </div>
     </button>
   );
@@ -345,12 +345,12 @@ function SheetChart({ pts }) {
   const W = 320, H = 120;
   const path = ok ? stkBuildPath(pts, W, H, 4) : null;
   const up = ok ? pts[pts.length - 1].c >= pts[0].c : true;
-  const col = up ? C.green : C.down;
+  const col = up ? C.green : C.lav;
   return (
     <div style={{ width: '100%', height: H, marginTop: 14, borderRadius: 14, overflow: 'hidden', background: ok ? 'transparent' : '#f4f4f5', display: ok ? 'block' : 'grid', placeItems: 'center' }}>
       {path ? (
         <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none" style={{ display: 'block' }}>
-          <path d={path.area} fill={up ? 'rgba(22,192,138,.12)' : 'rgba(251,113,133,.14)'} />
+          <path d={path.area} fill={up ? 'rgba(22,192,138,.12)' : 'rgba(124,92,255,.13)'} />
           <path d={path.line} fill="none" stroke={col} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       ) : (
@@ -387,11 +387,11 @@ function TokenSheet({ token, onClose, onBuy, onOpenFull }) {
           </div>
           <div style={{ textAlign: 'right', flex: '0 0 auto' }}>
             <div style={{ fontFamily: MONO, fontSize: 17, fontWeight: 700, color: C.ink }}>{fmtUsd(token.price)}</div>
-            <div style={{ fontFamily: MONO, fontSize: 12, fontWeight: 700, marginTop: 1, color: up ? C.green : C.down }}>{fmtPct(token.pct)}</div>
+            <div style={{ fontFamily: MONO, fontSize: 12, fontWeight: 700, marginTop: 1, color: up ? C.green : C.lav }}>{fmtPct(token.pct)}</div>
           </div>
         </div>
 
-        <SheetChart pts={pts} />
+        <SheetChart pts={pts || synthSpark(token.price, token.pct)} />
 
         {token.stats && (
           <div style={{ marginTop: 12, fontFamily: MONO, fontSize: 11, color: C.ink3, letterSpacing: '0.02em' }}>{token.stats}</div>
@@ -472,7 +472,7 @@ export function LaunchRadarStrip({ onSwitchTab, onOpenToken }) {
         const r = await fetch('/api/dex/launches');
         if (!r.ok) return;
         const d = await r.json();
-        const list = (Array.isArray(d?.tokens) ? d.tokens : []).map(normalize).filter(Boolean).slice(0, 6);
+        const list = (Array.isArray(d?.tokens) ? d.tokens : []).map(normalize).filter(Boolean).slice(0, 12);
         if (cancelled) return;
         setToks(list);
         loadSeries(list);
@@ -517,6 +517,154 @@ export function LaunchRadarStrip({ onSwitchTab, onOpenToken }) {
   );
 }
 
+// ── Live token feeds — ONE /api/dex/launches poll powers Radar + Trending
+// + Gainers + the stats strip (so we don't triple-poll the same endpoint).
+// Radar = freshest (feed order), Trending = highest 24h volume, Gainers =
+// biggest 24h % move. Each row reuses the shared Row + synthSpark fallback.
+function LiveTokenFeeds({ onSwitchTab, onOpenToken }) {
+  const [toks, setToks] = useState([]);
+  const [series, setSeries] = useState({});
+  const fetched = useRef({});
+  useEffect(() => {
+    let cancelled = false;
+    const loadSeries = (list) => {
+      list.forEach(t => {
+        if (fetched.current[t.mint]) return;
+        fetched.current[t.mint] = true;
+        stkThrottle(() => stkFetchSeries(t.mint, '1D'))
+          .then(s => { if (!cancelled && s && s.length >= 2) setSeries(prev => ({ ...prev, [t.mint]: s })); })
+          .catch(() => { fetched.current[t.mint] = false; });
+      });
+    };
+    const pull = async () => {
+      try {
+        const r = await fetch('/api/dex/launches');
+        if (!r.ok) return;
+        const d = await r.json();
+        const list = (Array.isArray(d?.tokens) ? d.tokens : []).map(normalize).filter(Boolean).slice(0, 30);
+        if (cancelled) return;
+        setToks(list);
+        loadSeries(list);
+      } catch {}
+    };
+    pull();
+    const id = setInterval(pull, 5000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  if (!toks.length) return null;
+
+  const radar    = toks.slice(0, 6);
+  const trending = [...toks].sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0)).slice(0, 6);
+  const gainers  = [...toks].filter(t => Number.isFinite(t.change)).sort((a, b) => b.change - a.change).slice(0, 6);
+
+  // live stats
+  const totalVol = toks.reduce((s, t) => s + (t.volume24h || 0), 0);
+  const newCount = toks.filter(t => /^\d+(s|m)$/.test(t.age || '')).length;
+  const gainCount = toks.filter(t => Number.isFinite(t.change) && t.change > 0).length;
+
+  const mkRow = (t, i, n, sub) => {
+    const pct = Number.isFinite(t.change) ? t.change : pctFromSeries(series[t.mint]);
+    return (
+      <Row
+        key={t.mint}
+        last={i === n - 1}
+        onClick={() => onOpenToken({
+          mint: t.mint, sym: t.sym, name: t.name, ico: t.icon || t.emoji,
+          grad: 'linear-gradient(135deg,#f5921b,#d4760a)',
+          price: t.price, pct, tf: '1D',
+          stats: `MC ${fmtUsd(t.mcap)} · Liq ${fmtUsd(t.liquidity)}`, tab: 'launchradar',
+        })}
+        ico={t.icon || t.emoji}
+        grad="linear-gradient(135deg,#f5921b,#d4760a)"
+        sym={t.sym}
+        tag={t.age}
+        sub={sub(t)}
+        price={fmtUsd(t.price)}
+        pct={pct}
+        pts={series[t.mint] || synthSpark(t.price, pct)}
+      />
+    );
+  };
+
+  const Orb = ({ v, l, c }) => (
+    <div style={{ background: C.glass, border: `1px solid ${C.border}`, borderRadius: 14, padding: '10px 8px', textAlign: 'center' }}>
+      <div style={{ fontFamily: MONO, fontSize: 15, fontWeight: 700, letterSpacing: '-0.02em', color: c || C.ink }}>{v}</div>
+      <div style={{ fontSize: 8.5, fontWeight: 700, color: C.ink3, letterSpacing: '0.08em', textTransform: 'uppercase', marginTop: 3 }}>{l}</div>
+    </div>
+  );
+
+  return (
+    <>
+      {/* LIVE STATS STRIP */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8, marginTop: 12 }}>
+        <Orb v={fmtUsd(totalVol)} l="24h Vol" />
+        <Orb v={newCount} l="New · live" />
+        <Orb v={gainCount} l="Gainers" c={C.green} />
+      </div>
+
+      <SectionHead title="Launch" italic="Radar" meta="LIVE" onAll={() => onSwitchTab('launchradar')} />
+      <ListShell>{radar.map((t, i) => mkRow(t, i, radar.length, x => `MC ${fmtUsd(x.mcap)} · Liq ${fmtUsd(x.liquidity)}`))}</ListShell>
+
+      <WhaleFeed onOpenToken={onOpenToken} />
+
+      <SectionHead title="Trending" italic="now" meta="LIVE" onAll={() => onSwitchTab('wonderland')} />
+      <ListShell>{trending.map((t, i) => mkRow(t, i, trending.length, x => `Vol ${fmtUsd(x.volume24h)} · MC ${fmtUsd(x.mcap)}`))}</ListShell>
+
+      <SectionHead title="Top" italic="gainers" meta="LIVE" onAll={() => onSwitchTab('launchradar')} />
+      <ListShell>{gainers.map((t, i) => mkRow(t, i, gainers.length, x => `MC ${fmtUsd(x.mcap)} · Liq ${fmtUsd(x.liquidity)}`))}</ListShell>
+    </>
+  );
+}
+
+// ── Whale activity feed — real /api/whale-events source (best-effort).
+// Renders nothing if the endpoint is empty/unavailable, so it never leaves a
+// dead section on the page.
+function WhaleFeed({ onOpenToken }) {
+  const [events, setEvents] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await fetch('/api/whale-events?since=' + (48 * 3600 * 1000));
+        if (!r.ok) return;
+        const d = await r.json();
+        if (!cancelled) setEvents(Array.isArray(d?.events) ? d.events.slice(0, 6) : []);
+      } catch {}
+    };
+    load();
+    const id = setInterval(load, 12000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  if (!events.length) return null;
+
+  const ago = (ms) => {
+    const s = Math.max(0, Math.round((Date.now() - (ms || Date.now())) / 1000));
+    if (s < 60) return s + 's';
+    if (s < 3600) return Math.round(s / 60) + 'm';
+    return Math.round(s / 3600) + 'h';
+  };
+
+  return (
+    <>
+      <SectionHead title="Whale" italic="activity" meta="LIVE" />
+      <ListShell>
+        {events.map((e, i) => (
+          <div key={(e.mint || '') + i} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '9px 14px', borderBottom: i === events.length - 1 ? 'none' : `1px solid ${C.hairline}` }}>
+            <span style={{ fontSize: 14 }}>🐋</span>
+            <span style={{ flex: 1, fontSize: 12, fontWeight: 600, color: C.ink, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <b style={{ fontWeight: 800 }}>Whale</b> bought <b style={{ fontWeight: 800 }}>${e.symbol || 'TOKEN'}</b>
+            </span>
+            <span style={{ fontFamily: MONO, fontSize: 11, fontWeight: 700, color: C.green, flexShrink: 0 }}>+{Number(e.solAmount || 0).toFixed(1)} SOL</span>
+            <span style={{ fontFamily: MONO, fontSize: 9, color: C.ink3, minWidth: 30, textAlign: 'right' }}>{ago(e.detectedAt)}</span>
+          </div>
+        ))}
+      </ListShell>
+    </>
+  );
+}
+
 // ── xStocks strip — same BRANDS catalog + Jupiter price/v3 ─────────────
 // Self-contained xStock icon fetcher — inlined so App.js never depends on a
 // Stocks.jsx named export (keeps the build green even if the two files drift).
@@ -545,7 +693,7 @@ async function appFetchBrandIcons(mints) {
 }
 
 export function XStocksStrip({ onSwitchTab, onOpenToken, onOpenStock }) {
-  const picks = BRANDS.slice(0, 6);
+  const picks = BRANDS.slice(0, 10);
   const [prices, setPrices] = useState({});
   const [series, setSeries] = useState({});
   const [icons,  setIcons]  = useState({});
@@ -617,42 +765,6 @@ function SwapLabel() {
   );
 }
 
-function LiveSwaps() {
-  const trades = [
-    ['SOL → USDC',   '+$1,420', '2s'],
-    ['JUP → SOL',    '+$340',   '4s'],
-    ['USDC → BONK',  '-$80',    '7s'],
-    ['WIF → USDC',   '+$2,180', '11s'],
-    ['SOL → JUP',    '+$610',   '13s'],
-    ['USDC → ETH',   '+$5,400', '19s'],
-    ['TSLAx → USDC', '+$420',   '24s'],
-    ['SOL → USDC',   '+$2,950', '31s'],
-  ];
-  return (
-    <div style={{ maxWidth: 520, margin: '0 auto', width: '100%' }}>
-      <SectionHead title="Live" italic="swaps" meta="UPDATED NOW" />
-      <div style={{ padding: 0, borderRadius: 18, overflow: 'hidden', background: C.glassStrong, backdropFilter: 'blur(10px)', border: `1px solid ${C.border}` }}>
-        <div style={{ height: 140, overflow: 'hidden', position: 'relative',
-          maskImage: 'linear-gradient(180deg,transparent,#000 14px,#000 calc(100% - 14px),transparent)',
-          WebkitMaskImage: 'linear-gradient(180deg,transparent,#000 14px,#000 calc(100% - 14px),transparent)' }}>
-          <div style={{ animation: 'nx-ticker 24s linear infinite' }}>
-            {[...trades, ...trades].map((r, i) => {
-              const isIn = r[1].startsWith('+');
-              return (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', borderBottom: `1px solid ${C.hairline}` }}>
-                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, fontWeight: 600, color: C.ink, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r[0]}</span>
-                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, fontWeight: 700, color: isIn ? C.green : '#8c1494', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{r[1]}</span>
-                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, color: C.ink3, fontWeight: 600, flexShrink: 0, minWidth: 36, textAlign: 'right', letterSpacing: '0.4px' }}>{r[2]}</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function HomeBelow({ onSwitchTab, walletAddress, onOpenToken }) {
   const canSeeFlipsy = walletAddress === FLIPSY_ACCESS_WALLET;
 
@@ -705,42 +817,36 @@ function HomeBelow({ onSwitchTab, walletAddress, onOpenToken }) {
 
       {/* EXPANDED PRODUCT GRID */}
       {sectionHead('Explore the', 'super-app', 'TOOLS')}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
         {products.filter(p => p.tab !== 'markets' && p.tab !== 'launchradar').map((p, i) => (
           <button
             key={p.tab}
             onClick={() => onSwitchTab(p.tab)}
             style={{
               background: C.glassStrong, backdropFilter: 'blur(10px)',
-              border: `1px solid rgba(255,255,255,0.85)`, borderRadius: 20,
-              padding: 14, textAlign: 'left', cursor: 'pointer',
+              border: `1px solid ${C.border}`, borderRadius: 14,
+              padding: '11px 10px', textAlign: 'left', cursor: 'pointer',
               fontFamily: 'inherit', color: 'inherit',
               transition: 'transform .15s, box-shadow .15s',
-              display: 'flex', flexDirection: 'column', gap: 6,
-              animation: `nx-rise .45s cubic-bezier(.2,1,.4,1) ${i * 0.04}s backwards`,
+              display: 'flex', flexDirection: 'column', gap: 7,
+              animation: `nx-rise .45s cubic-bezier(.2,1,.4,1) ${i * 0.03}s backwards`,
             }}
-            onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 12px 28px rgba(160,231,255,.18)'; }}
+            onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 10px 22px rgba(160,231,255,.16)'; }}
             onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'none'; }}
           >
             <div style={{
-              width: 36, height: 36, borderRadius: 11,
-              display: 'grid', placeItems: 'center', fontSize: 18,
-              marginBottom: 4, background: p.grad,
+              width: 30, height: 30, borderRadius: 9,
+              display: 'grid', placeItems: 'center', fontSize: 14,
+              background: p.grad, color: '#fff',
             }}>{p.icon}</div>
             <div style={{
-              fontFamily: "'Instrument Serif', serif", fontStyle: 'italic', fontSize: 18, lineHeight: 1,
+              fontFamily: "'Instrument Serif', serif", fontSize: 15, lineHeight: 1,
               color: C.ink, letterSpacing: '-0.01em',
             }}>{p.name}</div>
-            <div style={{ fontSize: 11, color: C.ink2, fontWeight: 500, lineHeight: 1.4 }}>{p.desc}</div>
             <span style={{
-              marginTop: 6, display: 'inline-flex', alignItems: 'center', gap: 5, alignSelf: 'flex-start',
-              fontFamily: "'JetBrains Mono', monospace", fontSize: 9, fontWeight: 700, color: C.cyan,
-              letterSpacing: '0.08em', background: 'rgba(61,212,245,.10)',
-              border: `1px solid ${C.border}`, padding: '3px 8px', borderRadius: 999,
-            }}>
-              <span style={{ width: 4, height: 4, borderRadius: '50%', background: C.cyan, boxShadow: `0 0 5px ${C.cyan}` }} />
-              {p.live}
-            </span>
+              fontFamily: "'JetBrains Mono', monospace", fontSize: 8, fontWeight: 700, color: C.cyan,
+              letterSpacing: '0.08em',
+            }}>{p.live}</span>
           </button>
         ))}
       </div>
@@ -1479,8 +1585,7 @@ function AppInner() {
         {tab === 'swap' && (
           <>
             <SwapHero />
-            <LaunchRadarStrip onSwitchTab={switchTab} onOpenToken={openToken} />
-            <LiveSwaps />
+            <LiveTokenFeeds onSwitchTab={switchTab} onOpenToken={openToken} />
             <SwapLabel />
             <div ref={swapWidgetRef}>
               <SwapWidget key={swapOutputMint || 'default'} defaultOutputMint={swapOutputMint || undefined} {...sharedProps} />
