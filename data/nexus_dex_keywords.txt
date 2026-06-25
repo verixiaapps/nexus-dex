@@ -21,39 +21,9 @@ bridge ada to optimism
 bridge ada to polygon
 bridge any token to any chain
 bridge arbitrum to solana
-bridge arbitrum to tron
-bridge assets securely
-bridge avalanche to aptos
-bridge avalanche to arbitrum
-bridge avalanche to base
-bridge avalanche to bnb
-bridge avalanche to ethereum
-bridge avalanche to optimism
-bridge avalanche to polygon
 bridge avalanche to solana
-bridge avalanche to sui
-bridge avalanche to tron
-bridge avax to solana swap
-bridge base to aptos
-bridge base to arbitrum
-bridge base to avalanche
-bridge base to bnb
-bridge base to ethereum
-bridge base to optimism
-bridge base to polygon
 bridge base to solana
-bridge base to sui
-bridge base to tron
-bridge bnb to aptos
-bridge bnb to arbitrum
-bridge bnb to avalanche
-bridge bnb to base
-bridge bnb to ethereum
-bridge bnb to optimism
-bridge bnb to polygon
 bridge bnb to solana
-bridge bnb to solana dex
-bridge bnb to sui
 bridge bnb to tron
 bridge btc
 bridge btc to arbitrum
