@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useReducer } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useReducer, useMemo } from 'react';
 import { BrowserRouter, useNavigate, useLocation } from 'react-router-dom';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from './WalletContext.js';
@@ -326,38 +326,168 @@ function Row({ onClick, last, ico, grad, sym, tag, sub, price, pct, pts }) {
   );
 }
 
-// ── Token detail bottom-sheet: chart + stats + one-tap Buy (sets the home swap to SOL -> token) ──
-function SheetChart({ pts }) {
-  const ok = pts && pts.length >= 2;
-  const W = 320, H = 120;
-  const path = ok ? stkBuildPath(pts, W, H, 4) : null;
-  const up = ok ? pts[pts.length - 1].c >= pts[0].c : true;
-  const col = up ? C.green : C.lav;
+// ── Token detail bottom-sheet chart ──────────────────────────────────
+// Copied verbatim in behavior from Ape.jsx TokenChart: live embedded iframe,
+// GeckoTerminal primary (covers fresh bonding-curve pools) → DexScreener
+// fallback. Pool resolved BY CONTRACT (exact base-token match) + deepest USD
+// liquidity, so the chart can never show a look-alike token. Defaults to the
+// 1s resolution so the chart is live and moving the moment the sheet opens.
+const CHART_RES = [
+  { key: '1s',  label: '1s', gecko: '1s',  dex: '1S'  },
+  { key: '15s', label: '15s', gecko: '15s', dex: '15S' },
+  { key: '1m',  label: '1m', gecko: '1m',  dex: '1'   },
+  { key: '5m',  label: '5m', gecko: '5m',  dex: '5'   },
+  { key: '1h',  label: '1H', gecko: '1h',  dex: '60'  },
+];
+const CHART_RES_DEFAULT = '1s';
+
+function pickBestGeckoPool(pools, mint) {
+  if (!Array.isArray(pools) || !pools.length) return null;
+  const wanted = ('solana_' + mint).toLowerCase();
+  const baseId  = p => p?.relationships?.base_token?.data?.id;
+  const quoteId = p => p?.relationships?.quote_token?.data?.id;
+  const hasAddr = p => !!p?.attributes?.address;
+  const baseMatches = pools.filter(p => hasAddr(p) && String(baseId(p) || '').toLowerCase() === wanted);
+  const pool = baseMatches.length
+    ? baseMatches
+    : pools.filter(p => hasAddr(p) && (
+        String(baseId(p) || '').toLowerCase() === wanted ||
+        String(quoteId(p) || '').toLowerCase() === wanted));
+  if (!pool.length) return null;
+  return pool.reduce(
+    (best, p) => (Number(p?.attributes?.reserve_in_usd) || 0) > (Number(best?.attributes?.reserve_in_usd) || 0) ? p : best,
+    pool[0],
+  );
+}
+function pickBestPair(pairs, mint) {
+  if (!Array.isArray(pairs) || !pairs.length) return null;
+  const wanted = String(mint).toLowerCase();
+  const baseMatches = pairs.filter(
+    p => p && p.chainId === 'solana' && p.pairAddress &&
+         p.baseToken?.address?.toLowerCase() === wanted);
+  const pool = baseMatches.length
+    ? baseMatches
+    : pairs.filter(
+        p => p && p.chainId === 'solana' && p.pairAddress &&
+             (p.baseToken?.address?.toLowerCase() === wanted ||
+              p.quoteToken?.address?.toLowerCase() === wanted));
+  if (!pool.length) return null;
+  return pool.reduce(
+    (best, p) => (Number(p.liquidity?.usd) || 0) > (Number(best.liquidity?.usd) || 0) ? p : best,
+    pool[0],
+  );
+}
+function buildEmbedSrc(pool, resKey) {
+  if (!pool) return null;
+  const r = CHART_RES.find(x => x.key === resKey) || CHART_RES[0];
+  if (pool.provider === 'GECKOTERMINAL') {
+    return 'https://www.geckoterminal.com/solana/pools/' + pool.addr +
+      '?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&bg_color=ffffff&resolution=' + r.gecko;
+  }
+  return 'https://dexscreener.com/solana/' + pool.addr +
+    '?embed=1&theme=light&info=0&trades=0&interval=' + r.dex;
+}
+
+function SheetChart({ mint, sym }) {
+  const [status, setStatus] = useState('loading'); // loading | ok | none | fail
+  const [pool, setPool]     = useState(null);       // { provider, addr }
+  const [res, setRes]       = useState(CHART_RES_DEFAULT);
+  const reqRef = useRef(0);
+
+  useEffect(() => { setRes(CHART_RES_DEFAULT); }, [mint]);
+
+  useEffect(() => {
+    if (!mint) { setStatus('none'); setPool(null); return; }
+    const id = ++reqRef.current;
+    setStatus('loading'); setPool(null);
+
+    (async () => {
+      let networkOk = false;
+      // 1) GeckoTerminal — covers pump.fun bonding-curve pools.
+      try {
+        const r = await fetch(
+          'https://api.geckoterminal.com/api/v2/networks/solana/tokens/' + mint + '/pools',
+          { headers: { Accept: 'application/json' } });
+        if (id !== reqRef.current) return;
+        if (r.ok) {
+          networkOk = true;
+          const j = await r.json();
+          if (id !== reqRef.current) return;
+          const best = pickBestGeckoPool(j?.data, mint);
+          const addr = best?.attributes?.address;
+          if (addr) { setPool({ provider: 'GECKOTERMINAL', addr }); setStatus('ok'); return; }
+        }
+      } catch (e) {}
+      if (id !== reqRef.current) return;
+
+      // 2) DexScreener — fallback for graduated / older pairs.
+      try {
+        const r = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + mint,
+          { headers: { Accept: 'application/json' } });
+        if (id !== reqRef.current) return;
+        if (r.ok) {
+          networkOk = true;
+          const j = await r.json();
+          if (id !== reqRef.current) return;
+          const best = pickBestPair(j?.pairs, mint);
+          if (best?.pairAddress) { setPool({ provider: 'DEXSCREENER', addr: best.pairAddress }); setStatus('ok'); return; }
+        }
+      } catch (e) {}
+      if (id !== reqRef.current) return;
+
+      setStatus(networkOk ? 'none' : 'fail');
+    })();
+  }, [mint]);
+
+  const src = useMemo(() => buildEmbedSrc(pool, res), [pool, res]);
+
   return (
-    <div style={{ width: '100%', height: H, marginTop: 14, borderRadius: 14, overflow: 'hidden', background: ok ? 'transparent' : '#f4f4f5', display: ok ? 'block' : 'grid', placeItems: 'center' }}>
-      {path ? (
-        <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none" style={{ display: 'block' }}>
-          <path d={path.area} fill={up ? 'rgba(22,192,138,.12)' : 'rgba(124,92,255,.13)'} />
-          <path d={path.line} fill="none" stroke={col} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      ) : (
-        <span style={{ fontFamily: MONO, fontSize: 11, color: C.ink3, letterSpacing: '0.08em' }}>LOADING CHART…</span>
-      )}
+    <div style={{ marginTop: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
+        <span style={{ fontFamily: MONO, fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', color: C.ink3 }}>CA {mint ? mint.slice(0, 4) + '…' + mint.slice(-4) : ''}</span>
+        <span style={{ fontFamily: MONO, fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: C.ink3 }}>{pool?.provider || 'CHART'}</span>
+      </div>
+      <div style={{
+        width: '100%', height: 'clamp(300px,44dvh,440px)', borderRadius: 16, overflow: 'hidden',
+        border: '1px solid ' + C.hairline, background: '#fff', position: 'relative',
+        display: status === 'ok' ? 'block' : 'grid', placeItems: 'center', textAlign: 'center',
+      }}>
+        {status === 'ok' && src ? (
+          <iframe
+            key={pool.provider + ':' + pool.addr + ':' + res}
+            src={src}
+            title={(sym || 'Token') + ' price chart'}
+            loading="lazy"
+            allow="clipboard-write"
+            style={{ width: '100%', height: '100%', border: 0, display: 'block' }}
+          />
+        ) : status === 'loading' ? (
+          <span style={{ width: 24, height: 24, borderRadius: '50%', border: '2.5px solid ' + C.border, borderTopColor: '#0b0b0c', animation: 'nx-spin .8s linear infinite' }} />
+        ) : status === 'none' ? (
+          <span style={{ fontFamily: MONO, fontSize: 11, color: C.ink3, padding: '0 24px', lineHeight: 1.5 }}>Chart appears once ${sym || 'this token'} is indexed — trading on the bonding curve for now.</span>
+        ) : (
+          <span style={{ fontFamily: MONO, fontSize: 11, color: C.ink3, padding: '0 24px' }}>Couldn’t load the chart. Try again shortly.</span>
+        )}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '8px 2px 0' }}>
+        {CHART_RES.map(r => (
+          <button key={r.key} type="button" disabled={status !== 'ok'} onClick={() => setRes(r.key)} style={{
+            flex: '0 0 auto', fontFamily: MONO, fontSize: 11, fontWeight: 700, letterSpacing: '0.02em',
+            color: r.key === res ? C.ink : C.ink2, background: r.key === res ? '#f4f4f5' : 'transparent',
+            border: 'none', padding: '6px 11px', borderRadius: 8,
+            cursor: status === 'ok' ? 'pointer' : 'default', opacity: status === 'ok' ? 1 : 0.4,
+          }}>{r.label}</button>
+        ))}
+        <span style={{ marginLeft: 'auto', fontFamily: MONO, fontSize: 9, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: C.ink3 }}>
+          {status === 'ok' ? '● Live · ' + ((CHART_RES.find(x => x.key === res) || {}).label) : 'Live'}
+        </span>
+      </div>
     </div>
   );
 }
 
-function TokenSheet({ token, onClose, onBuy, onOpenFull }) {
-  const [pts, setPts] = useState(null);
-  useEffect(() => {
-    let cancelled = false;
-    setPts(null);
-    stkThrottle(() => stkFetchSeries(token.mint, token.tf || '1D'))
-      .then(s => { if (!cancelled && s && s.length >= 2) setPts(s); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [token.mint, token.tf]);
 
+function TokenSheet({ token, onClose, onBuy, onOpenFull }) {
   const up = Number.isFinite(token.pct) ? token.pct >= 0 : true;
   const isImg = typeof token.ico === 'string' && /^https?:\/\//.test(token.ico);
 
@@ -378,7 +508,7 @@ function TokenSheet({ token, onClose, onBuy, onOpenFull }) {
           </div>
         </div>
 
-        <SheetChart pts={pts} />
+        <SheetChart mint={token.mint} sym={token.sym} />
 
         {token.stats && (
           <div style={{ marginTop: 12, fontFamily: MONO, fontSize: 11, color: C.ink3, letterSpacing: '0.02em' }}>{token.stats}</div>
