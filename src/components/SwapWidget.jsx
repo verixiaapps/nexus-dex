@@ -98,7 +98,7 @@ const SW_CSS = `
 
 /* token picker modal */
 .sw-modal-overlay{position:fixed;inset:0;background:rgba(11,11,12,.32);backdrop-filter:blur(4px);z-index:1200;display:flex;align-items:flex-end;justify-content:center;padding:0}
-.sw-modal-card{width:100%;max-width:480px;max-height:80vh;background:#fff;border-radius:22px 22px 0 0;border:1px solid var(--hairline);display:flex;flex-direction:column;overflow:hidden;box-shadow:0 -8px 40px rgba(11,11,12,.18)}
+.sw-modal-card{width:100%;max-width:480px;max-height:80dvh;background:#fff;border-radius:22px 22px 0 0;border:1px solid var(--hairline);display:flex;flex-direction:column;overflow:hidden;box-shadow:0 -8px 40px rgba(11,11,12,.18)}
 .sw-modal-head{padding:18px 18px 10px}
 .sw-modal-head-row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
 .sw-modal-title{font-size:17px;font-weight:800;letter-spacing:-.01em;color:var(--ink)}
