@@ -18,7 +18,7 @@ const FLIPSY_CSS = `
   --border:#e4e4e7;
   --hairline:#efeff1;
 
-  position:relative;min-height:100vh;min-height:100dvh;width:100%;
+  position:relative;min-height:100dvh;min-height:100dvh;width:100%;
   padding-bottom:calc(env(safe-area-inset-bottom) + 60px);overflow-x:hidden;
   color:var(--ink);
   font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",system-ui,sans-serif;
@@ -364,7 +364,7 @@ const FLIPSY_CSS = `
 
 /* BLOCK SCREEN */
 .fp-block-wrap{
-  min-height:70vh;display:flex;align-items:center;justify-content:center;
+  min-height:70dvh;display:flex;align-items:center;justify-content:center;
   padding:40px 22px;position:relative;z-index:5;
 }
 .fp-block-card{
