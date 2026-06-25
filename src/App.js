@@ -3,7 +3,11 @@ import { BrowserRouter, useNavigate, useLocation } from 'react-router-dom';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from './WalletContext.js';
 import SwapWidget          from './components/SwapWidget.jsx';
-import Stocks, { BRANDS, fetchBrandPrices, stkFetchSeries, stkBuildPath, stkThrottle, TradeModal as StockTradeModal } from './components/Stocks.jsx';
+import Stocks, { BRANDS, fetchBrandPrices, stkFetchSeries, stkBuildPath, stkThrottle } from './components/Stocks.jsx';
+import * as StocksNS from './components/Stocks.jsx';
+// Optional named export read off the namespace so a stale Stocks.jsx (missing the
+// export) can't break the build. Renders the real buy/sell modal when present.
+const StockTradeModal = StocksNS.TradeModal;
 import CrossChainSwap      from './components/CrossChainSwap.jsx';
 import SolToBtcChainflip   from './components/SolToBtcChainflip.jsx';
 import MemeWonderland      from './components/MemeWonderland.jsx';
@@ -15,6 +19,7 @@ import Holdings            from './components/Holdings.jsx';
 import ReferralsPage       from './components/ReferralsPage.jsx';
 import WhyNexus            from './components/WhyNexus.jsx';
 import AdminPage           from './components/AdminPage.jsx';
+import BuySolana          from './components/BuySolana.jsx';
 
 // =====================================================================
 // Wonderland-light design tokens
@@ -32,6 +37,7 @@ const C = {
   gold:   '#a67200',
   green:  '#16c08a',
   red:    '#f0425a',
+  down:   '#fb7185',
   glass:        '#ffffff',
   glassStrong:  '#ffffff',
   border:       '#e9e9eb',
@@ -264,12 +270,12 @@ function Spark({ pts, w = 54, h = 24 }) {
   const ok = pts && pts.length >= 2;
   const path = ok ? stkBuildPath(pts, w, h, 2) : null;
   const up = ok ? pts[pts.length - 1].c >= pts[0].c : true;
-  const col = up ? C.green : C.red;
+  const col = up ? C.green : C.down;
   return (
     <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: 'block', flex: '0 0 auto' }}>
       {path && (
         <>
-          <path d={path.area} fill={up ? 'rgba(22,192,138,.12)' : 'rgba(240,66,90,.12)'} />
+          <path d={path.area} fill={up ? 'rgba(22,192,138,.12)' : 'rgba(251,113,133,.14)'} />
           <path d={path.line} fill="none" stroke={col} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
         </>
       )}
@@ -327,7 +333,7 @@ function Row({ onClick, last, ico, grad, sym, tag, sub, price, pct, pts }) {
       <Spark pts={pts} />
       <div style={{ textAlign: 'right', flex: '0 0 auto', minWidth: 74 }}>
         <div style={{ fontFamily: MONO, fontSize: 13, fontWeight: 700, color: C.ink }}>{price}</div>
-        <div style={{ fontFamily: MONO, fontSize: 11, fontWeight: 700, marginTop: 1, color: up ? C.green : C.red }}>{fmtPct(pct)}</div>
+        <div style={{ fontFamily: MONO, fontSize: 11, fontWeight: 700, marginTop: 1, color: up ? C.green : C.down }}>{fmtPct(pct)}</div>
       </div>
     </button>
   );
@@ -339,12 +345,12 @@ function SheetChart({ pts }) {
   const W = 320, H = 120;
   const path = ok ? stkBuildPath(pts, W, H, 4) : null;
   const up = ok ? pts[pts.length - 1].c >= pts[0].c : true;
-  const col = up ? C.green : C.red;
+  const col = up ? C.green : C.down;
   return (
     <div style={{ width: '100%', height: H, marginTop: 14, borderRadius: 14, overflow: 'hidden', background: ok ? 'transparent' : '#f4f4f5', display: ok ? 'block' : 'grid', placeItems: 'center' }}>
       {path ? (
         <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none" style={{ display: 'block' }}>
-          <path d={path.area} fill={up ? 'rgba(22,192,138,.12)' : 'rgba(240,66,90,.12)'} />
+          <path d={path.area} fill={up ? 'rgba(22,192,138,.12)' : 'rgba(251,113,133,.14)'} />
           <path d={path.line} fill="none" stroke={col} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       ) : (
@@ -381,7 +387,7 @@ function TokenSheet({ token, onClose, onBuy, onOpenFull }) {
           </div>
           <div style={{ textAlign: 'right', flex: '0 0 auto' }}>
             <div style={{ fontFamily: MONO, fontSize: 17, fontWeight: 700, color: C.ink }}>{fmtUsd(token.price)}</div>
-            <div style={{ fontFamily: MONO, fontSize: 12, fontWeight: 700, marginTop: 1, color: up ? C.green : C.red }}>{fmtPct(token.pct)}</div>
+            <div style={{ fontFamily: MONO, fontSize: 12, fontWeight: 700, marginTop: 1, color: up ? C.green : C.down }}>{fmtPct(token.pct)}</div>
           </div>
         </div>
 
@@ -656,6 +662,7 @@ function HomeBelow({ onSwitchTab, walletAddress, onOpenToken }) {
     { tab: 'markets',     icon: '📈', name: 'Markets',         desc: 'Tokenized Tesla, Apple, NVIDIA — trade 24/7 in USDC.',          live: '18 STOCKS', grad: 'linear-gradient(135deg,#2f6bff,#1e49c9)' },
     { tab: 'ape',         icon: '⚡', name: 'Ape',             desc: 'Fresh pump.fun launches with burner-wallet one-tap trades.',    live: 'EARLY',     grad: 'linear-gradient(135deg,#f5921b,#d4760a)' },
     { tab: 'holdings',    icon: '👜', name: 'Bags',            desc: 'Every token you own. Live prices. Buy SOL with USD.',           live: 'PORTFOLIO', grad: 'linear-gradient(135deg,#16c08a,#0f8f67)' },
+    { tab: 'buysol',      icon: '💳', name: 'Buy Solana',      desc: 'Buy SOL with card or bank — trusted providers.',                live: 'FIAT',      grad: 'linear-gradient(135deg,#14f195,#0fa968)' },
     { tab: 'bridge',      icon: '🌉', name: 'Cross-Chain',     desc: 'Move any token across 71 chains. Native, ~2 min.',              live: '71 CHAINS', grad: 'linear-gradient(135deg,#2f6bff,#7c5cff)' },
     { tab: 'solbtc',      icon: '₿',  name: 'SOL → BTC',       desc: 'Swap Solana straight to real Bitcoin on the BTC network.',      live: 'NATIVE',    grad: 'linear-gradient(135deg,#f5921b,#a67200)' },
     { tab: 'launchradar', icon: '🚀', name: 'Radar',           desc: 'Every new token, the moment it lands on Solana.',               live: 'FRESH',     grad: 'linear-gradient(135deg,#f5921b,#a67200)' },
@@ -880,6 +887,7 @@ const PATH_TO_TAB = {
   '/flipsy': 'flipsy', '/predict': 'flipsy',
   '/get-started': 'getstarted', '/wallet': 'getstarted',
   '/holdings': 'holdings', '/portfolio': 'holdings', '/bags': 'holdings',
+  '/buy-sol': 'buysol', '/buy-solana': 'buysol', '/buy': 'buysol',
   '/referrals': 'referrals', '/refer': 'referrals',
   '/why': 'why', '/why-nexus': 'why', '/about': 'why',
   '/admin': 'admin', '/dashboard': 'admin',
@@ -888,7 +896,7 @@ const PATH_TO_TAB = {
 const TAB_TO_PATH = {
   swap: '/swap', bridge: '/bridge', solbtc: '/sol-btc',
   wonderland: '/wonderland', launchradar: '/radar', ape: '/ape', markets: '/markets', flipsy: '/flipsy',
-  getstarted: '/get-started', holdings: '/holdings',
+  getstarted: '/get-started', holdings: '/holdings', buysol: '/buy-sol',
   referrals: '/referrals', why: '/why', admin: '/admin',
 };
 function tabFromPathname(pathname) { return PATH_TO_TAB[pathname] || 'swap'; }
@@ -1495,6 +1503,7 @@ function AppInner() {
           : <FlipsyLocked connected={wallet.isConnected} onConnectWallet={openWallet} />
         )}
         {tab === 'holdings'    && <Holdings {...sharedProps} />}
+        {tab === 'buysol'      && <BuySolana />}
         {tab === 'getstarted'  && <GetStarted onConnectWallet={openWallet} onSwitchTab={switchTab} />}
         {tab === 'referrals'   && <ReferralsPage onConnectWallet={openWallet} />}
         {tab === 'why'         && <WhyNexus onSwitchTab={switchTab} />}
@@ -1551,7 +1560,7 @@ function AppInner() {
               <button onClick={() => setMenuOpen(false)} aria-label="Close" style={{ width: 30, height: 30, borderRadius: 9, background: '#f4f4f5', border: 'none', fontSize: 16, color: '#0b0b0c', cursor: 'pointer' }}>×</button>
             </div>
             {[
-              { grp: 'Trade', items: [['swap', 'Swap'], ['ape', 'Ape'], ['wonderland', 'Wonderland'], ['markets', 'Markets'], ['holdings', 'Bags']] },
+              { grp: 'Trade', items: [['swap', 'Swap'], ['ape', 'Ape'], ['wonderland', 'Wonderland'], ['markets', 'Markets'], ['holdings', 'Bags'], ['buysol', 'Buy Solana']] },
               { grp: 'Tools', items: [['bridge', 'Cross-Chain'], ['solbtc', 'SOL → BTC'], ['launchradar', 'Radar'], ['flipsy', 'Flipsy']] },
               { grp: 'Earn & info', items: [['referrals', 'Referrals'], ['why', 'Why Nexus'], ['getstarted', 'Get Started']] },
             ].map(section => (
@@ -1579,15 +1588,17 @@ function AppInner() {
           onOpenFull={() => { const tb = sheetToken.tab; setSheetToken(null); switchTab(tb); }}
         />
       )}
-      <StockTradeModal
-        open={!!stockTrade}
-        brand={stockTrade ? stockTrade.brand : null}
-        icon={stockTrade ? stockTrade.icon : null}
-        price={stockTrade ? stockTrade.price : 0}
-        onClose={() => setStockTrade(null)}
-        walletPubkey={wallet.walletAddress}
-        onConnectWallet={openWallet}
-      />
+      {StockTradeModal && (
+        <StockTradeModal
+          open={!!stockTrade}
+          brand={stockTrade ? stockTrade.brand : null}
+          icon={stockTrade ? stockTrade.icon : null}
+          price={stockTrade ? stockTrade.price : 0}
+          onClose={() => setStockTrade(null)}
+          walletPubkey={wallet.walletAddress}
+          onConnectWallet={openWallet}
+        />
+      )}
     </div>
   );
 }
