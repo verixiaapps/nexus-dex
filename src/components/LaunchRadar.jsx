@@ -497,7 +497,7 @@ function signalScore(t) {
   return Math.round(Math.min(100, changePts + volPts + liqPts + holdPts + freshPts));
 }
 
-function normalize(t) {
+export function normalize(t) {
   const rawMint = t?.mint;
   if (!rawMint || typeof rawMint !== 'string' || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(rawMint)) {
     return null;
