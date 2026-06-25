@@ -1,6 +1,15 @@
 import React, { useState, useEffect, useCallback, useRef, useReducer, useMemo } from 'react';
 import { BrowserRouter, useNavigate, useLocation } from 'react-router-dom';
 import { useWallet } from '@solana/wallet-adapter-react';
+import { Buffer } from 'buffer';
+import {
+  Connection,
+  PublicKey,
+  VersionedTransaction,
+  TransactionMessage,
+  SystemProgram,
+  AddressLookupTableAccount,
+} from '@solana/web3.js';
 import { useNexusWallet } from './WalletContext.js';
 import SwapWidget          from './components/SwapWidget.jsx';
 import Stocks, { BRANDS, fetchBrandPrices, stkFetchSeries, stkBuildPath, stkThrottle } from './components/Stocks.jsx';
@@ -253,11 +262,25 @@ function pctFromSeries(pts) {
 }
 
 // draw-only sparkline (data fetched by the strip so we never double-fetch)
-function Spark({ pts, w = 54, h = 24 }) {
-  const ok = pts && pts.length >= 2;
-  const path = ok ? stkBuildPath(pts, w, h, 2) : null;
-  const up = ok ? pts[pts.length - 1].c >= pts[0].c : true;
-  const col = up ? C.green : C.lav;
+// Row sparkline — REAL DATA ONLY (mirrors LaunchRadar v9 LrSparkline).
+// Two real sources: OHLCV via the series the feed already fetched (pts), and a
+// live observed-price history recorded from each 5s poll. No synthetic shape —
+// nothing draws until real data exists.
+const _spkHist = new Map();
+function recordSpark(mint, price) {
+  if (!mint || !(price > 0)) return _spkHist.get(mint) || [];
+  let pts = _spkHist.get(mint);
+  if (!pts) { pts = []; _spkHist.set(mint, pts); }
+  if (pts[pts.length - 1] !== price) { pts.push(price); if (pts.length > 32) pts.shift(); }
+  return pts;
+}
+function Spark({ pts, mint, price, w = 54, h = 24 }) {
+  const hist = recordSpark(mint, Number(price));
+  const obs  = hist.length >= 2 ? hist.map(c => ({ c })) : null;
+  const use  = (pts && pts.length >= 2) ? pts : obs;   // prefer OHLCV, else observed ticks
+  const path = use ? stkBuildPath(use, w, h, 2) : null;
+  const up   = use ? use[use.length - 1].c >= use[0].c : true;
+  const col  = up ? C.green : C.lav;
   return (
     <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: 'block', flex: '0 0 auto' }}>
       {path && (
@@ -296,7 +319,7 @@ function ListShell({ children }) {
   );
 }
 
-function Row({ onClick, last, ico, grad, sym, tag, sub, price, pct, pts }) {
+function Row({ onClick, last, ico, grad, sym, tag, sub, price, pct, pts, mint, rawPrice }) {
   const up = Number.isFinite(pct) ? pct >= 0 : true;
   const isImg = typeof ico === 'string' && /^https?:\/\//.test(ico);
   return (
@@ -317,7 +340,7 @@ function Row({ onClick, last, ico, grad, sym, tag, sub, price, pct, pts }) {
         </div>
         <div style={{ fontSize: 11, color: C.ink3, fontWeight: 500, marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sub}</div>
       </div>
-      <Spark pts={pts} />
+      <Spark pts={pts} mint={mint} price={rawPrice} />
       <div style={{ textAlign: 'right', flex: '0 0 auto', minWidth: 74 }}>
         <div style={{ fontFamily: MONO, fontSize: 13, fontWeight: 700, color: C.ink }}>{price}</div>
         <div style={{ fontFamily: MONO, fontSize: 11, fontWeight: 700, marginTop: 1, color: up ? C.green : C.lav }}>{fmtPct(pct)}</div>
@@ -487,14 +510,268 @@ function SheetChart({ mint, sym }) {
 }
 
 
-function TokenSheet({ token, onClose, onBuy, onOpenFull }) {
+
+// ═════════════════════════════════════════════════════════════════════
+// PUMP.FUN BUY/SELL — inlined verbatim from LaunchRadar (no cross-page
+// import). 3% SOL fee → FEE_WALLET, atomic in the same signed tx. Sim →
+// user signs the simulated tx → send. No re-fetch between sim and sign.
+// ═════════════════════════════════════════════════════════════════════
+const SOL_MINT    = 'So11111111111111111111111111111111111111112';
+const FEE_WALLET  = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
+const FEE_BPS     = 300;   // 3%
+const SOL_RESERVE = 0.01;
+const TRADE_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
+const TRADE_SELL_PRESETS = [25, 50, 100];
+const BAL_COMMITMENT = 'processed';
+const TRADE_RPC_URL = (typeof window !== 'undefined' && window.location)
+  ? window.location.origin + '/api/trade-rpc'
+  : 'http://localhost:3001/api/trade-rpc';
+const RPC_URL = (typeof window !== 'undefined' && window.location)
+  ? window.location.origin + '/api/solana-rpc'
+  : 'http://localhost:3001/api/solana-rpc';
+const _connCache = new Map();
+const tradeGetConn = (commitment, url = RPC_URL) => {
+  const key = url + '|' + commitment;
+  let c = _connCache.get(key);
+  if (!c) { c = new Connection(url, commitment); _connCache.set(key, c); }
+  return c;
+};
+const _tradeConnCache = new Map();
+const getTradeConn = (commitment) => {
+  let c = _tradeConnCache.get(commitment);
+  if (!c) { c = new Connection(TRADE_RPC_URL, commitment); _tradeConnCache.set(commitment, c); }
+  return c;
+};
+const balRpcRace = (op) => op(tradeGetConn(BAL_COMMITMENT));
+
+function tradeFmtSol(n) {
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  if (n >= 1000) return n.toFixed(0);
+  if (n >= 1)    return n.toFixed(3);
+  if (n >= 0.001) return n.toFixed(4);
+  return n.toFixed(6);
+}
+function tradeFmtTokens(n) {
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return Math.round(n).toLocaleString();
+  if (n >= 1)   return n.toFixed(2);
+  return n.toPrecision(3);
+}
+const tradeFriendlyError = (err) => {
+  const m = String(err?.message || err || '').toLowerCase();
+  if (m.includes('user reject') || m.includes('user denied') || m.includes('cancelled') || m.includes('request rejected')) return 'Cancelled.';
+  if (m.includes('graduat')) return 'Token graduated off the bonding curve — not tradable here.';
+  if (m.includes('not a pump') || m.includes('not indexed')) return 'Not a pump.fun bonding-curve token.';
+  if (m.includes('slippage')) return 'Price moved past slippage — try again.';
+  if (m.includes('insufficient') || m.includes('debit an account')) return 'Not enough SOL for this trade + fees.';
+  if (m.includes('blockhash') || m.includes('expired')) return 'Tx expired — retry.';
+  if (m.includes("didn't confirm") || m.includes('not confirm')) return "Sent but didn't confirm — check Solscan before retrying.";
+  if (m.includes('simulation failed')) return 'Trade would fail right now — price likely moved.';
+  if (m.includes('rate')) return 'Rate limited — try again.';
+  return err?.message?.slice(0, 200) || 'Trade failed.';
+};
+function tradeDescribeSimLogs(logs, fallbackMsg) {
+  const arr = Array.isArray(logs) ? logs : [];
+  const j = arr.join('\n').toLowerCase();
+  if (j.includes('slippage') || j.includes('toomuchsol') || j.includes('toolittlesol')) return 'Price moved past slippage — try again.';
+  if (j.includes('insufficient') || j.includes('debit an account')) return 'Not enough SOL for the trade + fees.';
+  if (j.includes('exceeded') && j.includes('compute')) return 'Hit the compute limit — retry.';
+  const ctx = (arr.filter(l => /program log:|error|0x/i.test(l)).pop() || '').replace(/^Program log:\s*/i, '').slice(0, 150);
+  if (ctx) return 'Sim failed → ' + ctx;
+  return fallbackMsg ? ('Sim failed → ' + String(fallbackMsg).slice(0, 160)) : 'Sim failed (no logs returned).';
+}
+async function tradeDecodeBuiltTx(b64, connection) {
+  const txBytes = Buffer.from(b64, 'base64');
+  const tx      = VersionedTransaction.deserialize(txBytes);
+  const message = tx.message;
+  const lookupKeys = (message.addressTableLookups || []).map(l => l.accountKey);
+  const alts = [];
+  if (lookupKeys.length > 0) {
+    const infos = await connection.getMultipleAccountsInfo(lookupKeys);
+    for (let i = 0; i < lookupKeys.length; i++) {
+      if (!infos[i]) continue;
+      alts.push(new AddressLookupTableAccount({ key: lookupKeys[i], state: AddressLookupTableAccount.deserialize(infos[i].data) }));
+    }
+  }
+  const decompiled = TransactionMessage.decompile(message, { addressLookupTableAccounts: alts });
+  return { instructions: decompiled.instructions, alts };
+}
+async function tradeGetPumpRoute({ action, mint, user, amount, decimals, connection }) {
+  const body = { action, mint, user: user.toBase58(), amount: String(amount) };
+  if (decimals != null) body.decimals = Number(decimals);
+  const r = await fetch('/api/pumpfun/trade', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data?.error || ('pump HTTP ' + r.status));
+  if (!data.tx) throw new Error('PumpPortal returned no tx.');
+  const { instructions, alts } = await tradeDecodeBuiltTx(data.tx, connection);
+  return { instructions, alts, pool: data.pool, route: data.route };
+}
+
+// Balances + SOL price + executeSwap, packaged as a hook so TokenSheet stays clean.
+function useTradeEngine() {
+  const walletObj = useWallet();   // adapter wallet — publicKey + signTransaction (same as LaunchRadar)
+  const [solPrice, setSolPrice] = useState(0);
+  const [balances, setBalances] = useState({});
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try { const r = await fetch('/api/dex/sol-price'); if (!r.ok) return; const d = await r.json(); if (!cancelled && d?.price) setSolPrice(d.price); } catch {}
+    };
+    load(); const id = setInterval(load, 30000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+  const refreshSol = useCallback(async () => {
+    if (!walletObj.publicKey) return;
+    try { const lamports = await balRpcRace(c => c.getBalance(walletObj.publicKey, BAL_COMMITMENT)); setBalances(prev => ({ ...prev, [SOL_MINT]: { amount: String(lamports), decimals: 9, uiAmount: lamports / 1e9 } })); } catch {}
+  }, [walletObj.publicKey]);
+  const refreshOneToken = useCallback(async (mintStr) => {
+    if (!walletObj.publicKey || !mintStr || mintStr === SOL_MINT) return;
+    let mintPk; try { mintPk = new PublicKey(mintStr); } catch { return; }
+    try {
+      const accs = await balRpcRace(c => c.getParsedTokenAccountsByOwner(walletObj.publicKey, { mint: mintPk }, BAL_COMMITMENT));
+      let best = null;
+      for (const acc of (accs?.value || [])) {
+        const info = acc.account?.data?.parsed?.info; const amt = info?.tokenAmount?.amount;
+        if (amt == null) continue; const ui = Number(info.tokenAmount?.uiAmount || 0);
+        if (!best || ui > best.uiAmount) best = { amount: String(amt), decimals: Number(info.tokenAmount?.decimals ?? 6), uiAmount: ui };
+      }
+      setBalances(prev => ({ ...prev, [mintStr]: best || { amount: '0', decimals: 6, uiAmount: 0 } }));
+    } catch {}
+  }, [walletObj.publicKey]);
+
+  const executeSwap = useCallback(async ({ mode, swapParams, token }) => {
+    if (!walletObj.publicKey || !walletObj.signTransaction) throw new Error('Please connect a wallet (Phantom, Solflare, Backpack).');
+    if (!swapParams) throw new Error('Nothing to trade.');
+    const isBuy = mode === 'buy';
+    const userPk = walletObj.publicKey;
+    const tradeConnection = getTradeConn('confirmed');
+    const route = await tradeGetPumpRoute({
+      action: isBuy ? 'buy' : 'sell', mint: token.mint, user: userPk,
+      amount: isBuy ? swapParams.tradeLamports : swapParams.tradeTokens,
+      decimals: isBuy ? undefined : swapParams.decimals, connection: tradeConnection,
+    });
+    const feeLamports = BigInt(swapParams.feeLamports || '0');
+    if (feeLamports <= 0n) throw new Error(isBuy ? 'Fee rounds to zero — amount too small.' : 'Could not estimate sell fee — token or SOL price unavailable.');
+    const feeIx = SystemProgram.transfer({ fromPubkey: userPk, toPubkey: FEE_WALLET, lamports: Number(feeLamports) });
+    const CB_PROGRAM = 'ComputeBudget111111111111111111111111111111';
+    const ixs = route.instructions.slice();
+    if (isBuy) { let at = 0; while (at < ixs.length && ixs[at].programId.toBase58() === CB_PROGRAM) at++; ixs.splice(at, 0, feeIx); }
+    else { ixs.push(feeIx); }
+    const latest = await tradeConnection.getLatestBlockhash('confirmed');
+    const message = new TransactionMessage({ payerKey: userPk, recentBlockhash: latest.blockhash, instructions: ixs }).compileToV0Message(route.alts);
+    const tx = new VersionedTransaction(message);
+    let simLogs = null;
+    try {
+      const sim = await tradeConnection.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true, commitment: 'processed' });
+      simLogs = sim?.value?.logs || null;
+      if (sim?.value?.err) throw new Error(tradeDescribeSimLogs(simLogs, JSON.stringify(sim.value.err)));
+    } catch (simErr) {
+      if (simErr instanceof Error && /sim failed/i.test(simErr.message)) throw simErr;
+    }
+    const signed = await walletObj.signTransaction(tx);
+    const raw = signed.serialize();
+    let sig;
+    try { sig = await tradeConnection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 5 }); }
+    catch (sendErr) { let logs = sendErr?.logs || null; if (!logs && typeof sendErr?.getLogs === 'function') { try { logs = await sendErr.getLogs(tradeConnection); } catch {} } throw new Error(tradeDescribeSimLogs(logs, sendErr?.message)); }
+    let confirmed = false, onchainErr = null; const startedAt = Date.now();
+    while (Date.now() - startedAt < 60000) {
+      try { const st = await tradeConnection.getSignatureStatus(sig, { searchTransactionHistory: true }); if (st?.value?.err) { onchainErr = st.value.err; break; } const cs = st?.value?.confirmationStatus; if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; } } catch {}
+      try { const h = await tradeConnection.getBlockHeight('confirmed'); if (h > latest.lastValidBlockHeight) break; } catch {}
+      try { await tradeConnection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }); } catch {}
+      await new Promise(r => setTimeout(r, 2000));
+    }
+    if (onchainErr) throw new Error('Trade failed on-chain — price likely moved past slippage.');
+    setTimeout(() => { refreshSol(); refreshOneToken(token.mint); }, 1500);
+    return { sig, confirmed };
+  }, [walletObj, refreshSol, refreshOneToken]);
+
+  return { solPrice, balances, refreshSol, refreshOneToken, executeSwap, canSign: !!(walletObj.publicKey && walletObj.signTransaction) };
+}
+
+function TokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
   const up = Number.isFinite(token.pct) ? token.pct >= 0 : true;
   const isImg = typeof token.ico === 'string' && /^https?:\/\//.test(token.ico);
+
+  const { solPrice, balances, refreshSol, refreshOneToken, executeSwap, canSign } = useTradeEngine();
+  const [mode, setMode]       = useState('buy');
+  const [amount, setAmount]   = useState('');
+  const [confirming, setConfirming] = useState(false);
+  const [error, setError]     = useState(null);
+  const [done, setDone]       = useState(null);
+
+  useEffect(() => { refreshSol(); refreshOneToken(token.mint); }, [token.mint, refreshSol, refreshOneToken]);
+  useEffect(() => { setAmount(''); setError(null); setDone(null); }, [mode]);
+  useEffect(() => { setError(null); }, [amount]);
+
+  const isBuy   = mode === 'buy';
+  const presets = isBuy ? TRADE_BUY_PRESETS : TRADE_SELL_PRESETS;
+  const solBalance   = balances[SOL_MINT];
+  const tokenBalance = balances[token.mint];
+  const ownedUiAmount = tokenBalance?.uiAmount || 0;
+  const availSol = Math.max(0, (solBalance?.uiAmount || 0) - SOL_RESERVE);
+
+  const swapParams = useMemo(() => {
+    if (!amount) return null;
+    const n = Number(amount);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    if (isBuy) {
+      const totalLamports = BigInt(Math.floor(n * 1e9));
+      if (totalLamports <= 0n) return null;
+      const feeLamports   = (totalLamports * BigInt(FEE_BPS)) / 10000n;
+      const tradeLamports = ((totalLamports - feeLamports) * 100n) / 110n;
+      if (tradeLamports <= 0n || feeLamports <= 0n) return null;
+      return { mode: 'buy', solAmount: n, totalLamports: totalLamports.toString(), tradeLamports: tradeLamports.toString(), feeLamports: feeLamports.toString() };
+    }
+    if (!tokenBalance || !tokenBalance.amount || BigInt(tokenBalance.amount) <= 0n) return null;
+    const pct = Math.min(100, Math.max(0.01, n));
+    const tradeTokens = (BigInt(tokenBalance.amount) * BigInt(Math.floor(pct * 100))) / 10000n;
+    if (tradeTokens <= 0n) return null;
+    const decimals = tokenBalance.decimals || token.decimals || 6;
+    const tradeTokensUi = Number(tradeTokens) / Math.pow(10, decimals);
+    let feeLamports = '0';
+    if (token?.price > 0 && solPrice > 0) {
+      const grossSol = (tradeTokensUi * token.price) / solPrice;
+      const lam = Math.floor(grossSol * (FEE_BPS / 10000) * 1e9);
+      if (lam > 0) feeLamports = String(lam);
+    }
+    return { mode: 'sell', decimals, percentage: pct, tradeTokens: tradeTokens.toString(), tradeTokensUi, feeLamports };
+  }, [amount, isBuy, token, tokenBalance, solPrice]);
+
+  const hasFunds = (() => {
+    if (!amount || Number(amount) <= 0) return false;
+    if (isBuy) return Number(amount) <= availSol;
+    return ownedUiAmount > 0 && (solBalance?.uiAmount || 0) >= 0.003;
+  })();
+  const needsWallet = !canSign;
+  const confirmDisabled = confirming || !swapParams || !hasFunds || !!error;
+
+  const handleConfirm = async () => {
+    if (needsWallet) { if (onConnectWallet) onConnectWallet(); return; }
+    if (!swapParams || confirming) return;
+    setConfirming(true); setError(null);
+    try {
+      const res = await executeSwap({ mode, swapParams, token });
+      setDone({ mode, sig: res.sig });
+      setAmount('');
+    } catch (e) { setError(tradeFriendlyError(e)); }
+    finally { setConfirming(false); }
+  };
+
+  const tabBtn = (m, label) => (
+    <button onClick={() => setMode(m)} style={{
+      flex: 1, padding: '10px 0', borderRadius: 12, border: 'none', cursor: 'pointer',
+      fontFamily: "'Space Grotesk', sans-serif", fontWeight: 800, fontSize: 14,
+      background: mode === m ? (m === 'buy' ? C.green : C.red) : 'transparent',
+      color: mode === m ? '#fff' : C.ink2,
+    }}>{label}</button>
+  );
 
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 600, background: 'rgba(26,27,78,0.45)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }} />
-      <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 601, background: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: '14px 18px 26px', maxWidth: 560, margin: '0 auto', boxShadow: '0 -12px 40px rgba(26,27,78,.18)' }}>
+      <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 601, background: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: '14px 18px 26px', maxWidth: 560, margin: '0 auto', boxShadow: '0 -12px 40px rgba(26,27,78,.18)', maxHeight: '92dvh', overflowY: 'auto' }}>
         <div onClick={onClose} style={{ width: 40, height: 4, background: 'rgba(26,27,78,.18)', borderRadius: 99, margin: '0 auto 18px', cursor: 'pointer' }} />
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <div style={{ width: 44, height: 44, borderRadius: 13, display: 'grid', placeItems: 'center', color: '#fff', fontWeight: 800, fontSize: 17, background: token.grad, backgroundSize: 'cover', backgroundPosition: 'center', flex: '0 0 auto', ...(isImg ? { backgroundImage: `url(${token.ico})` } : {}) }}>{!isImg ? (token.ico || '?') : ''}</div>
@@ -514,11 +791,52 @@ function TokenSheet({ token, onClose, onBuy, onOpenFull }) {
           <div style={{ marginTop: 12, fontFamily: MONO, fontSize: 11, color: C.ink3, letterSpacing: '0.02em' }}>{token.stats}</div>
         )}
 
-        <button onClick={() => onBuy(token.mint)} style={{
-          marginTop: 18, width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: 'pointer',
-          background: 'linear-gradient(135deg,#2f6bff,#1e49c9)', color: '#fff', fontWeight: 800, fontSize: 15,
-          fontFamily: "'Space Grotesk', sans-serif", letterSpacing: '0.01em', boxShadow: '0 8px 22px rgba(47,107,255,.32)',
-        }}>Buy {token.sym} →</button>
+        {/* BUY / SELL */}
+        <div style={{ display: 'flex', gap: 6, marginTop: 16, background: '#f4f4f5', borderRadius: 14, padding: 4 }}>
+          {tabBtn('buy', 'Buy')}
+          {tabBtn('sell', 'Sell')}
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, fontFamily: MONO, fontSize: 11, fontWeight: 700, color: C.ink3 }}>
+          <span>{isBuy ? 'You pay (SOL)' : 'You sell (%)'}</span>
+          <span>{isBuy
+            ? <>Wallet: {tradeFmtSol(solBalance?.uiAmount || 0)} SOL{availSol > 0 && <button onClick={() => setAmount(String(Math.floor(availSol * 10000) / 10000))} style={{ marginLeft: 8, background: C.ink, color: '#fff', border: 'none', borderRadius: 6, padding: '2px 7px', fontSize: 9, fontWeight: 800, cursor: 'pointer', fontFamily: MONO }}>MAX</button>}</>
+            : <>You own: {tradeFmtTokens(ownedUiAmount)} {token.sym}</>}</span>
+        </div>
+
+        <input
+          type="text" inputMode="decimal" placeholder={isBuy ? '0.00' : '0'} value={amount}
+          onChange={(e) => { const v = e.target.value.replace(/[^\d.]/g, ''); if (v.split('.').length > 2) return; if (!isBuy && Number(v) > 100) { setAmount('100'); return; } setAmount(v); }}
+          style={{ width: '100%', marginTop: 8, padding: '14px 16px', borderRadius: 14, border: `1px solid ${C.border}`, fontFamily: MONO, fontSize: 18, fontWeight: 700, color: C.ink, outline: 'none' }}
+        />
+
+        <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+          {presets.map(v => (
+            <button key={v} onClick={() => setAmount(String(v))} style={{
+              flex: 1, padding: '9px 0', borderRadius: 10, cursor: 'pointer',
+              border: `1px solid ${Number(amount) === v ? (isBuy ? C.green : C.red) : C.border}`,
+              background: Number(amount) === v ? (isBuy ? 'rgba(22,192,138,.10)' : 'rgba(240,66,90,.08)') : '#fff',
+              fontFamily: MONO, fontSize: 12, fontWeight: 700, color: C.ink,
+            }}>{isBuy ? v + ' SOL' : v + '%'}</button>
+          ))}
+        </div>
+
+        {error && <div style={{ marginTop: 12, padding: '10px 14px', borderRadius: 12, background: 'rgba(240,66,90,.10)', color: C.red, fontSize: 12, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif" }}>{error}</div>}
+        {done && <div style={{ marginTop: 12, padding: '10px 14px', borderRadius: 12, background: 'rgba(22,192,138,.10)', color: C.green, fontSize: 12, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif" }}>{done.mode === 'buy' ? 'Bought' : 'Sold'} {token.sym} ✓ <a href={`https://solscan.io/tx/${done.sig}`} target="_blank" rel="noopener noreferrer" style={{ color: C.green, textDecoration: 'underline' }}>view</a></div>}
+
+        <button onClick={handleConfirm} disabled={!needsWallet && confirmDisabled} style={{
+          marginTop: 16, width: '100%', padding: 16, borderRadius: 16, border: 'none',
+          cursor: (!needsWallet && confirmDisabled) ? 'not-allowed' : 'pointer',
+          background: needsWallet ? C.ink : (isBuy ? C.green : C.red),
+          opacity: (!needsWallet && confirmDisabled) ? 0.5 : 1,
+          color: '#fff', fontWeight: 800, fontSize: 15, fontFamily: "'Space Grotesk', sans-serif", letterSpacing: '0.01em',
+        }}>
+          {needsWallet ? 'Connect wallet'
+            : confirming ? (isBuy ? 'Buying…' : 'Selling…')
+            : !amount || Number(amount) <= 0 ? (isBuy ? 'Enter SOL amount' : 'Enter percentage')
+            : !hasFunds ? (isBuy ? 'Insufficient SOL' : (ownedUiAmount <= 0 ? `No ${token.sym} to sell` : 'Need ~0.003 SOL for fees'))
+            : (isBuy ? `Buy ${amount} SOL of ${token.sym}` : `Sell ${Math.min(100, Number(amount))}% of ${token.sym}`)}
+        </button>
 
         <button onClick={onOpenFull} style={{
           marginTop: 10, width: '100%', padding: 13, borderRadius: 14, cursor: 'pointer',
@@ -626,6 +944,8 @@ export function LaunchRadarStrip({ onSwitchTab, onOpenToken }) {
               price={fmtUsd(t.price)}
               pct={pct}
               pts={series[t.mint]}
+              mint={t.mint}
+              rawPrice={t.price}
             />
           );
         })}
@@ -671,9 +991,9 @@ function LiveTokenFeeds({ onSwitchTab, onOpenToken }) {
 
   if (!toks.length) return null;
 
-  const radar    = toks.slice(0, 6);
-  const trending = [...toks].sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0)).slice(0, 6);
-  const gainers  = [...toks].filter(t => Number.isFinite(t.change)).sort((a, b) => b.change - a.change).slice(0, 6);
+  const radar    = toks.slice(0, 15);
+  const trending = [...toks].sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0)).slice(0, 15);
+  const gainers  = [...toks].filter(t => Number.isFinite(t.change)).sort((a, b) => b.change - a.change).slice(0, 15);
 
   // live stats
   const totalVol = toks.reduce((s, t) => s + (t.volume24h || 0), 0);
@@ -700,6 +1020,8 @@ function LiveTokenFeeds({ onSwitchTab, onOpenToken }) {
         price={fmtUsd(t.price)}
         pct={pct}
         pts={series[t.mint]}
+        mint={t.mint}
+        rawPrice={t.price}
       />
     );
   };
@@ -850,6 +1172,8 @@ export function XStocksStrip({ onSwitchTab, onOpenToken, onOpenStock }) {
               price={fmtUsd(price)}
               pct={pct}
               pts={pts}
+              mint={b.mint}
+              rawPrice={price}
             />
           );
         })}
@@ -1806,7 +2130,7 @@ function AppInner() {
         <TokenSheet
           token={sheetToken}
           onClose={() => setSheetToken(null)}
-          onBuy={buyToken}
+          onConnectWallet={openWallet}
           onOpenFull={() => { const tb = sheetToken.tab; setSheetToken(null); switchTab(tb); }}
         />
       )}
