@@ -290,7 +290,7 @@ async function detectCountry() {
 // =====================================================================
 // ALL 18 BRAND TOKENS — verified mints, Token-2022 standard (8 decimals)
 // =====================================================================
-const BRANDS = [
+export const BRANDS = [
   // ------ TECH MEGABRANDS ------
   { mint: 'XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB', symbol: 'TSLAx',  name: 'Tesla',                 ticker: 'TSLA',  decimals: 8, sector: 'Tech'   },
   { mint: 'XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp', symbol: 'AAPLx',  name: 'Apple',                 ticker: 'AAPL',  decimals: 8, sector: 'Tech'   },
@@ -363,7 +363,7 @@ async function fetchWithTimeout(url, opts = {}, timeoutMs = 12_000) {
   finally { clearTimeout(id); }
 }
 
-async function fetchBrandPrices(mints) {
+export async function fetchBrandPrices(mints) {
   if (!mints.length) return {};
   try {
     const url = `https://lite-api.jup.ag/price/v3?ids=${mints.join(',')}`;
@@ -727,16 +727,48 @@ const STK_TF_PARAMS = {
   '1Y': { unit: 'day',    agg: 1, limit: 365 },
 };
 
-const stkPoolCache   = new Map(); // mint -> poolAddress | null
+const stkPoolCache   = new Map(); // mint -> poolAddress | null  (in-memory, this session)
 const stkSeriesCache = new Map(); // mint|tf -> pts | null
 
-// gentle global rate limiter for sparkline fetches (GeckoTerminal ~30/min)
-let stkQueue = Promise.resolve();
-function stkThrottle(fn) {
-  const run = stkQueue.then(() => fn());
-  const gap = () => new Promise(r => setTimeout(r, 350));
-  stkQueue = run.then(gap, gap);
-  return run;
+// localStorage-backed cache so charts survive reloads and paint instantly on
+// revisit. Pools are stable (long TTL); series kept briefly fresh. A cached
+// value may legitimately be null ("no pool"/"no data"), so `undefined` == miss.
+const STK_POOL_LS    = 'nx_stk_pool_';
+const STK_SERIES_LS  = 'nx_stk_series_';
+const STK_POOL_TTL   = 24 * 60 * 60 * 1000; // 24h — pool addresses are stable
+const STK_SERIES_TTL = 5 * 60 * 1000;       // 5 min — keep prices fresh-ish
+function stkLsGet(key, ttl) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return undefined;
+    const o = JSON.parse(raw);
+    if (!o || (Date.now() - o.ts) > ttl) { localStorage.removeItem(key); return undefined; }
+    return o.v;
+  } catch { return undefined; }
+}
+function stkLsSet(key, v) {
+  try { localStorage.setItem(key, JSON.stringify({ v, ts: Date.now() })); } catch {}
+}
+
+// Concurrency-limited scheduler: a few fetches in flight at once so visible
+// charts fill fast, while lazy-loading + caching keep us within GeckoTerminal's
+// ~30/min. Replaces the old single-lane 350ms queue; same stkThrottle(fn) API.
+const STK_MAX_CONCURRENT = 4;
+let stkActive = 0;
+const stkWaiters = [];
+export function stkThrottle(fn) {
+  return new Promise((resolve, reject) => {
+    const launch = () => {
+      stkActive++;
+      Promise.resolve().then(fn).then(resolve, reject).finally(() => {
+        stkActive--;
+        const next = stkWaiters.shift();
+        if (next) next();
+      });
+    };
+    if (stkActive < STK_MAX_CONCURRENT) launch();
+    else stkWaiters.push(launch);
+  });
 }
 
 async function stkFetchJson(url, ms = 9000) {
@@ -751,6 +783,8 @@ async function stkFetchJson(url, ms = 9000) {
 
 async function stkResolvePool(mint) {
   if (stkPoolCache.has(mint)) return stkPoolCache.get(mint);
+  const cached = stkLsGet(STK_POOL_LS + mint, STK_POOL_TTL);
+  if (cached !== undefined) { stkPoolCache.set(mint, cached); return cached; }
   let pool = null;
   const gj = await stkFetchJson(`${STK_GT}/networks/solana/tokens/${encodeURIComponent(mint)}/pools`);
   const gp = stkPickGeckoPool(gj?.data, mint);
@@ -761,14 +795,17 @@ async function stkResolvePool(mint) {
     if (dp) pool = dp.pairAddress;
   }
   stkPoolCache.set(mint, pool);
+  stkLsSet(STK_POOL_LS + mint, pool);
   return pool;
 }
 
-async function stkFetchSeries(mint, tf) {
+export async function stkFetchSeries(mint, tf) {
   const key = mint + '|' + tf;
   if (stkSeriesCache.has(key)) return stkSeriesCache.get(key);
+  const cached = stkLsGet(STK_SERIES_LS + key, STK_SERIES_TTL);
+  if (cached !== undefined) { stkSeriesCache.set(key, cached); return cached; }
   const pool = await stkResolvePool(mint);
-  if (!pool) { stkSeriesCache.set(key, null); return null; }
+  if (!pool) { stkSeriesCache.set(key, null); stkLsSet(STK_SERIES_LS + key, null); return null; }
   const p = STK_TF_PARAMS[tf] || STK_TF_PARAMS['1D'];
   const url = `${STK_GT}/networks/solana/pools/${pool}/ohlcv/${p.unit}?aggregate=${p.agg}&limit=${p.limit}&currency=usd`;
   const j = await stkFetchJson(url);
@@ -782,11 +819,12 @@ async function stkFetchSeries(mint, tf) {
     if (pts.length >= 2) out = pts;
   }
   stkSeriesCache.set(key, out);
+  stkLsSet(STK_SERIES_LS + key, out);
   return out;
 }
 
 // SVG line + area from closes, auto-scaled (never zero-based)
-function stkBuildPath(pts, w, h, pad = 2) {
+export function stkBuildPath(pts, w, h, pad = 2) {
   const cs = pts.map(p => p.c);
   let lo = Math.min(...cs), hi = Math.max(...cs);
   if (!(hi > lo)) { const m = lo || 1; hi = m * 1.0005; lo = m * 0.9995; }
