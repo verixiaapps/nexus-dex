@@ -24,7 +24,7 @@ const STOCKS_CSS = `
 .st-page,.st-region-block,.st-sheet,.st-modal-backdrop{
   --ink:#0b0b0c; --ink-2:#86868b; --ink-3:#aeaeb2;
   --pink:#f0425a; --mint:#16c08a; --lav:#7c5cff; --peach:#f5921b;
-  --sky:#2f6bff; --gold:#a67200; --green:#16c08a; --greent:#11b87f; --red:#f0425a;
+  --sky:#2f6bff; --gold:#a67200; --green:#16c08a; --greent:#11b87f; --red:#f0425a; --down:#fb7185;
   --fill:#f4f4f5; --fill-2:#fafafa;
   --glass:#ffffff; --glass-strong:#ffffff;
   --border:#e9e9eb; --hairline:#f1f1f2;
@@ -103,7 +103,16 @@ body.nexus-scroll-locked{overflow:hidden}
 .st-spark-ph{width:54px;height:28px;display:block;border-radius:6px;background:linear-gradient(90deg,var(--fill),var(--fill-2),var(--fill));background-size:200% 100%;animation:st-shimmer 1.4s linear infinite}
 .st-spark-chg{font-size:10.5px;font-weight:800}
 .st-spark-chg.up{color:var(--greent)}
-.st-spark-chg.dn{color:var(--red)}
+.st-sk{background:linear-gradient(100deg,#eef0f2 28%,#f7f8fa 50%,#eef0f2 72%);background-size:200% 100%;animation:stsh 1.15s ease-in-out infinite;border-radius:7px}
+@keyframes stsh{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.st-spark-sk{width:54px;height:18px;display:inline-block}
+.st-chart-sk{position:relative;overflow:hidden;background:#fafbfc}
+.st-chart-sk::after{content:"";position:absolute;inset:0;background:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.6) 50%,transparent 70%);background-size:200% 100%;animation:stsh 1.15s ease-in-out infinite}
+.st-chart-sk-gl{position:absolute;left:0;right:0;height:1px;background:#f0f1f3}
+.st-chart-sk-svg{position:absolute;inset:0;width:100%;height:100%}
+.st-chart-sk-svg path{stroke:#aeaeb2;stroke-width:1.6;fill:none;opacity:.3;animation:stpl 1.3s ease-in-out infinite}
+@keyframes stpl{0%,100%{opacity:.18}50%{opacity:.42}}
+.st-spark-chg.dn{color:var(--down)}
 
 /* muted helpers */
 .st-muted{color:var(--ink-3)}
@@ -384,7 +393,7 @@ export async function fetchBrandPrices(mints) {
 
 // Brand icons via Jupiter token search — mirrors Holdings.jsx pattern.
 // Same /api/jupiter/tokens/search?query=<mints> endpoint as elsewhere.
-async function fetchBrandIcons(mints) {
+export async function fetchBrandIcons(mints) {
   if (!mints.length) return {};
   try {
     const r = await fetchWithTimeout(
@@ -694,28 +703,26 @@ const STK_DS = 'https://api.dexscreener.com/latest/dex';
 // base-token-match + highest USD-liquidity, seeded reduce (mirrors LaunchRadar)
 function stkPickGeckoPool(pools, mint) {
   if (!Array.isArray(pools) || !pools.length) return null;
-  const wanted = ('solana_' + mint).toLowerCase();
-  const baseId  = p => String(p?.relationships?.base_token?.data?.id || '').toLowerCase();
-  const quoteId = p => String(p?.relationships?.quote_token?.data?.id || '').toLowerCase();
+  const wanted  = 'solana_' + mint;                       // EXACT match — Solana base58 is case-sensitive
   const addr    = p => p?.attributes?.address;
-  const baseMatch = pools.filter(p => addr(p) && baseId(p) === wanted);
-  const pool = baseMatch.length ? baseMatch
-    : pools.filter(p => addr(p) && (baseId(p) === wanted || quoteId(p) === wanted));
-  if (!pool.length) return null;
-  return pool.reduce(
-    (best, p) => (Number(p?.attributes?.reserve_in_usd) || 0) > (Number(best?.attributes?.reserve_in_usd) || 0) ? p : best,
-    pool[0],
-  );
+  const baseId  = p => String(p?.relationships?.base_token?.data?.id || '');
+  const quoteId = p => String(p?.relationships?.quote_token?.data?.id || '');
+  const liq     = p => Number(p?.attributes?.reserve_in_usd) || 0;
+  const base = pools.filter(p => addr(p) && baseId(p) === wanted);                    // token is BASE → chart IS this token
+  const any  = pools.filter(p => addr(p) && (baseId(p) === wanted || quoteId(p) === wanted));
+  const set  = base.length ? base : any;                                             // prefer base; else any pool holding it
+  if (!set.length) return null;
+  return set.reduce((best, p) => liq(p) > liq(best) ? p : best, set[0]);             // highest-liquidity pool
 }
 function stkPickPair(pairs, mint) {
   if (!Array.isArray(pairs) || !pairs.length) return null;
-  const wanted = String(mint).toLowerCase();
-  const baseMatch = pairs.filter(p => p && p.chainId === 'solana' && p.pairAddress && p.baseToken?.address?.toLowerCase() === wanted);
-  const pool = baseMatch.length ? baseMatch
-    : pairs.filter(p => p && p.chainId === 'solana' && p.pairAddress &&
-        (p.baseToken?.address?.toLowerCase() === wanted || p.quoteToken?.address?.toLowerCase() === wanted));
-  if (!pool.length) return null;
-  return pool.reduce((best, p) => (Number(p.liquidity?.usd) || 0) > (Number(best.liquidity?.usd) || 0) ? p : best, pool[0]);
+  const ok  = p => p && p.chainId === 'solana' && p.pairAddress;
+  const liq = p => Number(p.liquidity?.usd) || 0;
+  const base = pairs.filter(p => ok(p) && p.baseToken?.address === mint);             // EXACT, case-sensitive
+  const any  = pairs.filter(p => ok(p) && (p.baseToken?.address === mint || p.quoteToken?.address === mint));
+  const set  = base.length ? base : any;
+  if (!set.length) return null;
+  return set.reduce((best, p) => liq(p) > liq(best) ? p : best, set[0]);              // highest-liquidity pair
 }
 
 const STK_TFS = ['1H', '1D', '1W', '1M', '1Y'];
@@ -799,28 +806,34 @@ async function stkResolvePool(mint) {
   return pool;
 }
 
+const stkSeriesInflight = new Map(); // key -> Promise (dedup concurrent fetches of same series)
 export async function stkFetchSeries(mint, tf) {
   const key = mint + '|' + tf;
   if (stkSeriesCache.has(key)) return stkSeriesCache.get(key);
   const cached = stkLsGet(STK_SERIES_LS + key, STK_SERIES_TTL);
   if (cached !== undefined) { stkSeriesCache.set(key, cached); return cached; }
-  const pool = await stkResolvePool(mint);
-  if (!pool) { stkSeriesCache.set(key, null); stkLsSet(STK_SERIES_LS + key, null); return null; }
-  const p = STK_TF_PARAMS[tf] || STK_TF_PARAMS['1D'];
-  const url = `${STK_GT}/networks/solana/pools/${pool}/ohlcv/${p.unit}?aggregate=${p.agg}&limit=${p.limit}&currency=usd`;
-  const j = await stkFetchJson(url);
-  const list = j?.data?.attributes?.ohlcv_list;
-  let out = null;
-  if (Array.isArray(list) && list.length >= 2) {
-    const pts = list
-      .map(r => ({ t: Number(r[0]), c: Number(r[4]) }))
-      .filter(x => Number.isFinite(x.t) && Number.isFinite(x.c) && x.c > 0)
-      .sort((a, b) => a.t - b.t);
-    if (pts.length >= 2) out = pts;
-  }
-  stkSeriesCache.set(key, out);
-  stkLsSet(STK_SERIES_LS + key, out);
-  return out;
+  if (stkSeriesInflight.has(key)) return stkSeriesInflight.get(key);
+  const inflightP = (async () => {
+    const pool = await stkResolvePool(mint);
+    if (!pool) { stkSeriesCache.set(key, null); stkLsSet(STK_SERIES_LS + key, null); return null; }
+    const p = STK_TF_PARAMS[tf] || STK_TF_PARAMS['1D'];
+    const url = `${STK_GT}/networks/solana/pools/${pool}/ohlcv/${p.unit}?aggregate=${p.agg}&limit=${p.limit}&currency=usd`;
+    const j = await stkFetchJson(url);
+    const list = j?.data?.attributes?.ohlcv_list;
+    let out = null;
+    if (Array.isArray(list) && list.length >= 2) {
+      const pts = list
+        .map(r => ({ t: Number(r[0]), c: Number(r[4]) }))
+        .filter(x => Number.isFinite(x.t) && Number.isFinite(x.c) && x.c > 0)
+        .sort((a, b) => a.t - b.t);
+      if (pts.length >= 2) out = pts;
+    }
+    stkSeriesCache.set(key, out);
+    stkLsSet(STK_SERIES_LS + key, out);
+    return out;
+  })();
+  stkSeriesInflight.set(key, inflightP);
+  try { return await inflightP; } finally { stkSeriesInflight.delete(key); }
 }
 
 // SVG line + area from closes, auto-scaled (never zero-based)
@@ -861,9 +874,12 @@ const STK_EMBED_RES = [
 ];
 const STK_EMBED_DEFAULT = '1W'; // 1-week view
 
+const STK_EMBED_LS = 'nx_stk_embed_';                    // localStorage cache for the big chart's pool (24h)
 const stkEmbedPoolCache = new Map(); // mint -> { provider, addr } | null
 async function stkResolveEmbedPool(mint) {
   if (stkEmbedPoolCache.has(mint)) return stkEmbedPoolCache.get(mint);
+  const cached = stkLsGet(STK_EMBED_LS + mint, STK_POOL_TTL);
+  if (cached !== undefined) { stkEmbedPoolCache.set(mint, cached); return cached; }
   let res = null;
   const gj = await stkFetchJson(`${STK_GT}/networks/solana/tokens/${encodeURIComponent(mint)}/pools`);
   const gp = stkPickGeckoPool(gj?.data, mint);
@@ -874,6 +890,7 @@ async function stkResolveEmbedPool(mint) {
     if (dp?.pairAddress) res = { provider: 'DEXSCREENER', addr: dp.pairAddress };
   }
   stkEmbedPoolCache.set(mint, res);
+  stkLsSet(STK_EMBED_LS + mint, res);
   return res;
 }
 
@@ -935,7 +952,12 @@ function StockChart({ mint, price, symbol }) {
           />
         </div>
       ) : status === 'loading' ? (
-        <div className="st-chart-embed st-chart-state"><span className="st-spinner" /></div>
+        <div className="st-chart-embed st-chart-sk">
+          <span className="st-chart-sk-gl" style={{ top: '25%' }} />
+          <span className="st-chart-sk-gl" style={{ top: '50%' }} />
+          <span className="st-chart-sk-gl" style={{ top: '75%' }} />
+          <svg className="st-chart-sk-svg" viewBox="0 0 300 150" preserveAspectRatio="none"><path d="M0 95 L40 88 L80 100 L120 82 L160 92 L200 70 L240 86 L300 64" /></svg>
+        </div>
       ) : status === 'none' ? (
         <div className="st-chart-embed st-chart-state">No chart indexed yet for {symbol || 'this stock'} — it’ll appear once it’s trading on-chain.</div>
       ) : (
@@ -978,7 +1000,7 @@ function StockSparkline({ mint }) {
   const built = series ? stkBuildPath(series, W, H, 2) : null;
   const chg = series ? ((series[series.length - 1].c - series[0].c) / series[0].c) * 100 : null;
   const up = chg == null ? true : chg >= 0;
-  const col = up ? '#11b87f' : '#f0425a';
+  const col = up ? '#11b87f' : '#fb7185';
   const gid = gidRef.current;
 
   return (
@@ -994,7 +1016,7 @@ function StockSparkline({ mint }) {
           <path d={built.area} fill={`url(#${gid})`} />
           <path d={built.line} fill="none" stroke={col} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
-      ) : <span className="st-spark-ph" />}
+      ) : (pts === null ? <span className="st-sk st-spark-sk" /> : <span className="st-spark-ph" />)}
       {chg != null && <span className={'st-spark-chg ' + (up ? 'up' : 'dn')}>{(up ? '+' : '') + chg.toFixed(2) + '%'}</span>}
     </div>
   );
@@ -1055,7 +1077,8 @@ function BrandTile({ brand, icon, price, onClick, idx }) {
   );
 }
 
-function TradeModal({ open, brand, icon, price, onClose, walletPubkey, onConnectWallet }) {
+export function TradeModal({ open, brand, icon, price, onClose, walletPubkey, onConnectWallet }) {
+  useStocksCSS();
   const { signTransaction, connected } = useWallet();
   const wcon = connected;
 
@@ -1504,6 +1527,14 @@ function BrandsInner({ onConnectWallet }) {
       if (alive && Object.keys(result).length > 0) setIcons(result);
     })();
     return () => { alive = false; };
+  }, []);
+
+  // SPARKLINE WARM-UP — kick off every tile's series on mount (parallel, throttled)
+  // so the whole grid fills top-to-bottom immediately instead of each tile waiting
+  // to scroll into view. stkFetchSeries dedups + caches, so the per-tile observer
+  // fetch then resolves instantly from cache.
+  useEffect(() => {
+    BRANDS.forEach(b => { stkThrottle(() => stkFetchSeries(b.mint, '1W')).catch(() => {}); });
   }, []);
 
   const filtered = useMemo(() => {
