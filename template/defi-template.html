@@ -95,7 +95,6 @@ input[type="text"],input[type="number"],input[type="email"],input[type="password
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:rgba(26,27,78,0.18);border-radius:2px}
 
-
 .nx-promo{
   position:sticky;top:0;z-index:60;
   display:block;text-decoration:none;color:#1A1B4E;
@@ -440,6 +439,225 @@ footer.nx-foot .links a{color:inherit;text-decoration:none}
 footer.nx-foot .legal{font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--ink-3);letter-spacing:0.06em;line-height:1.6}
 footer.nx-foot .non-custodial{margin-top:14px;padding:12px 16px;border-radius:14px;background:var(--glass);border:1px solid var(--border);font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--ink-2);letter-spacing:0.06em;line-height:1.6}
 footer.nx-foot .non-custodial b{color:var(--ink);font-weight:800}
+
+/* ============================================================================
+   GMGN-LIGHT REDESIGN  —  layered over the original styles.
+   Re-skins the page chrome to the Verixia app palette (white / near-black ink /
+   blue #2f6bff / green up / red down, JetBrains Mono for data) with GMGN
+   trading-terminal density. Does NOT touch the swap widget (.sw-* / --sw-*) or
+   the is-live / display visibility gates. Comes last in the cascade so it wins
+   on the page-chrome classes by source order.
+   ========================================================================== */
+:root{
+  --ink:#0a0a0a; --ink-2:#6b6b6b; --ink-3:#9a9a9a;
+  --cyan:#2f6bff; --sky:#2f6bff; --lav:#2f6bff;
+  --pink:#f0425a; --peach:#16c08a; --gold:#a67200;
+  --mint:#16c08a; --green:#16c08a; --red:#f0425a; --amber:#a67200;
+  --glass:#ffffff; --glass-strong:#fafafa;
+  --border:#e7e7ea; --border-hi:#0a0a0a; --hairline:#f0f0f2;
+  --blue:#2f6bff; --up:#16c08a; --down:#f0425a;
+  --up-bg:#e7f8f1; --down-bg:#fdeaed; --blue-bg:#eaf1ff;
+  --fill:#f6f6f7; --fill-2:#fafafa;
+  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+body{
+  background:var(--fill-2) !important;
+  background-attachment:scroll !important;
+  color:var(--ink);
+}
+main{max-width:540px;margin:0 auto;background:#fff;
+  border-left:1px solid var(--hairline);border-right:1px solid var(--hairline);
+  padding-left:16px;padding-right:16px}
+.nx-blob{display:none !important}
+
+/* Promo strip */
+.nx-promo{display:flex;align-items:center;justify-content:center;gap:8px;
+  background:#0a0a0a;color:#fff;text-decoration:none;font-size:12.5px;font-weight:500;
+  padding:9px 14px;text-align:center}
+.nx-promo .badge{font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.08em;
+  background:var(--up);color:#06281c;padding:2px 6px;border-radius:5px}
+.nx-promo b{font-weight:700}
+.nx-promo .arr{color:#9bf5cf}
+
+/* Header */
+.nx-header{position:sticky;top:0;z-index:40;background:rgba(255,255,255,.88);
+  backdrop-filter:blur(10px);border-bottom:1px solid var(--hairline)}
+.nx-header-inner{max-width:540px;margin:0 auto;display:flex;align-items:center;
+  justify-content:space-between;padding:11px 16px}
+.nx-logo{display:flex;align-items:center;gap:8px;text-decoration:none;color:var(--ink)}
+.nx-logo-mark{width:28px;height:28px;border-radius:8px;background:var(--blue);color:#fff;
+  display:grid;place-items:center;font-weight:800;font-size:15px}
+.nx-wordmark{font-weight:700;font-size:16px;letter-spacing:-.02em;display:flex;align-items:center;gap:6px}
+.nx-dex-pill{font-family:var(--mono);font-size:10px;font-weight:700;background:var(--ink);color:#fff;
+  padding:2px 6px;border-radius:5px;letter-spacing:.06em}
+.nx-connect{border:none;background:var(--blue);color:#fff;font-family:'Space Grotesk',sans-serif;
+  font-weight:600;font-size:13px;padding:9px 16px;border-radius:9px;cursor:pointer}
+.nx-connect:hover{background:#2457d6}
+
+/* Hero text */
+.nx-hero{padding-top:18px}
+.nx-eyebrow{display:inline-flex;align-items:center;gap:7px;background:var(--fill);
+  border:1px solid var(--border);border-radius:999px;padding:5px 11px;margin-bottom:12px}
+.nx-eyebrow .dot{width:6px;height:6px;border-radius:50%;background:var(--up);
+  box-shadow:0 0 0 3px var(--up-bg);animation:none}
+.nx-eyebrow .txt{font-size:12px;font-weight:600;color:var(--ink-2);max-width:380px}
+.nx-h1{font-family:'Space Grotesk',sans-serif;font-size:clamp(26px,7vw,36px);line-height:1.08;
+  font-weight:700;letter-spacing:-.03em;color:var(--ink);margin-bottom:10px}
+.nx-h1 em,.nx-h1 .grad{font-style:normal;color:var(--blue);-webkit-text-fill-color:initial;background:none}
+.nx-lede{font-size:14.5px;line-height:1.55;color:var(--ink-2);margin-bottom:16px;max-width:48ch}
+.nx-lede b{color:var(--ink);font-weight:700}
+
+/* Token header (price card) */
+.px-card{background:#fff;border:1px solid var(--border);border-radius:14px;
+  padding:14px;box-shadow:none;backdrop-filter:none;margin-bottom:10px}
+.px-top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+.px-l{display:flex;align-items:center;gap:11px;min-width:0}
+.px-ico{width:42px;height:42px;border-radius:11px;background:linear-gradient(135deg,#9945FF,#14F195);
+  color:#fff;display:grid;place-items:center;font-weight:800;font-size:18px;background-size:cover;background-position:center;flex:0 0 auto}
+.px-sym{font-size:19px;font-weight:700;letter-spacing:-.01em;line-height:1.1;color:var(--ink)}
+.px-name{font-size:12px;color:var(--ink-3)}
+.px-r{text-align:right}
+.px-now{font-family:var(--mono);font-size:22px;font-weight:700;letter-spacing:-.01em;color:var(--ink)}
+.px-chg{font-family:var(--mono);font-size:12px;font-weight:600;display:inline-flex;align-items:center;
+  gap:3px;padding:2px 7px;border-radius:6px;margin-top:3px}
+.px-chg.up{color:var(--up);background:var(--up-bg)}
+.px-chg.dn{color:var(--down);background:var(--down-bg)}
+.px-chg.muted{color:var(--ink-3);background:var(--fill)}
+.spark-wrap{position:relative;border-top:1px solid var(--hairline);padding-top:10px}
+.spark{width:100%;height:70px;display:block}
+.spark-meta{font-family:var(--mono);font-size:10px;color:var(--ink-3);position:absolute;left:0;top:10px}
+.spark-meta-r{font-family:var(--mono);font-size:10px;color:var(--ink-3);position:absolute;right:0;top:10px}
+
+/* Stat strip (signature) */
+.px-stats{grid-template-columns:repeat(4,1fr);border:1px solid var(--border);border-radius:12px;
+  overflow:hidden;background:#fff;gap:0;margin-bottom:14px}
+.px-stat{padding:10px 11px;border-right:1px solid var(--hairline);background:#fff}
+.px-stat:nth-child(4n){border-right:none}
+.px-stat-lbl{font-family:var(--mono);font-size:9px;font-weight:600;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--ink-3);margin-bottom:3px}
+.px-stat-val{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--ink)}
+
+/* Trust pill */
+.nx-trust-pill{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
+.nx-trust-pill .lbl{font-family:var(--mono);font-size:10px;font-weight:600;color:var(--ink-2);
+  background:var(--fill);border:1px solid var(--border);border-radius:6px;padding:4px 8px;display:inline-flex;gap:4px}
+.nx-trust-pill .cross{color:var(--up)}
+.nx-trust-pill .sep{display:none}
+
+/* Swap label */
+.nx-swap-label{display:flex;align-items:center;justify-content:space-between;margin:18px 0 8px}
+.nx-swap-label-title{font-size:15px;font-weight:700;letter-spacing:-.01em;color:var(--ink)}
+.nx-swap-label-title em{font-style:normal;color:var(--blue)}
+.nx-live-pill{font-family:var(--mono);font-size:10px;font-weight:600;color:var(--up);
+  display:inline-flex;align-items:center;gap:5px;background:var(--up-bg);border-radius:6px;padding:4px 8px}
+.nx-live-pill .dot{width:6px;height:6px;border-radius:50%;background:var(--up)}
+
+/* Presets */
+.nx-presets{display:flex;gap:6px;margin-bottom:10px}
+.nx-preset{flex:1;font-family:var(--mono);font-size:12px;font-weight:600;color:var(--ink-2);
+  background:var(--fill);border:1px solid var(--border);border-radius:8px;padding:9px;cursor:pointer}
+.nx-preset.is-active{background:var(--blue-bg);color:var(--blue);border-color:var(--blue)}
+
+/* Swap skeleton (loading) */
+.swap-skeleton{border:1px solid var(--border);border-radius:16px;padding:22px;background:#fff;min-height:160px;display:grid;place-items:center}
+.swap-skeleton-msg{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;color:var(--ink-3)}
+.swap-skeleton-msg .dot{width:7px;height:7px;border-radius:50%;background:var(--up)}
+.skel-title{font-weight:700;color:var(--ink)}
+
+/* Bridge link */
+.nx-bridge-link{display:flex;align-items:center;justify-content:center;gap:6px;
+  background:var(--fill);border:1px solid var(--border);border-radius:12px;padding:13px;
+  text-decoration:none;color:var(--ink);font-size:13.5px;margin:12px 0}
+.nx-bridge-link b{font-weight:700}
+.nx-bridge-link .arr{color:var(--blue)}
+
+/* Trust strip */
+.nx-trust-strip{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:8px;
+  font-family:var(--mono);font-size:10px;color:var(--ink-3);letter-spacing:.04em;margin:14px 0}
+.nx-trust-strip b{color:var(--ink-2);font-weight:700}
+.nx-trust-strip .sep{color:var(--ink-3)}
+
+/* Ecosystem */
+.nx-eco-wrap{margin:20px 0}
+.nx-eco-head{display:flex;align-items:center;justify-content:space-between;
+  font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--ink-3);margin-bottom:9px}
+.nx-eco{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}
+.nx-eco-btn{display:flex;flex-direction:column;align-items:center;gap:5px;padding:11px 4px;
+  background:#fff;border:1px solid var(--border);border-radius:11px;text-decoration:none;
+  color:var(--ink);font-size:11px;font-weight:600}
+.nx-eco-btn:hover{border-color:var(--blue)}
+.nx-eco-ic{font-size:17px}
+.nx-eco-lbl{font-size:11px}
+
+/* 50% referral banner (sits above the swap) */
+.nx-refer-stack{margin:16px 0 12px}
+.nx-refer{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  background:linear-gradient(100deg,#0a0a0a,#1c1c22);border-radius:14px;padding:14px 16px;
+  text-decoration:none;color:#fff}
+.nx-refer-tag{font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.1em;
+  color:#9bf5cf;display:block;margin-bottom:4px}
+.nx-refer-l b{font-size:15px;font-weight:700;display:block;line-height:1.2;color:#fff}
+.nx-refer-l b em{font-family:var(--mono);font-style:normal;color:var(--up)}
+.nx-refer-l span span,.nx-refer-l>span{font-size:10px;color:#a7a7b2;letter-spacing:.02em}
+.nx-refer-r{font-family:var(--mono);font-size:13px;font-weight:700;color:#9bf5cf;white-space:nowrap}
+
+/* SEO sections */
+.section{margin:22px 0}
+.section-tag{font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--ink-3);margin-bottom:9px}
+.section-title{font-family:'Space Grotesk',sans-serif;font-size:20px;font-weight:700;
+  letter-spacing:-.02em;color:var(--ink);margin-bottom:12px}
+.section-title .grad{color:var(--blue);-webkit-text-fill-color:initial;background:none}
+.ai-article{padding-top:0}
+.ai-article p{background:#fff;border:1px solid var(--border);border-left:3px solid var(--blue);
+  border-radius:12px;padding:13px 15px;margin-bottom:9px;font-size:13.5px;line-height:1.6;color:var(--ink-2);backdrop-filter:none}
+.ai-article p::before{display:none}
+.ai-article p:nth-child(3n){border-left-color:var(--up)}
+.ai-article p:nth-child(3n+1){border-left-color:var(--blue)}
+.ai-article p b,.ai-article p strong{color:var(--ink);font-weight:700}
+
+/* FAQ (details/summary injected by JS) */
+.faq-item{border:1px solid var(--border);border-radius:11px;padding:0;margin-bottom:8px;background:#fff;overflow:hidden}
+.faq-item summary{list-style:none;cursor:pointer;padding:13px 15px;font-weight:600;font-size:14px;
+  color:var(--ink);display:flex;align-items:center;justify-content:space-between;gap:10px}
+.faq-item summary::-webkit-details-marker{display:none}
+.faq-item .plus{font-family:var(--mono);color:var(--ink-3);font-weight:700}
+.faq-item[open] .plus{transform:rotate(45deg)}
+.faq-a{padding:0 15px 13px;font-size:13px;color:var(--ink-2);line-height:1.55}
+
+/* Related pairs + searches */
+.pair-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;list-style:none;padding:0;margin:0}
+.pair-grid li{list-style:none}
+.pair-grid a{display:block;background:#fff;border:1px solid var(--border);border-radius:11px;
+  padding:13px;text-decoration:none;color:var(--ink);font-family:'Space Grotesk',sans-serif;
+  font-style:normal;font-weight:600;font-size:13.5px;letter-spacing:-.01em;backdrop-filter:none}
+.pair-grid a:hover{border-color:var(--blue);transform:translateY(-1px)}
+.related-links{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:6px}
+.related-links li{list-style:none}
+.related-links a{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;
+  background:#fff;border:1px solid var(--border);border-radius:10px;text-decoration:none;color:var(--ink);
+  font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:13px;backdrop-filter:none}
+.related-links a::after{content:'\2192';color:var(--blue);font-weight:700;margin-left:10px}
+.related-links a:hover{border-color:var(--blue)}
+
+/* Footer */
+.nx-foot{margin-top:26px;padding:20px 16px 40px;border-top:1px solid var(--hairline);text-align:center}
+.nx-foot .lockup{font-size:14px;font-weight:600;color:var(--ink)}
+.nx-foot .lockup em{font-style:normal;color:var(--blue)}
+.nx-foot .links{display:flex;gap:16px;justify-content:center;margin:12px 0}
+.nx-foot .links a{color:var(--ink-2);text-decoration:none;font-size:13px;font-weight:600}
+.nx-foot .links a:hover{color:var(--blue)}
+.nx-foot .non-custodial{font-size:11px;color:var(--ink-3);line-height:1.6}
+.nx-foot .non-custodial b{color:var(--ink-2)}
+.nx-foot .legal{font-family:var(--mono);font-size:9px;letter-spacing:.08em;color:var(--ink-3)}
+
+@media (max-width:380px){
+  .px-stats{grid-template-columns:repeat(2,1fr)}
+  .px-stat:nth-child(2n){border-right:none}
+}
+@media (prefers-reduced-motion:reduce){ *{animation:none !important} }
+
 </style>
 </head>
 <body>
@@ -472,7 +690,6 @@ footer.nx-foot .non-custodial b{color:var(--ink);font-weight:800}
     </div>
     <h1 class="nx-h1">{{STATIC_H1}}</h1>
     <p class="nx-lede"><b>Non-custodial. No KYC.</b> Best price on every Solana token, routed live through Jupiter &mdash; settled in your wallet in seconds.</p>
-
 
     <div class="px-card" id="nx-px-card">
       <div class="px-top">
@@ -510,6 +727,17 @@ footer.nx-foot .non-custodial b{color:var(--ink);font-weight:800}
       <span class="lbl"><span class="cross">&#10005;</span>No Limits</span>
     </div>
   </section>
+
+  <div class="nx-refer-stack">
+    <a class="nx-refer pump-tier" href="https://swap.verixiaapps.com">
+      <span class="nx-refer-l">
+        <span class="nx-refer-tag">PUMP.FUN TIER</span>
+        <b>Earn <em>50%</em> of every pump.fun trade</b>
+        <span>FROM EVERYONE YOU REFER &middot; FOREVER &middot; PAID DAILY IN SOL</span>
+      </span>
+      <span class="nx-refer-r">Join &rarr;</span>
+    </a>
+  </div>
 
   <div class="nx-swap-label">
     <div class="nx-swap-label-title">Swap <em>right here</em></div>
@@ -563,17 +791,6 @@ footer.nx-foot .non-custodial b{color:var(--ink);font-weight:800}
       <a class="nx-eco-btn" href="https://swap.verixiaapps.com"><span class="nx-eco-ic">&#128200;</span><span class="nx-eco-lbl">Markets</span></a>
       <a class="nx-eco-btn" href="https://swap.verixiaapps.com"><span class="nx-eco-ic">&#127919;</span><span class="nx-eco-lbl">Flipsy</span></a>
     </div>
-  </div>
-
-  <div class="nx-refer-stack">
-    <a class="nx-refer pump-tier" href="https://swap.verixiaapps.com">
-      <span class="nx-refer-l">
-        <span class="nx-refer-tag">PUMP.FUN TIER</span>
-        <b>Earn <em>50%</em> of every pump.fun trade</b>
-        <span>FROM EVERYONE YOU REFER &middot; FOREVER &middot; PAID DAILY IN SOL</span>
-      </span>
-      <span class="nx-refer-r">Join &rarr;</span>
-    </a>
   </div>
 
   <section class="section">
@@ -799,6 +1016,7 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
     var FEE_BPS         = 300;
     var SOL_MINT        = 'So11111111111111111111111111111111111111112';
     var USDC_MINT       = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+    var BLUE_CHIPS      = ['DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263','JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN','EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm']; // BONK, JUP, WIF (pinned fallbacks)
     var SLIPPAGE_BPS    = 500;
     var PRIORITY_FEE_MICROLAMPORTS = 50000;
     var SOL_RESERVE     = 0.01;
@@ -820,6 +1038,9 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
     };
     var root, els = {};
     var _subjectRaw = null;
+    var _hasExplicitOutput = false;
+    var _chartIsRandom = false;
+    var _chartTries = 0;
 
     // Formatters
     function fmtAmount(n, decimals) {
@@ -965,8 +1186,58 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       return null;
     }
 
+    // --- Always-show-a-chart: pick a good, liquid Solana token when the page
+    // --- doesn't name one. Quality-filtered so a public page never surfaces junk.
+    function vxShuffle(a){for(var i=a.length-1;i>0;i--){var j=Math.floor(Math.random()*(i+1));var t=a[i];a[i]=a[j];a[j]=t;}return a;}
+    async function fetchBestPairLiquidity(mint){
+      try{
+        var r=await fetch('https://api.dexscreener.com/latest/dex/tokens/'+encodeURIComponent(mint));
+        var d=await r.json();
+        if(d&&Array.isArray(d.pairs)&&d.pairs.length){
+          var ps=d.pairs.filter(function(p){return p.chainId==='solana';}); if(!ps.length)ps=d.pairs;
+          ps.sort(function(a,b){return ((b.liquidity&&b.liquidity.usd)||0)-((a.liquidity&&a.liquidity.usd)||0);});
+          var best=ps[0];
+          return { mint:mint, liq:((best.liquidity&&best.liquidity.usd)||0), symbol:((best.baseToken&&best.baseToken.symbol)||'') };
+        }
+      }catch(e){}
+      return null;
+    }
+    async function pickRandomSolanaToken(exclude){
+      var STABLE={}; STABLE[SOL_MINT]=1; STABLE[USDC_MINT]=1; STABLE['Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB']=1;
+      // 1) Prefer DexScreener-trending tokens that are also Jupiter-swappable.
+      var trending=[];
+      try{
+        var r=await fetch('https://api.dexscreener.com/token-boosts/top/v1');
+        var d=await r.json();
+        if(Array.isArray(d))trending=d.filter(function(t){return t&&t.chainId==='solana'&&t.tokenAddress&&!STABLE[t.tokenAddress]&&tokenBy(t.tokenAddress);}).map(function(t){return t.tokenAddress;});
+      }catch(e){}
+      // 2) Otherwise the loaded Jupiter list (swappable, decimals known).
+      var jup=[]; for(var i=0;i<S.tokens.length;i++){var a=S.tokens[i].address; if(a&&!STABLE[a])jup.push(a);}
+      var pool=trending.length?trending:jup;
+      if(exclude)pool=pool.filter(function(m){return m!==exclude;});
+      vxShuffle(pool);
+      // 3) First one clearing a liquidity bar = a "good" token; uses its highest-liquidity pair.
+      for(var k=0;k<pool.length&&k<12;k++){
+        var info=await fetchBestPairLiquidity(pool[k]);
+        if(info&&info.liq>=50000&&info.symbol&&!/^(SOL|USDC|USDT)$/i.test(info.symbol))return info.mint;
+      }
+      // 4) Last resort: a pinned blue-chip so a chart renders even if both APIs hiccup.
+      var chips=vxShuffle(BLUE_CHIPS.slice()).filter(function(m){return m!==exclude;});
+      for(var b=0;b<chips.length;b++){ if(tokenBy(chips[b])) return chips[b]; }
+      return chips[0]||trending[0]||(jup.length?jup[Math.floor(Math.random()*jup.length)]:USDC_MINT);
+    }
+    async function useRandomChartToken(){
+      if(_hasExplicitOutput) return;                          // respect an explicit per-page output token
+      var h1=document.querySelector('h1');
+      if(h1&&/bridge/i.test(h1.textContent||'')) return;      // bridge pages stay token-less by design
+      try{
+        var mint=await pickRandomSolanaToken();
+        if(mint&&mint!==SOL_MINT&&mint!==USDC_MINT){ _chartIsRandom=true; applyOutputMint(mint); }  // SOL (pay) -> token (receive) + chart
+      }catch(e){ console.warn('[verixia] random chart token failed', e); }
+    }
+
     async function resolveSubjectFromTokens() {
-      if (!_subjectRaw) return;
+      if (!_subjectRaw) { await useRandomChartToken(); return; }
       var raw = _subjectRaw;
       // Mint address? Use directly.
       if (MINT_RE.test(raw)) { applyOutputMint(raw); return; }
@@ -1000,9 +1271,12 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
           if (norm.address && norm.symbol && norm.decimals != null) {
             upsertToken(norm);
             applyOutputMint(norm.address);
+            return;
           }
         }
       } catch (e) { console.warn('[verixia] subject search failed', e); }
+      // subject named but nothing matched -> still show a chart
+      await useRandomChartToken();
     }
 
     function applyOutputMint(mint) {
@@ -1988,6 +2262,20 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       if (!name && tok) name = tok.name;
       if (!icon && tok) icon = tok.logoURI;
 
+      // Retry once with a different token if a RANDOM pick returned no market data
+      // (never swaps away from a page's actual subject token).
+      if (price == null && _chartIsRandom && _chartTries < 2) {
+        _chartTries++;
+        try {
+          var altMint = await pickRandomSolanaToken(mint);
+          if (altMint && altMint !== mint && altMint !== SOL_MINT && altMint !== USDC_MINT) {
+            _chartIsRandom = true;
+            applyOutputMint(altMint);
+            return;
+          }
+        } catch (e) {}
+      }
+
       if (symEl)   symEl.textContent = symbol || '\u2014';
       if (nameEl)  nameEl.textContent = name || '';
       if (priceEl) priceEl.textContent = price != null ? fmtUsd(price) : '\u2014';
@@ -2092,6 +2380,7 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       var dom = root.getAttribute('data-output-mint');
       if (di)  S.inputMint  = di;
       if (dom) S.outputMint = dom;
+      _hasExplicitOutput = !!dom;
 
       buildDom();
       loadTokens();
