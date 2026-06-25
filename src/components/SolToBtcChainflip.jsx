@@ -62,7 +62,7 @@ const STBTC_CSS = `
 @keyframes ax-rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 
 .ax-page{
-  position:relative;min-height:100vh;min-height:100dvh;
+  position:relative;min-height:100dvh;min-height:100dvh;
   max-width:520px;margin:0 auto;width:100%;
   padding:0 0 calc(env(safe-area-inset-bottom) + 80px);
   border-radius:0;overflow-x:hidden;
