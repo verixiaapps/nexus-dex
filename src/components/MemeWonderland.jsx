@@ -2,7 +2,7 @@
 // Sections: Hero · Top Signal · Narratives · Whale Radar · Breaking Out · New Launches · Trending · Live Feed.
    
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { stkFetchSeries, stkBuildPath, stkThrottle } from './Stocks.jsx';
+import { stkFetchSeries, stkBuildPath, stkSmoothPath, stkThrottle } from './Stocks.jsx';
 import { Buffer } from 'buffer';
 import {
   Connection,
@@ -815,15 +815,16 @@ function MwSparkline({ mint, price, change, w = 50, h = 22, full = false }) {
   const pts = (series && series.length >= 2) ? series : obs;
   if (!pts) return null;                       // real data only — nothing until it exists
 
-  const path = stkBuildPath(pts, w, h, 2);
-  const up = pts[pts.length - 1].c >= pts[0].c;
+  const path = stkSmoothPath(pts, w, h, 2);
+  const up = path.up;
   const col = up ? 'var(--green)' : 'var(--down)';
   const id = 'mws' + (up ? 'u' : 'd') + (mint ? String(mint).slice(0, 8) : '');
   return (
-    <svg width={full ? '100%' : w} height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ flex: '0 0 auto', display: 'block' }}>
+    <svg width={full ? '100%' : w} height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ flex: '0 0 auto', display: 'block', overflow: 'visible' }}>
       <defs><linearGradient id={id} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={col} stopOpacity={up ? '0.28' : '0.22'} /><stop offset="1" stopColor={col} stopOpacity="0" /></linearGradient></defs>
       <path d={path.area} fill={`url(#${id})`} />
       <path d={path.line} fill="none" stroke={col} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx={path.lastX.toFixed(2)} cy={path.lastY.toFixed(2)} r="1.7" fill={col} />
     </svg>
   );
 }
