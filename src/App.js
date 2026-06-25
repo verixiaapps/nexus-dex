@@ -261,11 +261,10 @@ function pctFromSeries(pts) {
   return ((b - a) / a) * 100;
 }
 
-// draw-only sparkline (data fetched by the strip so we never double-fetch)
-// Row sparkline — REAL DATA ONLY (mirrors LaunchRadar v9 LrSparkline).
-// Two real sources: OHLCV via the series the feed already fetched (pts), and a
-// live observed-price history recorded from each 5s poll. No synthetic shape —
-// nothing draws until real data exists.
+// draw-only sparkline — smooth curve. Fed by the OHLCV the strip already
+// fetched (pts) or live observed ticks. When the series is thin (a fresh
+// launch with only a couple of points), it draws a gentle eased trend in the
+// real direction instead of a flat 2-point diagonal. Curve via Catmull-Rom.
 const _spkHist = new Map();
 function recordSpark(mint, price) {
   if (!mint || !(price > 0)) return _spkHist.get(mint) || [];
@@ -274,21 +273,57 @@ function recordSpark(mint, price) {
   if (pts[pts.length - 1] !== price) { pts.push(price); if (pts.length > 32) pts.shift(); }
   return pts;
 }
-function Spark({ pts, mint, price, w = 54, h = 24 }) {
+// Thin series → resample into a few eased points so the curve reads as a soft
+// trend, not a straight line. Keeps the real first/last values (true direction).
+function _spkPrep(vals) {
+  if (vals.length >= 6) return vals;
+  const a = vals[0], b = vals[vals.length - 1];
+  const n = 6;
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1);
+    const ease = t * t * (3 - 2 * t);     // smoothstep
+    out.push(a + (b - a) * ease);
+  }
+  return out;
+}
+function _spkSmoothPath(vals, w, h, pad) {
+  const n = vals.length;
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (!(hi > lo)) { const m = lo || 1; hi = m * 1.001; lo = m * 0.999; }
+  const x = i => pad + (i / (n - 1)) * (w - pad * 2);
+  const y = v => pad + (1 - (v - lo) / (hi - lo)) * (h - pad * 2);
+  const P = vals.map((v, i) => ({ x: x(i), y: y(v) }));
+  let d = `M${P[0].x.toFixed(2)},${P[0].y.toFixed(2)}`;
+  for (let i = 0; i < n - 1; i++) {
+    const p0 = P[i - 1] || P[i], p1 = P[i], p2 = P[i + 1], p3 = P[i + 2] || P[i + 1];
+    const c1x = p1.x + (p2.x - p0.x) / 6, c1y = p1.y + (p2.y - p0.y) / 6;
+    const c2x = p2.x - (p3.x - p1.x) / 6, c2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C${c1x.toFixed(2)},${c1y.toFixed(2)} ${c2x.toFixed(2)},${c2y.toFixed(2)} ${p2.x.toFixed(2)},${p2.y.toFixed(2)}`;
+  }
+  return { line: d, area: d + ` L${P[n - 1].x.toFixed(2)},${h} L${P[0].x.toFixed(2)},${h} Z`, lastX: P[n - 1].x, lastY: P[n - 1].y };
+}
+function Spark({ pts, mint, price, w = 60, h = 30 }) {
   const hist = recordSpark(mint, Number(price));
   const obs  = hist.length >= 2 ? hist.map(c => ({ c })) : null;
   const use  = (pts && pts.length >= 2) ? pts : obs;   // prefer OHLCV, else observed ticks
-  const path = use ? stkBuildPath(use, w, h, 2) : null;
-  const up   = use ? use[use.length - 1].c >= use[0].c : true;
-  const col  = up ? C.green : C.lav;
+  if (!use) return <svg width={w} height={h} style={{ display: 'block', flex: '0 0 auto' }} />;
+  const vals = _spkPrep(use.map(p => p.c));
+  const up   = vals[vals.length - 1] >= vals[0];
+  const col  = up ? C.green : C.down;
+  const path = _spkSmoothPath(vals, w, h, 3);
+  const gid  = 'spk' + (mint ? String(mint).slice(0, 6) : '') + (up ? 'u' : 'd');
   return (
-    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: 'block', flex: '0 0 auto' }}>
-      {path && (
-        <>
-          <path d={path.area} fill={up ? 'rgba(22,192,138,.12)' : 'rgba(124,92,255,.13)'} />
-          <path d={path.line} fill="none" stroke={col} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-        </>
-      )}
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: 'block', flex: '0 0 auto', overflow: 'visible' }}>
+      <defs>
+        <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor={col} stopOpacity="0.20" />
+          <stop offset="1" stopColor={col} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <path d={path.area} fill={`url(#${gid})`} />
+      <path d={path.line} fill="none" stroke={col} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx={path.lastX.toFixed(2)} cy={path.lastY.toFixed(2)} r="1.9" fill={col} />
     </svg>
   );
 }
@@ -324,7 +359,7 @@ function Row({ onClick, last, ico, grad, sym, tag, sub, price, pct, pts, mint, r
   const isImg = typeof ico === 'string' && /^https?:\/\//.test(ico);
   return (
     <button onClick={onClick} style={{
-      display: 'flex', alignItems: 'center', gap: 11, padding: '12px 14px', width: '100%',
+      display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', width: '100%',
       background: 'transparent', border: 'none', borderBottom: last ? 'none' : `1px solid ${C.hairline}`,
       cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
     }}>
@@ -341,10 +376,21 @@ function Row({ onClick, last, ico, grad, sym, tag, sub, price, pct, pts, mint, r
         <div style={{ fontSize: 11, color: C.ink3, fontWeight: 500, marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sub}</div>
       </div>
       <Spark pts={pts} mint={mint} price={rawPrice} />
-      <div style={{ textAlign: 'right', flex: '0 0 auto', minWidth: 74 }}>
+      <div style={{ textAlign: 'right', flex: '0 0 auto', minWidth: 62 }}>
         <div style={{ fontFamily: MONO, fontSize: 13, fontWeight: 700, color: C.ink }}>{price}</div>
         <div style={{ fontFamily: MONO, fontSize: 11, fontWeight: 700, marginTop: 1, color: up ? C.green : C.lav }}>{fmtPct(pct)}</div>
       </div>
+      <span
+        role="button"
+        tabIndex={0}
+        onClick={(e) => { e.stopPropagation(); onClick && onClick(); }}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); onClick && onClick(); } }}
+        style={{
+          flex: '0 0 auto', border: 'none', borderRadius: 9, background: C.green, color: '#fff',
+          fontFamily: 'inherit', fontWeight: 800, fontSize: 11, letterSpacing: '0.02em',
+          padding: '9px 12px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center',
+        }}
+      >Buy</span>
     </button>
   );
 }
@@ -958,7 +1004,7 @@ export function LaunchRadarStrip({ onSwitchTab, onOpenToken }) {
 // + Gainers + the stats strip (so we don't triple-poll the same endpoint).
 // Radar = freshest (feed order), Trending = highest 24h volume, Gainers =
 // biggest 24h % move. Each row reuses the shared Row (real OHLCV only).
-function LiveTokenFeeds({ onSwitchTab, onOpenToken }) {
+function LiveTokenFeeds({ onSwitchTab, onOpenToken, onConnectWallet }) {
   const [toks, setToks] = useState([]);
   const [series, setSeries] = useState({});
   const fetched = useRef({});
@@ -2026,7 +2072,7 @@ function AppInner() {
         {tab === 'swap' && (
           <>
             <SwapHero />
-            <LiveTokenFeeds onSwitchTab={switchTab} onOpenToken={openToken} />
+            <LiveTokenFeeds onSwitchTab={switchTab} onOpenToken={openToken} onConnectWallet={openWallet} />
             <SwapLabel />
             <div ref={swapWidgetRef}>
               <SwapWidget key={swapOutputMint || 'default'} defaultOutputMint={swapOutputMint || undefined} {...sharedProps} />
