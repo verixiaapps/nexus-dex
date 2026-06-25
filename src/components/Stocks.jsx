@@ -753,7 +753,7 @@ function stkLsSet(key, v) {
 // Concurrency-limited scheduler: a few fetches in flight at once so visible
 // charts fill fast, while lazy-loading + caching keep us within GeckoTerminal's
 // ~30/min. Replaces the old single-lane 350ms queue; same stkThrottle(fn) API.
-const STK_MAX_CONCURRENT = 4;
+const STK_MAX_CONCURRENT = 6;
 let stkActive = 0;
 const stkWaiters = [];
 export function stkThrottle(fn) {
