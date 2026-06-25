@@ -21,6 +21,7 @@
 //          no unwrap step.
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { stkFetchSeries, stkBuildPath, stkThrottle } from './Stocks.jsx';
 import { Buffer } from 'buffer';
 import {
   Connection,
@@ -1318,6 +1319,45 @@ function TradeModal({
 /* ════════════════════════════════════════════════════════════════════
    LAUNCH CARD
    ════════════════════════════════════════════════════════════════════ */
+// Card sparkline — REAL DATA ONLY (mirrors MemeWonderland). Sources: OHLCV via
+// stkFetchSeries (contract-matched, highest-liquidity, cached + throttled) and
+// the live observed price the feed polls. No synthetic fallback — nothing draws
+// until real data exists.
+const _lrSparkHist = new Map();
+function lrRecordSpark(mint, price) {
+  if (!mint || !(price > 0)) return _lrSparkHist.get(mint) || [];
+  let pts = _lrSparkHist.get(mint);
+  if (!pts) { pts = []; _lrSparkHist.set(mint, pts); }
+  if (pts[pts.length - 1] !== price) { pts.push(price); if (pts.length > 32) pts.shift(); }
+  return pts;
+}
+function LrSparkline({ mint, price, w = 280, h = 40, full = true }) {
+  const [series, setSeries] = useState(null);
+  useEffect(() => {
+    if (!mint) return;
+    let cancelled = false;
+    stkThrottle(() => stkFetchSeries(mint, '1D'))
+      .then(s => { if (!cancelled && Array.isArray(s) && s.length >= 2) setSeries(s); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [mint]);
+  const hist = lrRecordSpark(mint, Number(price));
+  const obs = hist.length >= 2 ? hist.map(c => ({ c })) : null;
+  const pts = (series && series.length >= 2) ? series : obs;
+  if (!pts) return null;
+  const path = stkBuildPath(pts, w, h, 2);
+  const up = pts[pts.length - 1].c >= pts[0].c;
+  const col = up ? 'var(--green)' : 'var(--red)';
+  const id = 'lrs' + (up ? 'u' : 'd') + (mint ? String(mint).slice(0, 8) : '');
+  return (
+    <svg width={full ? '100%' : w} height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: 'block', marginTop: 10 }}>
+      <defs><linearGradient id={id} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={col} stopOpacity={up ? '0.28' : '0.22'} /><stop offset="1" stopColor={col} stopOpacity="0" /></linearGradient></defs>
+      <path d={path.area} fill={`url(#${id})`} />
+      <path d={path.line} fill="none" stroke={col} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function LaunchCard({ token, owned, onBuy, onSell, isFresh, tintIndex = 0 }) {
   const signals = useMemo(() => deriveSignalBadges(token), [token]);
   const risk    = useMemo(() => deriveRiskBadge(token), [token]);
@@ -1350,6 +1390,8 @@ function LaunchCard({ token, owned, onBuy, onSell, isFresh, tintIndex = 0 }) {
           ) : null}
         </div>
       </div>
+
+      <LrSparkline mint={token.mint} price={token.price} />
 
       <div className="lr-metrics">
         <div className="lr-metric"><div className="lr-metric-l">Liq</div>
