@@ -20,7 +20,7 @@ import ReferralsPage       from './components/ReferralsPage.jsx';
 import WhyNexus            from './components/WhyNexus.jsx';
 import AdminPage           from './components/AdminPage.jsx';
 import BuySolana          from './components/BuySolana.jsx';
-
+ 
 // =====================================================================
 // Wonderland-light design tokens
 // =====================================================================
