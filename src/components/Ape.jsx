@@ -1,16 +1,21 @@
 // Ape.jsx — Nexus DEX · Ape (early-launch trading terminal)
 //
-// Single-file build. Combines the React surface, the CSS, and the heavy
-// auxiliary panels (StatsPanel + AutoPanel + useAutoTrade) that were
-// temporarily split out during the rewrite.
+// Fully self-contained single-file build. The React surface, the CSS, the
+// heavy auxiliary panels (StatsPanel + AutoPanel + useAutoTrade), AND the
+// former ./ape-helpers logic (executeSwap, formatters, riskRead, vibe-check,
+// trade-param builders, share intents, RPC layer) are all inlined below — no
+// local module imports. The only externals are npm packages
+// (react / bs58 / @solana/*) and the same backend API routes as before.
 //
 // Pastel Wonderland-light palette throughout (matches /referrals + /why).
 // Strips the old "specimen / wild / wonderland//radar" jargon. Fixes the
-// open-positions flash bug. Simplifies the nav to two plain-text buttons
-// ("Auto-trade" and "Referrals").
+// open-positions flash bug.
 //
-// Trading helpers (executeSwap, formatters, riskRead, share intents)
-// come from ./ape-helpers — that file is unchanged.
+// DETAIL CHART: the token sheet now embeds a live candlestick iframe
+// (GeckoTerminal primary, DexScreener fallback) instead of drawing SVG
+// candles from /api/dex/candles. It resolves the mint to its deepest pool
+// and defaults to the 1-second resolution so the chart is live and moving
+// the moment the sheet opens. See TokenChart / CHART_RES below.
 //
 // Wallet model: local burner keypair, signs locally, never leaves the
 // device. mainWalletPubkey (from App.js) drives referral attribution; the
@@ -29,25 +34,623 @@
 //      mcap, liq, change, holders, ageMs bucket, owned amount, busy,
 //      ownedMode, isFresh).
 
-import {
-  executeSwap as apeExecuteSwap,
-  format, formatMoney, formatPrice, formatPct, formatSol, formatSolSigned,
-  formatUsdAbs, formatTokens, fmtAgeShort,
-  lamportsToSol, truncWallet,
-  RISK_CEIL, riskRead, normalize,
-  friendlyError, colorFor, shade,
-  buildBuyParams, buildSellParams,
-  shareUrlPath, openTwitterShare, inviteUrl, openTelegram, openDiscord, buildTweetText, buildShareUrl,
-  refRegister,
-  SOL_MINT, FEE_BPS, SOL_RESERVE,
-  DEFAULT_BUY_PRESETS, DEFAULT_SELL_PRESETS,
-  BAL_COMMITMENT, getConn, getTradeConn, balRpcRace,
-} from './ape-helpers';
-
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { Buffer } from 'buffer';
 import bs58 from 'bs58';
-import { PublicKey, Keypair, VersionedTransaction, TransactionMessage, SystemProgram } from '@solana/web3.js';
+import {
+  Connection,
+  PublicKey, Keypair, VersionedTransaction, TransactionMessage, SystemProgram,
+  AddressLookupTableAccount,
+} from '@solana/web3.js';
 import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
+
+/* ============================================================
+   INLINED HELPERS (formerly ./ape-helpers.js) — page is now self-contained.
+   Pure logic, formatters, vibe-check, trade builders, share intents, the
+   RPC layer, and the buy/sell hot path (executeSwap -> apeExecuteSwap).
+   ============================================================ */
+/* ============================================================
+   CONFIG
+   ============================================================ */
+const SOL_MINT   = 'So11111111111111111111111111111111111111112';
+const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
+const FEE_BPS    = 300;
+const SOL_RESERVE = 0.01;
+
+const DEFAULT_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
+const DEFAULT_SELL_PRESETS = [25, 50, 100];
+
+/* ============================================================
+   RPC CONNECTION LAYER
+   /api/solana-rpc — Alchemy only. Every background read: balances, token
+   accounts, prices, positions, debug, and withdraw tx submission.
+   /api/trade-rpc  — Alchemy primary, Ankr fallback. ONLY the buy/sell
+   critical path inside executeSwap. The only place Ankr is exercised.
+   ============================================================ */
+const RPC_URL = (typeof window !== 'undefined' && window.location)
+  ? window.location.origin + '/api/solana-rpc'
+  : 'http://localhost:3001/api/solana-rpc';
+
+const TRADE_RPC_URL = (typeof window !== 'undefined' && window.location)
+  ? window.location.origin + '/api/trade-rpc'
+  : 'http://localhost:3001/api/trade-rpc';
+
+const BAL_COMMITMENT = 'processed';
+
+const _connCache = new Map();
+const getConn = (commitment) => {
+  let c = _connCache.get(commitment);
+  if (!c) { c = new Connection(RPC_URL, commitment); _connCache.set(commitment, c); }
+  return c;
+};
+const _tradeConnCache = new Map();
+const getTradeConn = (commitment) => {
+  let c = _tradeConnCache.get(commitment);
+  if (!c) { c = new Connection(TRADE_RPC_URL, commitment); _tradeConnCache.set(commitment, c); }
+  return c;
+};
+const balRpcRace = (op) => op(getConn(BAL_COMMITMENT));
+
+/* ============================================================
+   FORMATTERS
+   ============================================================ */
+function format(n) {
+  if (!Number.isFinite(n)) return '0';
+  if (n >= 1e9) return (n/1e9).toFixed(2)+'B';
+  if (n >= 1e6) return (n/1e6).toFixed(2)+'M';
+  if (n >= 1e3) return Math.round(n).toLocaleString();
+  if (n >= 1) return n.toFixed(2);
+  return n.toPrecision(3);
+}
+function formatMoney(n) {
+  if (!Number.isFinite(n) || n <= 0) return '—';
+  if (n >= 1e9) return '$'+(n/1e9).toFixed(2)+'B';
+  if (n >= 1e6) return '$'+(n/1e6).toFixed(2)+'M';
+  if (n >= 1e3) return '$'+(n/1e3).toFixed(1)+'K';
+  if (n >= 1) return '$'+n.toFixed(2);
+  return '$'+n.toPrecision(2);
+}
+function formatPrice(p) {
+  if (!Number.isFinite(p) || p <= 0) return '—';
+  if (p >= 1) return '$'+p.toFixed(4);
+  if (p >= 0.01) return '$'+p.toFixed(5);
+  if (p >= 0.0001) return '$'+p.toFixed(6);
+  if (p >= 0.00000001) return '$'+p.toFixed(9);
+  return '$'+p.toExponential(2);
+}
+function formatPct(p) { if (!Number.isFinite(p)) return '0%'; return (p>=0?'+':'')+p.toFixed(p<10&&p>-10?2:1)+'%'; }
+function formatSol(n) {
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  if (n >= 1000) return n.toFixed(0);
+  if (n >= 1) return n.toFixed(3);
+  if (n >= 0.001) return n.toFixed(4);
+  return n.toFixed(6);
+}
+function formatSolSigned(n) {
+  if (!Number.isFinite(n) || n === 0) return '0';
+  return (n >= 0 ? '+' : '-') + formatSol(Math.abs(n));
+}
+function formatUsdAbs(n) {
+  if (!Number.isFinite(n) || n === 0) return '$0';
+  const abs = Math.abs(n); const s = n < 0 ? '-' : '';
+  if (abs >= 1e6) return s + '$' + (abs/1e6).toFixed(2) + 'M';
+  if (abs >= 1e3) return s + '$' + (abs/1e3).toFixed(1) + 'K';
+  if (abs >= 1)   return s + '$' + abs.toFixed(2);
+  return s + '$' + abs.toPrecision(2);
+}
+function formatTokens(n) {
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  if (n >= 1e9) return (n/1e9).toFixed(2)+'B';
+  if (n >= 1e6) return (n/1e6).toFixed(2)+'M';
+  if (n >= 1e3) return Math.round(n).toLocaleString();
+  if (n >= 1) return n.toFixed(2);
+  return n.toPrecision(3);
+}
+function fmtAgeShort(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  if (ms < 60000) return Math.max(1, Math.floor(ms/1000))+'s';
+  if (ms < 3600000) {
+    const m = Math.floor(ms/60000), s = Math.floor((ms%60000)/1000);
+    return s > 0 && m < 10 ? (m+'m '+s+'s') : (m+'m');
+  }
+  const h = ms/3600000; if (h < 24) return Math.round(h)+'h';
+  return Math.round(h/24)+'d';
+}
+function ageClass(ms) {
+  if (!Number.isFinite(ms)) return 'wr-age old';
+  if (ms < 30000) return 'wr-age';
+  if (ms < 180000) return 'wr-age med';
+  return 'wr-age old';
+}
+function mobAgeClass(ms) {
+  if (!Number.isFinite(ms)) return 'mob-age old';
+  if (ms < 30000) return 'mob-age';
+  if (ms < 180000) return 'mob-age med';
+  return 'mob-age old';
+}
+const lamportsToSol = (l) => Number(l || 0) / 1e9;
+const truncWallet = (w) => w ? w.slice(0,4) + '…' + w.slice(-4) : '';
+
+/* ============================================================
+   VIBE CHECK
+   ============================================================ */
+const RISK_CEIL = 85;
+function riskRead(t) {
+  if (!t) return { score: 0, verdict: 'Unknown', tier: 'high', label: 'Wild', knowns: [], unknowns: [] };
+  const liq = t.liquidity || 0, mcap = t.mcap || 0, hold = t.holders || 0, vol = t.volume24h || 0;
+  // Age in minutes. Tokens from normalize() carry pairCreatedAtMs (not ageMs);
+  // accept either so the age component of the score actually contributes.
+  const _ageMs = Number.isFinite(t.ageMs) ? t.ageMs
+               : (Number.isFinite(t.pairCreatedAtMs) ? Date.now() - t.pairCreatedAtMs : NaN);
+  const ageMin = Number.isFinite(_ageMs) ? _ageMs / 60000 : Infinity;
+  const dataPoints = (liq > 0 ? 1 : 0) + (hold > 0 ? 1 : 0) + (vol > 0 ? 1 : 0) + (mcap > 0 ? 1 : 0);
+  const tooThin = dataPoints <= 1;
+  let s = 0;
+  s += Math.min(26, Math.log10(Math.max(liq, 1)) * 5.6);
+  let liqRatio = null;
+  if (mcap > 0 && liq > 0) { liqRatio = liq / mcap; s += liqRatio >= 0.15 ? 22 : liqRatio >= 0.08 ? 16 : liqRatio >= 0.03 ? 9 : liqRatio >= 0.01 ? 4 : 0; }
+  s += Math.min(16, Math.log10(Math.max(hold, 1)) * 5.3);
+  if (hold >= 50 && mcap > 0) { const perHolder = mcap / hold; s += perHolder < 500 ? 6 : perHolder < 2000 ? 3 : 0; }
+  if (liq > 0) { const turn = vol / liq; s += (turn >= 0.1 && turn <= 4) ? 12 : (turn > 4 && turn <= 12) ? 6 : turn > 0 ? 3 : 0; }
+  s += ageMin >= 30 ? 8 : ageMin >= 10 ? 5 : ageMin >= 3 ? 2 : 0;
+  if (t.bond != null) s += (t.bond >= 20 && t.bond <= 90) ? 6 : 3;
+  let score = Math.round(Math.max(3, Math.min(RISK_CEIL, s)));
+  if (tooThin) score = Math.min(score, 28);
+  const knowns = [];
+  knowns.push(liq >= 30000 ? ['ok', '✓ Liq ' + formatMoney(liq)] : liq >= 5000 ? ['cau', 'Liq ' + formatMoney(liq)] : ['bad', 'Thin liq ' + formatMoney(liq || 0)]);
+  knowns.push(hold >= 500 ? ['ok', '✓ ' + format(hold) + ' holders'] : hold >= 100 ? ['cau', format(hold) + ' holders'] : ['bad', (hold || 0) + ' holders']);
+  if (liqRatio != null) knowns.push(liqRatio >= 0.08 ? ['ok', '✓ Liq ' + (liqRatio * 100).toFixed(0) + '% of mcap'] : ['bad', 'Liq only ' + (liqRatio * 100).toFixed(1) + '% of mcap']);
+  const unknowns = ['LP lock duration', 'dev wallet plans', 'mint/freeze authority', 'bundled buys'];
+  let verdict, tier, label;
+  if (tooThin) { verdict = 'Too fresh to read'; tier = 'med'; label = 'Mixed'; }
+  else if (score >= 60) { verdict = 'Looks steady — still risky'; tier = 'low'; label = 'Steady'; }
+  else if (score >= 38) { verdict = 'Mixed signals'; tier = 'med'; label = 'Mixed'; }
+  else { verdict = 'High risk'; tier = 'high'; label = 'Wild'; }
+  return { score, verdict, tier, label, knowns, unknowns };
+}
+
+function normalize(t) {
+  const rawMint = t && t.mint;
+  if (!rawMint || typeof rawMint !== 'string' || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(rawMint)) return null;
+  const createdAtMs = t.pairCreatedAt ? new Date(t.pairCreatedAt).getTime() : null;
+  let bond = Number(t.bondingProgress != null ? t.bondingProgress : (t.curveProgress != null ? t.curveProgress : NaN));
+  bond = Number.isFinite(bond) ? Math.max(0, Math.min(100, bond)) : null;
+  return {
+    mint: rawMint, sym: t.sym || '???', name: t.name || t.sym || 'Unknown',
+    icon: t.icon || null,
+    price: Number(t.price || 0), change: Number(t.priceChange24h || 0),
+    pairCreatedAtMs: createdAtMs,
+    mcap: Number(t.mcap || t.fdv || 0), volume24h: Number(t.volume24h || 0),
+    holders: Number(t.holders || 0), liquidity: Number(t.liquidity || 0),
+    decimals: Number(t.decimals != null ? t.decimals : 6), pumpPool: t.pumpPool || 'auto',
+    bond, dex: t.dexId || (t.pumpPool ? 'pump.fun' : null), source: 'dexscreener',
+  };
+}
+
+/* ============================================================
+   ERROR MAPPERS
+   ============================================================ */
+const friendlyError = (err) => {
+  const m = String((err && err.message) || err || '').toLowerCase();
+  if (m.includes('user reject') || m.includes('cancelled')) return 'Cancelled.';
+  if (m.includes('graduat')) return 'Token graduated off the bonding curve — not tradable here.';
+  if (m.includes('not a pump') || m.includes('not indexed')) return 'Not a pump.fun bonding-curve token.';
+  if (m.includes('slippage')) return 'Price moved past slippage — try again.';
+  if (m.includes('insufficient') || m.includes('debit an account')) return 'Not enough SOL for this trade + fees.';
+  if (m.includes('blockhash') || m.includes('expired')) return 'Tx expired — retry.';
+  if (m.includes("didn't confirm") || m.includes('not confirm')) return "Sent but didn't confirm — check Solscan before retrying.";
+  if (m.includes('simulation failed')) return 'Trade would fail right now — price likely moved.';
+  if (m.includes('incorrectprogramid')) return 'Pump SDK fee-config stale — try again.';
+  if (m.includes('rate')) return 'Rate limited — try again.';
+  return (err && err.message ? err.message.slice(0, 200) : 'Trade failed.');
+};
+function describeSimLogs(logs, fallbackMsg) {
+  const arr = Array.isArray(logs) ? logs : [];
+  const j = arr.join('\n').toLowerCase();
+  if (j.includes('slippage') || j.includes('toomuchsol') || j.includes('toolittlesol')) return 'Price moved past slippage — try again.';
+  if (j.includes('insufficient') || j.includes('debit an account')) return 'Not enough SOL for the trade + fees.';
+  if (j.includes('exceeded') && j.includes('compute')) return 'Hit the compute limit — retry.';
+  const ctx = (arr.filter(l => /program log:|error|0x/i.test(l)).pop() || '').replace(/^Program log:\s*/i, '').slice(0, 150);
+  if (ctx) return 'Sim failed -> ' + ctx;
+  return fallbackMsg ? ('Sim failed -> ' + String(fallbackMsg).slice(0, 160)) : 'Sim failed (no logs).';
+}
+
+// Decode a Solana transaction error object (st.value.err) into plain language.
+// The object is usually { InstructionError: [i, { Custom: <code> }] } or a bare
+// string. Pump.fun's bonding-curve program throws a handful of custom codes;
+// the most common buy failures are slippage and graduated/complete curves.
+function describeOnChainErr(err) {
+  if (err == null) return 'On-chain error.';
+  if (typeof err === 'string') {
+    const s = err.toLowerCase();
+    if (s.includes('slippage')) return 'Slippage exceeded — price moved before it landed.';
+    if (s.includes('insufficient')) return 'Not enough SOL for the trade + fees.';
+    return 'On-chain error: ' + err.slice(0, 100);
+  }
+  try {
+    const ie = err.InstructionError;
+    if (Array.isArray(ie) && ie[1] && typeof ie[1] === 'object' && 'Custom' in ie[1]) {
+      const code = ie[1].Custom;
+      // Common pump.fun bonding-curve custom error codes.
+      const map = {
+        6000: 'Token not on a bonding curve (may have graduated).',
+        6001: 'Slippage exceeded — price moved before it landed.',
+        6002: 'Bonding curve complete — token graduated, trade on a DEX instead.',
+        6003: 'Trade too small for this curve.',
+        6004: 'Not enough SOL for the trade + fees.',
+      };
+      return map[code] || ('On-chain error (pump code ' + code + ') — token may have graduated or moved.');
+    }
+    if (Array.isArray(ie) && typeof ie[1] === 'string') {
+      const s = ie[1].toLowerCase();
+      if (s.includes('insufficient')) return 'Not enough SOL for the trade + fees.';
+      return 'On-chain error: ' + ie[1];
+    }
+  } catch (e) {}
+  return 'On-chain error: ' + JSON.stringify(err).slice(0, 100);
+}
+
+/* ============================================================
+   COLOR
+   ============================================================ */
+function colorFor(mint) {
+  const palette = ['#a855f7','#f472b6','#fb923c','#60a5fa','#22d3ee','#facc15','#16a34a','#ec4899','#0ea5e9','#fda4af','#f59e0b','#9333ea','#84cc16','#06b6d4','#dc2626'];
+  let h = 0;
+  for (let i = 0; i < mint.length; i++) h = (h * 31 + mint.charCodeAt(i)) | 0;
+  return palette[Math.abs(h) % palette.length];
+}
+function shade(hex, p) {
+  const f = parseInt(hex.slice(1), 16); const t = p < 0 ? 0 : 255; const pp = Math.abs(p) / 100;
+  const R = f >> 16, G = (f >> 8) & 0xFF, B = f & 0xFF;
+  return '#' + (0x1000000 + (Math.round((t - R) * pp) + R) * 0x10000 + (Math.round((t - G) * pp) + G) * 0x100 + (Math.round((t - B) * pp) + B)).toString(16).slice(1);
+}
+
+/* ============================================================
+   TRADE PARAM BUILDERS
+   NOTE: the BUY divisor 110n matches the server-side 10% slippage
+   (1 + 10/100). If slippage changes server-side, change it here too.
+   ============================================================ */
+function buildBuyParams(n) {
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const totalLamports = BigInt(Math.floor(n * 1e9));
+  if (totalLamports <= 0n) return null;
+  const feeLamports = (totalLamports * BigInt(FEE_BPS)) / 10000n;
+  const tradeLamports = ((totalLamports - feeLamports) * 100n) / 110n;
+  if (tradeLamports <= 0n || feeLamports <= 0n) return null;
+  return { mode: 'buy', solAmount: n, totalLamports: totalLamports.toString(), tradeLamports: tradeLamports.toString(), feeLamports: feeLamports.toString() };
+}
+function buildSellParams(token, pct, tokenBalance, solPrice) {
+  if (!tokenBalance || !tokenBalance.amount || BigInt(tokenBalance.amount) <= 0n) return null;
+  const p = Math.min(100, Math.max(0.01, pct));
+  const tradeTokens = (BigInt(tokenBalance.amount) * BigInt(Math.floor(p * 100))) / 10000n;
+  if (tradeTokens <= 0n) return null;
+  const decimals = tokenBalance.decimals || token.decimals || 6;
+  const tradeTokensUi = Number(tradeTokens) / Math.pow(10, decimals);
+  let feeLamports = '0';
+  if (token && token.price > 0 && solPrice > 0) {
+    const grossSol = (tradeTokensUi * token.price) / solPrice;
+    const lam = Math.floor(grossSol * (FEE_BPS / 10000) * 1e9);
+    if (lam > 0) feeLamports = String(lam);
+  }
+  return { mode: 'sell', decimals, percentage: p, tradeTokens: tradeTokens.toString(), tradeTokensUi, feeLamports };
+}
+// 3% platform fee (in lamports, as a BigInt) for a sell of `uiAmount` tokens at
+// `priceUsd`, given `solPriceUsd`. Same estimate as buildSellParams; used by the
+// auto-trade exit loop + flatten so automated sells charge the fee like manual
+// ones. Returns 0n when price/SOL price isn't known (matches the manual guard).
+function sellFeeLamports(uiAmount, priceUsd, solPriceUsd) {
+  if (!(uiAmount > 0) || !(priceUsd > 0) || !(solPriceUsd > 0)) return 0n;
+  const grossSol = (uiAmount * priceUsd) / solPriceUsd;
+  const lam = Math.floor(grossSol * (FEE_BPS / 10000) * 1e9);
+  return lam > 0 ? BigInt(lam) : 0n;
+}
+
+/* ============================================================
+   SHARE INTENTS
+   ============================================================ */
+function buildShareUrl() { if (typeof window === 'undefined') return ''; try { return new URL(window.location.origin + window.location.pathname).toString(); } catch (e) { return ''; } }
+function buildTweetText(o) {
+  const { mode, token, solAmount, outAmount, percentage } = o;
+  if (mode === 'buy') {
+    const recv = outAmount > 0 ? '\n-> ' + formatTokens(outAmount) + ' $' + token.sym : '';
+    return 'Just caught $' + token.sym + ' on wonderland//radar — ' + solAmount + ' SOL' + recv + '\n\nFresh launches at first light:';
+  }
+  const got = outAmount > 0 ? '\n-> ' + formatSol(outAmount) + ' SOL back' : '';
+  return 'Sold ' + percentage + '% of $' + token.sym + ' on wonderland//radar' + got + '\n\nField log open here:';
+}
+function openTwitterShare(text, url) {
+  if (typeof window === 'undefined') return;
+  const params = new URLSearchParams({ text }); if (url) params.set('url', url);
+  window.open('https://twitter.com/intent/tweet?' + params, '_blank', 'noopener,noreferrer,width=600,height=500');
+}
+function inviteUrl(walletStr) {
+  if (typeof window === 'undefined' || !walletStr) return '';
+  return window.location.origin + '/?ref=' + walletStr;
+}
+function shareUrlPath(walletStr) {
+  if (typeof window === 'undefined' || !walletStr) return '';
+  return window.location.origin + '/share/' + walletStr;
+}
+function openTelegram(text, url) {
+  if (typeof window === 'undefined') return;
+  const params = new URLSearchParams({ url: url || '', text });
+  window.open('https://t.me/share/url?' + params, '_blank', 'noopener,noreferrer');
+}
+// Discord has no public web share-intent URL, so the reliable cross-client move
+// is to copy a ready-to-paste message to the clipboard. Returns true on success
+// so the caller can show a "copied — paste in Discord" toast.
+async function openDiscord(text, url) {
+  if (typeof navigator === 'undefined' || !navigator.clipboard) return false;
+  try { await navigator.clipboard.writeText((text || '') + (url ? '\n' + url : '')); return true; }
+  catch (e) { return false; }
+}
+
+/* ============================================================
+   REFERRAL HELPERS
+   refLookup is cached per walletStr: the referrer never changes for a
+   given burner, so the bot's 50th trade hits memory, not the network.
+   refRegister / refLogTrade stay fire-and-forget.
+   ============================================================ */
+const _refCache = new Map();
+async function refLookup(walletStr) {
+  if (!walletStr) return { referrer: null, refSplitBps: 0 };
+  if (_refCache.has(walletStr)) return _refCache.get(walletStr);
+  try {
+    const r = await fetch('/api/ref/lookup?wallet=' + encodeURIComponent(walletStr));
+    if (!r.ok) { const v = { referrer: null, refSplitBps: 0 }; _refCache.set(walletStr, v); return v; }
+    const d = await r.json();
+    const v = (!d || !d.referrer)
+      ? { referrer: null, refSplitBps: 0 }
+      : { referrer: d.referrer, refSplitBps: Number(d.refSplitBps) || 0 };
+    _refCache.set(walletStr, v);
+    return v;
+  } catch (e) { return { referrer: null, refSplitBps: 0 }; }
+}
+function refRegister(walletStr, referrer, boost) {
+  try {
+    fetch('/api/ref/register', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ wallet: walletStr, referrer: referrer || null, boost: boost || null }),
+    }).catch(() => {});
+  } catch (e) {}
+}
+function refLogTrade(payload) {
+  try {
+    fetch('/api/ref/log-trade', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).catch(() => {});
+  } catch (e) {}
+}
+
+/* ============================================================
+   PUMP ROUTE  (hits the dedicated Ape route)
+   ALT cache: Pump.fun's address lookup table is stable for the life of
+   the session. The first trade pays for the getMultipleAccountsInfo;
+   every subsequent trade hits memory.
+   ============================================================ */
+const APE_PUMP_ROUTE = '/api/ape/pump-trade';
+const APE_JUP_ROUTE  = '/api/ape/jup-trade';
+const _altCache = new Map(); // base58 key -> AddressLookupTableAccount
+
+async function decodeBuiltTx(b64, connection) {
+  const txBytes = Buffer.from(b64, 'base64');
+  const tx = VersionedTransaction.deserialize(txBytes);
+  const message = tx.message;
+  const lookupKeys = (message.addressTableLookups || []).map(l => l.accountKey);
+  const alts = [];
+  if (lookupKeys.length > 0) {
+    const uncached = [];
+    for (const k of lookupKeys) {
+      const hit = _altCache.get(k.toBase58());
+      if (hit) alts.push(hit);
+      else uncached.push(k);
+    }
+    if (uncached.length > 0) {
+      const infos = await connection.getMultipleAccountsInfo(uncached);
+      for (let i = 0; i < uncached.length; i++) {
+        if (!infos[i]) continue;
+        const alt = new AddressLookupTableAccount({
+          key: uncached[i],
+          state: AddressLookupTableAccount.deserialize(infos[i].data),
+        });
+        _altCache.set(uncached[i].toBase58(), alt);
+        alts.push(alt);
+      }
+    }
+  }
+  const decompiled = TransactionMessage.decompile(message, { addressLookupTableAccounts: alts });
+  return { instructions: decompiled.instructions, alts };
+}
+
+async function getPumpRoute(opts) {
+  const { action, mint, user, amount, decimals, connection } = opts;
+  const body = { action, mint, user: user.toBase58(), amount: String(amount) };
+  if (decimals != null) body.decimals = Number(decimals);
+  const r = await fetch(APE_PUMP_ROUTE, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    // 409 'graduated' is the distinct signal to fall back to Jupiter.
+    const err = new Error((data && data.error) || ('pump HTTP ' + r.status));
+    if (r.status === 409 || (data && data.error === 'graduated')) err.graduated = true;
+    throw err;
+  }
+  if (!data.tx) throw new Error('PumpPortal returned no tx.');
+  const dec = await decodeBuiltTx(data.tx, connection);
+  return { instructions: dec.instructions, alts: dec.alts, pool: data.pool, route: data.route };
+}
+
+// Jupiter route for graduated tokens. Same call shape + return shape as
+// getPumpRoute, so executeSwap can use either interchangeably. The returned
+// tx is a full Jupiter swap (burner = userPublicKey); we decode it to
+// instructions + ALTs so the fee/referral transfer can be appended exactly
+// like the pump path, then recompile + sign once.
+async function getJupRoute(opts) {
+  const { action, mint, user, amount, decimals, connection } = opts;
+  const body = { action, mint, user: user.toBase58(), amount: String(amount) };
+  if (decimals != null) body.decimals = Number(decimals);
+  const r = await fetch(APE_JUP_ROUTE, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((data && data.error) || ('jupiter HTTP ' + r.status));
+  if (!data.tx) throw new Error('Jupiter returned no tx.');
+  const dec = await decodeBuiltTx(data.tx, connection);
+  // outAmount = exact units out from the Jupiter quote. For a SELL (mint->SOL)
+  // this is the exact lamports received, which gives an exact P&L basis
+  // instead of a price estimate. For a BUY it's token units (unused — buy
+  // P&L uses SOL in).
+  return { instructions: dec.instructions, alts: dec.alts, route: data.route || 'jupiter', outAmount: data.outAmount != null ? String(data.outAmount) : null };
+}
+
+/* ============================================================
+   BUY/SELL HOT PATH
+   Speed work in this revision:
+     · Promise.all the three independent network calls (route fetch,
+       blockhash, refLookup) instead of running them in series.
+     · Confirmation loop: 800ms poll, searchTransactionHistory: false.
+       Rebroadcast every ~3.2s, blockheight check every ~4.8s. Bail
+       early on on-chain error / past lastValidBlockHeight.
+     · ALT and referrer caches above eliminate the per-trade lookups
+       after the first call.
+
+   Inputs are passed explicitly to keep the React wrapper's useCallback
+   dep array stable across solPrice / balance refreshes.
+   ============================================================ */
+async function apeExecuteSwap({ mode, swapParams, token, keypair, userPk, tradeConnection, walletStr, refWalletStr, solPrice }) {
+  if (!swapParams) throw new Error('No trade params.');
+  const isBuy = mode === 'buy';
+  const feeLamports = BigInt(swapParams.feeLamports || '0');
+
+  // Fire the three independent network calls in parallel.
+  // refLookup is cached after first call; the first call costs ~80–200ms.
+  const routeP = (async () => {
+    try {
+      return await getPumpRoute({
+        action: isBuy ? 'buy' : 'sell',
+        mint: token.mint,
+        user: userPk,
+        amount: isBuy ? swapParams.tradeLamports : swapParams.tradeTokens,
+        decimals: isBuy ? undefined : swapParams.decimals,
+        connection: tradeConnection,
+      });
+    } catch (e) {
+      // Graduated off the bonding curve → route through Jupiter instead.
+      if (e && e.graduated) {
+        return await getJupRoute({
+          action: isBuy ? 'buy' : 'sell',
+          mint: token.mint,
+          user: userPk,
+          amount: isBuy ? swapParams.tradeLamports : swapParams.tradeTokens,
+          decimals: isBuy ? undefined : swapParams.decimals,
+          connection: tradeConnection,
+        });
+      }
+      throw e;
+    }
+  })();
+
+  const [route, latest, refData] = await Promise.all([
+    routeP,
+    tradeConnection.getLatestBlockhash('confirmed'),
+    feeLamports > 0n
+      ? refLookup(refWalletStr || walletStr).catch(() => ({ referrer: null, refSplitBps: 0 }))
+      : Promise.resolve({ referrer: null, refSplitBps: 0 }),
+  ]);
+
+  const ixs = [...route.instructions];
+
+  if (feeLamports > 0n) {
+    ixs.push(SystemProgram.transfer({ fromPubkey: userPk, toPubkey: FEE_WALLET, lamports: feeLamports }));
+    if (refData.referrer && refData.refSplitBps > 0) {
+      const refLamports = (feeLamports * BigInt(refData.refSplitBps)) / 10000n;
+      if (refLamports > 0n) ixs.push(SystemProgram.transfer({ fromPubkey: userPk, toPubkey: new PublicKey(refData.referrer), lamports: refLamports }));
+    }
+  }
+
+  const message = new TransactionMessage({
+    payerKey: userPk,
+    recentBlockhash: latest.blockhash,
+    instructions: ixs,
+  }).compileToV0Message(route.alts);
+  const tx = new VersionedTransaction(message);
+
+  // [wr-sim] removed — PumpPortal tx is pre-validated; sim was doubling RPC
+  // cost per trade. Send-error path below still uses describeSimLogs() on
+  // returned logs.
+
+  tx.sign([keypair]);
+  const raw = tx.serialize();
+
+  let sig;
+  try {
+    sig = await tradeConnection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 5 });
+  } catch (sendErr) {
+    let logs = (sendErr && sendErr.logs) || null;
+    if (!logs && sendErr && typeof sendErr.getLogs === 'function') {
+      try { logs = await sendErr.getLogs(tradeConnection); } catch (e2) {}
+    }
+    throw new Error(describeSimLogs(logs, sendErr && sendErr.message));
+  }
+
+  // Fast confirmation loop.
+  // Status check every 800ms (searchTransactionHistory: false — we just sent
+  // it, no need to scan archive). Rebroadcast every 4 polls (~3.2s).
+  // Blockheight check every 6 polls (~4.8s) — cheap bail-out for expiry.
+  let confirmed = false;
+  let onchainErr = null;
+  const startedAt = Date.now();
+  const HARD_CAP_MS = 60000;
+  const POLL_MS = 800;
+  const REBROADCAST_EVERY = 4;
+  const BLOCKHEIGHT_CHECK_EVERY = 6;
+  let pollCount = 0;
+
+  while (Date.now() - startedAt < HARD_CAP_MS) {
+    try {
+      const st = await tradeConnection.getSignatureStatus(sig, { searchTransactionHistory: false });
+      if (st && st.value && st.value.err) { onchainErr = st.value.err; break; }
+      const cs = st && st.value && st.value.confirmationStatus;
+      if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
+    } catch (e) {}
+
+    pollCount++;
+
+    if (pollCount % BLOCKHEIGHT_CHECK_EVERY === 0) {
+      try {
+        const h = await tradeConnection.getBlockHeight('confirmed');
+        if (h > latest.lastValidBlockHeight) break;
+      } catch (e) {}
+    }
+
+    if (pollCount % REBROADCAST_EVERY === 0) {
+      try { await tradeConnection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }); } catch (e) {}
+    }
+
+    await new Promise(r => setTimeout(r, POLL_MS));
+  }
+
+  if (onchainErr) throw new Error(describeOnChainErr(onchainErr));
+  if (!confirmed) throw new Error("Sent but didn't confirm in time — check Solscan before retrying.");
+
+  // log to referral / pnl ledger (fire and forget)
+  try {
+    let volSol;
+    if (isBuy) {
+      volSol = Number(swapParams.tradeLamports) / 1e9;
+    } else if (route && route.outAmount != null && Number(route.outAmount) > 0) {
+      // Exact SOL received from the route's quote (Jupiter sell = mint->SOL,
+      // outAmount is lamports). More accurate than the price estimate and
+      // never zero on a confirmed trade.
+      volSol = Number(route.outAmount) / 1e9;
+    } else {
+      // Fallback: estimate from current price (pump route has no quote-out).
+      volSol = (swapParams.tradeTokensUi * (token.price || 0)) / (solPrice || 1);
+    }
+    refLogTrade({ wallet: walletStr, mint: token.mint, sym: token.sym, side: mode, sol: volSol, sig, ts: Date.now() });
+  } catch (e) {}
+
+  return { confirmed: true, sig };
+}
+
 
 /* ============================================================
    CSS — pastel Wonderland-light palette throughout
@@ -59,7 +662,7 @@ const AP_CSS = `
   --ink:#0b0b0c; --ink2:#86868b; --ink3:#aeaeb2;
   --hairline:#f1f1f2; --hairline2:#e9e9eb;
   --cyan:#11b87f; --sky:#16c08a; --pink:#f0425a; --lav:#7c5cff; --mint:#16c08a;
-  --peach:#f5921b; --gold:#a67200; --green:#11b87f; --red:#f0425a; --amber:#a67200;
+  --peach:#f5921b; --gold:#a67200; --green:#11b87f; --greent:#0f9d6c; --red:#f0425a; --amber:#a67200;
   --orange:#f5921b; --purple:#7c5cff; --blue:#2f6bff;
   --cream:#ffffff; --dep:#3ee07f; --buyblk:#0b0b0c;
   --glass:#ffffff; --glass-strong:#ffffff;
@@ -106,6 +709,7 @@ const AP_CSS = `
 .ap-nav-wallet .dot{width:6px;height:6px;border-radius:50%;background:var(--dep)}
 .ap-nav-wallet .nudge{position:absolute;top:-3px;right:-3px;width:9px;height:9px;border-radius:50%;background:var(--orange);border:2px solid #fff}
 @media(max-width:600px){.ap-nav{padding:10px 14px;gap:8px}.ap-nav-live{display:none}.ap-nav-btn{padding:8px 11px;font-size:12px}}
+@media(max-width:430px){.ap-nav{gap:6px;padding:10px 12px;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}.ap-nav::-webkit-scrollbar{display:none}.ap-nav>*{flex-shrink:0}.ap-nav-btn{padding:7px 9px;font-size:11.5px;white-space:nowrap}.ap-nav-wallet{padding:7px 10px;font-size:11px;white-space:nowrap}.ap-bname{font-size:16px}}
 
 /* QUICK BUY BAR */
 .ap-qbar{position:sticky;top:50px;z-index:55;display:flex;align-items:center;gap:7px;padding:10px 16px;background:rgba(255,255,255,.92);backdrop-filter:blur(16px);border-bottom:1px solid var(--hairline);overflow-x:auto;scrollbar-width:none}
@@ -249,7 +853,7 @@ const AP_CSS = `
 .ap-list-foot .live .d{width:5px;height:5px;border-radius:50%;background:var(--green);animation:ap-pulse 1.4s infinite}
 .ap-list-foot .live.warn{color:var(--gold)}
 .ap-list-foot .live.warn .d{background:var(--orange)}
-@media(max-width:820px){.ap-row{grid-template-columns:1fr 60px 70px;gap:10px;padding:11px 16px}.ap-row .ap-spark{display:none}.ap-row .ap-pill{display:none}}
+@media(max-width:820px){.ap-row{grid-template-columns:1fr 46px auto;gap:10px;padding:11px 16px}.ap-row .ap-pill{display:none}.ap-spark{width:44px;height:26px}.ap-row.owned{grid-template-columns:1fr 64px auto}.ap-row.owned .ap-spark{display:none}}
 @media(max-width:560px){.ap-list-head{padding:14px 14px}}
 
 .ap-empty{padding:46px 24px;text-align:center;color:var(--ink2);font-size:14px}
@@ -272,23 +876,21 @@ const AP_CSS = `
 .ap-tshead .sym{font-family:inherit;font-size:26px;font-weight:800;letter-spacing:-.02em;line-height:1;color:var(--ink)}
 .ap-tshead .sub{font-family:inherit;font-size:13px;color:var(--ink2);font-weight:600;margin-top:6px;font-variant-numeric:tabular-nums}
 
-/* DETAIL CANDLE CHART (TokenChart) */
-.ap-chart-wrap{margin:14px 22px 0;padding:12px 0 6px;border-top:1px solid var(--hairline)}
-.ap-chart-toprow{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
-.ap-chart-read{display:flex;align-items:baseline;gap:8px}
-.ap-chart-read .px{font-family:inherit;font-size:22px;font-weight:800;letter-spacing:-.02em;color:var(--ink);font-variant-numeric:tabular-nums}
-.ap-chart-read .ts{font-family:inherit;font-size:10px;font-weight:700;color:var(--ink3)}
-.ap-chart-read .chg{font-family:inherit;font-size:12px;font-weight:800;font-variant-numeric:tabular-nums}
-.ap-chart-read .chg.up{color:var(--greent)}
-.ap-chart-read .chg.dn{color:var(--red)}
-.ap-chart-unit{display:flex;gap:2px;background:var(--fill);border:none;border-radius:9px;padding:2px}
-.ap-chart-unit .u{font-family:inherit;font-size:10px;font-weight:800;letter-spacing:.02em;color:var(--ink2);background:none;border:none;padding:5px 11px;border-radius:7px;cursor:pointer}
-.ap-chart-unit .u.on{background:#fff;color:var(--ink);box-shadow:0 1px 2px rgba(11,11,12,.08)}
-.ap-candles{height:230px !important}
-.ap-chart-pxline{position:absolute;right:0;transform:translateY(-50%);font-family:inherit;font-size:11px;font-weight:800;color:var(--ink);background:#fff;border:1px solid var(--border);border-radius:6px;padding:1px 6px;font-variant-numeric:tabular-nums;pointer-events:none}
-.ap-chart-hl{position:absolute;transform:translateY(-50%);font-family:inherit;font-size:11px;font-weight:700;color:var(--ink);background:#fff;padding:0 3px;border-radius:3px;font-variant-numeric:tabular-nums;pointer-events:none;white-space:nowrap}
-.ap-chart-axis{display:flex;justify-content:space-between;padding:6px 4px 0;font-family:inherit;font-size:10px;font-weight:600;color:var(--ink3);font-variant-numeric:tabular-nums}
-.ap-chart-building{font-family:inherit;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink3);margin-left:8px}
+/* DETAIL CHART (TokenChart) — live embedded iframe (bigger, responsive) */
+.ap-chart-wrap{margin:14px 22px 0;padding:14px 0 6px;border-top:1px solid var(--hairline)}
+.ap-chart-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.ap-chart-ca{display:flex;align-items:center;gap:7px;min-width:0}
+.ap-chart-ca .lbl{font-family:inherit;font-size:9px;font-weight:800;letter-spacing:.06em;color:var(--ink3);flex-shrink:0}
+.ap-chart-ca .val{font-family:inherit;font-size:11px;font-weight:700;color:var(--ink2);font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ap-chart-ca .cp{flex-shrink:0;font-family:inherit;font-size:9px;font-weight:800;letter-spacing:.04em;color:#fff;background:#0b0b0c;border:none;border-radius:7px;padding:5px 9px;cursor:pointer;transition:opacity .15s}
+.ap-chart-ca .cp:hover{opacity:.88}
+.ap-chart-src{flex-shrink:0;font-family:inherit;font-size:9px;font-weight:800;letter-spacing:.06em;color:var(--ink3);text-transform:uppercase}
+.ap-chart-embed{position:relative;width:100%;height:clamp(320px,44dvh,460px);border:1px solid var(--hairline);border-radius:16px;overflow:hidden;background:#fff}
+.ap-chart-frame{width:100%;height:100%;border:0;display:block}
+.ap-chart-state{display:grid;place-items:center;width:100%;height:clamp(320px,44dvh,460px);border:1px solid var(--hairline);border-radius:16px;background:var(--fill2);color:var(--ink2);font-family:inherit;font-size:12.5px;font-weight:600;line-height:1.5;text-align:center;padding:24px}
+.ap-chart-state .sp{width:24px;height:24px;border-radius:50%;border:2.5px solid var(--border);border-top-color:#0b0b0c;animation:ap-spin .8s linear infinite}
+.ap-tf:disabled{opacity:.4;cursor:default}
+@media(max-width:600px){.ap-chart-wrap{margin:14px 16px 0}.ap-chart-embed,.ap-chart-state{height:clamp(300px,52dvh,440px)}}
 
 /* RESEARCH */
 .ap-research{margin:12px 22px 0;padding:14px;background:#fff;border:1px solid var(--hairline);border-radius:16px}
@@ -874,256 +1476,237 @@ function TokenChip({ token }) {
 const IconX  = () => (<svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>);
 const IconTg = () => (<svg viewBox="0 0 24 24" fill="currentColor"><path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z"/></svg>);
 const IconDs = () => (<svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.317 4.37a19.79 19.79 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg>);
-const CHART_TFS = ['5m', '1H', '6H', '24H'];
-const FRESH_FLOOR_MS = 5 * 60 * 1000;
+/* ============================================================
+   DETAIL CHART (TokenChart) — live embedded chart.
+   Ported from the LaunchRadar approach: resolve the mint to its best
+   pool, then embed a live candlestick iframe. GeckoTerminal is primary
+   (it indexes pump.fun BONDING-CURVE pools, so seconds-old launches
+   still chart); DexScreener is the fallback for graduated / older pairs.
+   Defaults to the 1-second resolution so the chart is live and moving
+   the moment the token detail sheet opens.
+
+   NOTE on the "1s" resolution param: GeckoTerminal honors `resolution`
+   and DexScreener honors `interval`. The second-level values below are
+   centralized in CHART_RES so they're trivial to adjust if a provider
+   changes its accepted tokens; if a given pool can't serve 1s the
+   provider falls back to its own default rather than erroring.
+   ============================================================ */
+const CHART_RES = [
+  { key: '1s',  label: '1s', gecko: '1s',  dex: '1S'  },
+  { key: '15s', label: '15s', gecko: '15s', dex: '15S' },
+  { key: '1m',  label: '1m', gecko: '1m',  dex: '1'   },
+  { key: '5m',  label: '5m', gecko: '5m',  dex: '5'   },
+  { key: '1h',  label: '1H', gecko: '1h',  dex: '60'  },
+];
+const CHART_RES_DEFAULT = '1s';
+
+// GeckoTerminal: pools come back with relationships.base_token.data.id of
+// the form "solana_<mint>" and attributes.{address, reserve_in_usd}. Accept
+// only a pool whose BASE token is exactly this mint (quote-only matches are a
+// last resort), then pick the deepest by USD liquidity, so the chart can never
+// be for a look-alike token.
+function pickBestGeckoPool(pools, mint) {
+  if (!Array.isArray(pools) || !pools.length) return null;
+  const wanted = ('solana_' + mint).toLowerCase();
+  const baseId  = p => p?.relationships?.base_token?.data?.id;
+  const quoteId = p => p?.relationships?.quote_token?.data?.id;
+  const hasAddr = p => !!p?.attributes?.address;
+  const baseMatches = pools.filter(p => hasAddr(p) && String(baseId(p) || '').toLowerCase() === wanted);
+  const pool = baseMatches.length
+    ? baseMatches
+    : pools.filter(p => hasAddr(p) && (
+        String(baseId(p) || '').toLowerCase() === wanted ||
+        String(quoteId(p) || '').toLowerCase() === wanted));
+  if (!pool.length) return null;
+  return pool.reduce(
+    (best, p) => (Number(p?.attributes?.reserve_in_usd) || 0) > (Number(best?.attributes?.reserve_in_usd) || 0) ? p : best,
+    pool[0],
+  );
+}
+
+// DexScreener: pairs have chainId, pairAddress, baseToken.address,
+// quoteToken.address, liquidity.usd. Same base-match + deepest-liquidity rule.
+function pickBestPair(pairs, mint) {
+  if (!Array.isArray(pairs) || !pairs.length) return null;
+  const wanted = String(mint).toLowerCase();
+  const baseMatches = pairs.filter(
+    p => p && p.chainId === 'solana' && p.pairAddress &&
+         p.baseToken?.address?.toLowerCase() === wanted);
+  const pool = baseMatches.length
+    ? baseMatches
+    : pairs.filter(
+        p => p && p.chainId === 'solana' && p.pairAddress &&
+             (p.baseToken?.address?.toLowerCase() === wanted ||
+              p.quoteToken?.address?.toLowerCase() === wanted));
+  if (!pool.length) return null;
+  return pool.reduce(
+    (best, p) => (Number(p.liquidity?.usd) || 0) > (Number(best.liquidity?.usd) || 0) ? p : best,
+    pool[0],
+  );
+}
+
+function buildEmbedSrc(pool, resKey) {
+  if (!pool) return null;
+  const r = CHART_RES.find(x => x.key === resKey) || CHART_RES[0];
+  if (pool.provider === 'GECKOTERMINAL') {
+    return 'https://www.geckoterminal.com/solana/pools/' + pool.addr +
+      '?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&bg_color=ffffff&resolution=' + r.gecko;
+  }
+  return 'https://dexscreener.com/solana/' + pool.addr +
+    '?embed=1&theme=light&info=0&trades=0&interval=' + r.dex;
+}
 
 function TokenChart({ token, solPrice }) {
-  const [tf, setTf] = useState('5m');
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [unit, setUnit] = useState('price'); // 'price' | 'mcap'
-  const [hover, setHover] = useState(null);   // index of hovered candle
-  const [ticks, setTicks] = useState([]);     // live price points for fresh tokens
-  const ageMs = token && token.pairCreatedAtMs ? Date.now() - token.pairCreatedAtMs : null;
-  const tooFresh = ageMs != null && ageMs < FRESH_FLOOR_MS;
+  const mint = token && token.mint;
+  const [status, setStatus] = useState('loading'); // loading | ok | none | fail
+  const [pool, setPool]     = useState(null);       // { provider, addr }
+  const [res, setRes]       = useState(CHART_RES_DEFAULT);
+  const [copied, setCopied] = useState(false);
+  const reqRef = useRef(0);
 
-  // Live price-tick accumulator. While the chart is open, record the token's
-  // price every few seconds. For a fresh token with no candle history yet, we
-  // plot these ticks as a live line so the chart is NEVER blank — it shows real
-  // price movement from the moment it's opened, auto-scaled around the price
-  // (never zero-based). Resets when the mint changes.
-  const tickMintRef = useRef(null);
-  useEffect(() => {
-    if (!token || !token.mint) return;
-    if (tickMintRef.current !== token.mint) { tickMintRef.current = token.mint; setTicks([]); }
-    const sample = () => {
-      const px = Number(token.price) || 0;
-      // Always record a point each tick (even if the price is unchanged) so the
-      // chart resolves quickly and a flat price draws an honest flat line —
-      // rather than starving the chart and spinning on "Building…" forever.
-      if (px > 0) setTicks(prev => {
-        const next = [...prev, { t: Date.now(), p: px }];
-        return next.length > 120 ? next.slice(next.length - 120) : next;
-      });
-    };
-    sample();
-    // Sample faster (2s) so two points exist within ~2s and the line shows
-    // almost immediately instead of waiting through several 3s gaps.
-    const id = setInterval(sample, 2000);
-    return () => clearInterval(id);
-  }, [token && token.mint, token && token.price]);
+  // Reset to the live 1s view each time a different token opens, so every
+  // detail sheet starts moving immediately.
+  useEffect(() => { setRes(CHART_RES_DEFAULT); }, [mint]);
 
   useEffect(() => {
-    if (!token || !token.mint) return;
-    if (tooFresh) { setData(null); setLoading(false); return; }
-    let cancelled = false;
-    const load = (showSpin) => {
-      if (showSpin) setLoading(true);
-      fetch('/api/dex/candles/' + encodeURIComponent(token.mint) + '?tf=' + encodeURIComponent(tf))
-        .then(r => r.ok ? r.json() : null)
-        .then(d => { if (!cancelled) { setData(d); setLoading(false); } })
-        .catch(() => { if (!cancelled) { setLoading(false); } });
-    };
-    load(true);
-    // Live refresh: short interval on fast timeframes so candles "move" like GMGN.
-    // Tighter polling on short timeframes so the latest candle ticks live,
-    // closer to GMGN's streaming feel. Longer frames poll slower (data changes
-    // less often there, and it saves requests).
-    const ms = tf === '5m' ? 2500 : tf === '1H' ? 8000 : 20000;
-    const id = setInterval(() => load(false), ms);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [token && token.mint, tf, tooFresh]);
+    if (!mint) { setStatus('none'); setPool(null); return; }
+    const id = ++reqRef.current;
+    setStatus('loading'); setPool(null);
 
-  const candles = (data && Array.isArray(data.candles)) ? data.candles.filter(k => k && Number.isFinite(k.c) && k.c > 0) : [];
-  const hasChart = candles.length >= 2;
+    (async () => {
+      let networkOk = false;
 
-  // No candle history yet (fresh token). Instead of a blank "too fresh" state,
-  // draw a live line from the accumulated price ticks — auto-scaled around the
-  // real price, never zero-based, just like GMGN frames its charts.
-  if (!hasChart) {
-    const tpts = ticks.filter(x => x && Number.isFinite(x.p) && x.p > 0);
-    if (tpts.length >= 2) {
-      const mult = (unit === 'mcap' && token.price > 0 && token.mcap > 0) ? (token.mcap / token.price) : 1;
-      const vals = tpts.map(x => x.p * mult);
-      const rawMin = Math.min.apply(null, vals);
-      const rawMax = Math.max.apply(null, vals);
-      const padt = ((rawMax - rawMin) || (rawMax * 0.01) || 1) * 0.12;
-      const lo = rawMin - padt, hi = rawMax + padt;
-      const rng = (hi - lo) || (hi * 0.001) || 1;
-      const W = 320, H = 120, padY = 8, padX = 2;
-      const xOf = (i) => padX + (i / (tpts.length - 1)) * (W - padX * 2);
-      const yOf = (v) => H - padY - ((v - lo) / rng) * (H - 2 * padY);
-      const up = vals[vals.length - 1] >= vals[0];
-      const col = up ? '#11b87f' : '#f0425a';
-      const dPath = vals.map((v, i) => (i === 0 ? 'M' : 'L') + xOf(i).toFixed(1) + ',' + yOf(v).toFixed(1)).join(' ');
-      const areaPath = dPath + ' L' + xOf(tpts.length - 1).toFixed(1) + ',' + H + ' L' + xOf(0).toFixed(1) + ',' + H + ' Z';
-      const lastV = vals[vals.length - 1];
-      return (
-        <div className="ap-chart-wrap">
-          <div className="ap-chart-toprow">
-            <div className="ap-chart-read">
-              <span className="px">{unit === 'mcap' ? '$' + format(lastV) : formatPrice(lastV)}</span>
-              <span className={'chg' + (up ? ' up' : ' dn')}>live</span>
-            </div>
-            <div className="ap-chart-unit">
-              <button className={'u' + (unit === 'price' ? ' on' : '')} onClick={() => setUnit('price')}>Price</button>
-              <button className={'u' + (unit === 'mcap' ? ' on' : '')} onClick={() => setUnit('mcap')}>MCap</button>
-            </div>
-          </div>
-          <div className="ap-chart ap-candles">
-            <svg viewBox={'0 0 ' + W + ' ' + H} preserveAspectRatio="none">
-              <defs><linearGradient id="ap-tickgrad" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor={col} stopOpacity="0.18" /><stop offset="100%" stopColor={col} stopOpacity="0" /></linearGradient></defs>
-              <path d={areaPath} fill="url(#ap-tickgrad)" />
-              <path d={dPath} fill="none" stroke={col} strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />
-              <circle cx={xOf(tpts.length - 1)} cy={yOf(lastV)} r="2.4" fill={col} />
-            </svg>
-          </div>
-          <div className="ap-tf-pills">
-            {CHART_TFS.map(t => (<button key={t} className={'ap-tf' + (t === tf ? ' on' : '')} disabled>{t}</button>))}
-            <span className="ap-tf-meta">● Live price {ageMs != null ? '· ' + fmtAgeShort(ageMs) + ' old' : ''}</span>
-          </div>
-        </div>
-      );
-    }
-    // Not enough ticks yet (just opened) — brief building state, not "blank".
-    return (
-      <div className="ap-chart-wrap">
-        <div className="ap-chart-loading"><span className="sp" /><span className="ap-chart-building">Building live chart…</span></div>
-        <div className="ap-tf-pills">
-          {CHART_TFS.map(t => (<button key={t} className={'ap-tf' + (t === tf ? ' on' : '')} disabled>{t}</button>))}
-          <span className="ap-tf-meta">{ageMs != null ? fmtAgeShort(ageMs) + ' old' : '—'}</span>
-        </div>
-      </div>
-    );
-  }
-  if (loading && !hasChart) {
-    return (
-      <div className="ap-chart-wrap">
-        <div className="ap-chart-loading"><span className="sp" /></div>
-        <div className="ap-tf-pills">
-          {CHART_TFS.map(t => (<button key={t} className={'ap-tf' + (t === tf ? ' on' : '')} onClick={() => setTf(t)}>{t}</button>))}
-          <span className="ap-tf-meta">Loading…</span>
-        </div>
-      </div>
-    );
-  }
+      // 1) GeckoTerminal — covers pump.fun bonding-curve pools.
+      try {
+        const r = await fetch(
+          'https://api.geckoterminal.com/api/v2/networks/solana/tokens/' + mint + '/pools',
+          { headers: { Accept: 'application/json' } });
+        if (id !== reqRef.current) return;
+        if (r.ok) {
+          networkOk = true;
+          const j = await r.json();
+          if (id !== reqRef.current) return;
+          const best = pickBestGeckoPool(j?.data, mint);
+          const addr = best?.attributes?.address;
+          if (addr) { setPool({ provider: 'GECKOTERMINAL', addr }); setStatus('ok'); return; }
+        }
+      } catch (e) {}
+      if (id !== reqRef.current) return;
 
-  // Convert price → display unit. mcap mode scales each candle by the
-  // (mcap / price) ratio from the live token, so the candle shape is identical
-  // but the axis reads in market cap — same trick GMGN uses for its toggle.
-  const mcapMult = (unit === 'mcap' && token.price > 0 && token.mcap > 0) ? (token.mcap / token.price) : 1;
-  const conv = (v) => v * mcapMult;
+      // 2) DexScreener — fallback for graduated / older pairs.
+      try {
+        const r = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + mint,
+          { headers: { Accept: 'application/json' } });
+        if (id !== reqRef.current) return;
+        if (r.ok) {
+          networkOk = true;
+          const j = await r.json();
+          if (id !== reqRef.current) return;
+          const best = pickBestPair(j?.pairs, mint);
+          if (best?.pairAddress) { setPool({ provider: 'DEXSCREENER', addr: best.pairAddress }); setStatus('ok'); return; }
+        }
+      } catch (e) {}
+      if (id !== reqRef.current) return;
 
-  const first = conv(candles[0].o);
-  const last = conv(candles[candles.length - 1].c);
-  const isUp = last >= first;
-  const upColor = '#16c08a', dnColor = '#f0425a';
-  const tfClass = isUp ? ' on up' : ' on dn';
+      // Neither provider had a pool. If at least one responded, the token just
+      // isn't indexed yet (typical for a seconds-old bonding curve); otherwise
+      // it's a network failure.
+      setStatus(networkOk ? 'none' : 'fail');
+    })();
+  }, [mint]);
 
-  const lows  = candles.map(k => conv(k.l));
-  const highs = candles.map(k => conv(k.h));
-  const rawMin = Math.min.apply(null, lows);
-  const rawMax = Math.max.apply(null, highs);
-  // GMGN-style breathing room: pad the range ~8% beyond the actual high/low so
-  // candles don't touch the top/bottom edges. Axis still hugs the price (never
-  // zero-based) — this just frames it a little looser, like GMGN's chart.
-  const pad = ((rawMax - rawMin) || (rawMax * 0.01) || 1) * 0.08;
-  const minP = rawMin - pad;
-  const maxP = rawMax + pad;
-  const range = (maxP - minP) || (maxP * 0.001) || 1;
-  // Taller chart like GMGN (their candles fill the screen). Reserve right gutter
-  // for price labels and bottom strip for time axis.
-  const W = 340, H = 230, padY = 14, padX = 3, gutR = 4;
-  const n = candles.length;
-  const slot = (W - padX * 2) / n;
-  const bodyW = Math.max(1.4, Math.min(slot * 0.66, 11));
-  const yOf = (v) => H - padY - ((v - minP) / range) * (H - 2 * padY);
-  // Indices of the highest-high and lowest-low candles, for GMGN's H/L markers.
-  let hiIdx = 0, loIdx = 0;
-  for (let i = 1; i < n; i++) { if (highs[i] > highs[hiIdx]) hiIdx = i; if (lows[i] < lows[loIdx]) loIdx = i; }
-  const fmtAxis = (v) => unit === 'mcap' ? '$' + format(v) : formatPrice(v);
-
-  const hv = hover != null && candles[hover] ? candles[hover] : null;
-  const lastPx = conv(candles[candles.length - 1].c);
+  const src = useMemo(() => buildEmbedSrc(pool, res), [pool, res]);
+  const shortCa = mint ? mint.slice(0, 4) + '…' + mint.slice(-4) : '';
+  const copyCa = async () => {
+    try { await navigator.clipboard.writeText(mint); setCopied(true); setTimeout(() => setCopied(false), 1400); } catch (e) {}
+  };
+  const resPills = (
+    <div className="ap-tf-pills">
+      {CHART_RES.map(r => (
+        <button key={r.key} type="button"
+          className={'ap-tf' + (r.key === res ? ' on' : '')}
+          disabled={status !== 'ok'}
+          onClick={() => setRes(r.key)}>{r.label}</button>
+      ))}
+      <span className="ap-tf-meta">{status === 'ok' ? '● Live · ' + (CHART_RES.find(x => x.key === res) || {}).label : 'Live'}</span>
+    </div>
+  );
 
   return (
     <div className="ap-chart-wrap">
-      <div className="ap-chart-toprow">
-        <div className="ap-chart-read">
-          <span className="px">{unit === 'mcap' ? '$' + format(hv ? conv(hv.c) : lastPx) : formatPrice(hv ? conv(hv.c) : lastPx)}</span>
-          {hv ? <span className="ts">{new Date(hv.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span> : <span className={'chg' + (isUp ? ' up' : ' dn')}>{formatPct(((last - first) / (first || 1)) * 100)}</span>}
+      <div className="ap-chart-bar">
+        <div className="ap-chart-ca">
+          <span className="lbl">CA</span>
+          <span className="val">{shortCa}</span>
+          <button type="button" className="cp" onClick={copyCa}>{copied ? 'COPIED' : 'COPY'}</button>
         </div>
-        <div className="ap-chart-unit">
-          <button className={'u' + (unit === 'price' ? ' on' : '')} onClick={() => setUnit('price')}>Price</button>
-          <button className={'u' + (unit === 'mcap' ? ' on' : '')} onClick={() => setUnit('mcap')}>MCap</button>
+        <span className="ap-chart-src">{pool?.provider || 'CHART'}</span>
+      </div>
+      {status === 'ok' && src ? (
+        <div className="ap-chart-embed">
+          <iframe key={pool.provider + ':' + pool.addr + ':' + res}
+            className="ap-chart-frame" src={src}
+            title={(token?.sym || 'Token') + ' price chart'}
+            loading="lazy" allow="clipboard-write" />
         </div>
-      </div>
-      <div className="ap-chart ap-candles">
-        <svg viewBox={'0 0 ' + W + ' ' + H} preserveAspectRatio="none"
-          onMouseLeave={() => setHover(null)}
-          onMouseMove={(e) => {
-            const r = e.currentTarget.getBoundingClientRect();
-            const x = ((e.clientX - r.left) / r.width) * W;
-            const idx = Math.max(0, Math.min(n - 1, Math.floor((x - padX) / slot)));
-            setHover(idx);
-          }}
-        >
-          {candles.map((k, i) => {
-            const o = conv(k.o), c = conv(k.c), h = conv(k.h), l = conv(k.l);
-            const up = c >= o;
-            const col = up ? upColor : dnColor;
-            const cx = padX + i * slot + slot / 2;
-            const yO = yOf(o), yC = yOf(c), yH = yOf(h), yL = yOf(l);
-            const top = Math.min(yO, yC), bh = Math.max(1, Math.abs(yC - yO));
-            return (
-              <g key={i} opacity={hover != null && hover !== i ? 0.5 : 1}>
-                <line x1={cx} x2={cx} y1={yH} y2={yL} stroke={col} strokeWidth="1" />
-                <rect x={cx - bodyW / 2} y={top} width={bodyW} height={bh} fill={col} rx="0.5" />
-              </g>
-            );
-          })}
-          {/* GMGN-style dashed current-price line across the chart */}
-          <line x1="0" x2={W - gutR} y1={yOf(lastPx)} y2={yOf(lastPx)} stroke="#9AA3B2" strokeWidth="0.8" strokeDasharray="3 3" />
-          {/* high / low extreme markers like GMGN's 2.02M / 1.13M labels */}
-          <line x1={padX + hiIdx * slot + slot / 2} x2={padX + hiIdx * slot + slot / 2 + 14} y1={yOf(highs[hiIdx])} y2={yOf(highs[hiIdx])} stroke="#9AA3B2" strokeWidth="0.7" />
-          <line x1={padX + loIdx * slot + slot / 2} x2={padX + loIdx * slot + slot / 2 + 14} y1={yOf(lows[loIdx])} y2={yOf(lows[loIdx])} stroke="#9AA3B2" strokeWidth="0.7" />
-          {hover != null && <line x1={padX + hover * slot + slot / 2} x2={padX + hover * slot + slot / 2} y1="0" y2={H} stroke="#0B0E14" strokeOpacity="0.16" strokeWidth="1" strokeDasharray="2 2" />}
-        </svg>
-        {/* price + extreme labels overlaid (HTML, crisp text) */}
-        <div className="ap-chart-pxline" style={{ top: (yOf(lastPx) / H * 100) + '%' }}>{fmtAxis(lastPx)}</div>
-        <div className="ap-chart-hl hi" style={{ top: (yOf(highs[hiIdx]) / H * 100) + '%', left: ((padX + hiIdx * slot + slot / 2 + 16) / W * 100) + '%' }}>{fmtAxis(highs[hiIdx])}</div>
-        <div className="ap-chart-hl lo" style={{ top: (yOf(lows[loIdx]) / H * 100) + '%', left: ((padX + loIdx * slot + slot / 2 + 16) / W * 100) + '%' }}>{fmtAxis(lows[loIdx])}</div>
-      </div>
-      <div className="ap-chart-axis">
-        <span>{new Date(candles[0].ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-        {n > 4 ? <span>{new Date(candles[Math.floor(n / 2)].ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span> : null}
-        <span>{new Date(candles[n - 1].ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-      </div>
-      <div className="ap-tf-pills">
-        {CHART_TFS.map(t => (<button key={t} className={'ap-tf' + (t === tf ? tfClass : '')} onClick={() => setTf(t)}>{t}</button>))}
-        <span className="ap-tf-meta">Live · Dexscreener</span>
-      </div>
+      ) : status === 'loading' ? (
+        <div className="ap-chart-state"><span className="sp" /></div>
+      ) : status === 'none' ? (
+        <div className="ap-chart-state">Chart appears once ${token?.sym || 'this token'} is indexed — trading on the bonding curve for now.</div>
+      ) : (
+        <div className="ap-chart-state">Couldn’t load the chart. Try again shortly.</div>
+      )}
+      {resPills}
     </div>
   );
 }
 
-function MiniSparkline({ change }) {
+// Per-mint live price history for the row sparklines. Filled from the price
+// the feed already polls (~every 2.5s) — no extra network. Capped per mint;
+// persists across tab switches and re-sorts so the little charts keep building
+// the longer you watch, like the iOS Stocks list.
+const _sparkHist = new Map(); // mint -> number[]
+function recordSpark(mint, price) {
+  if (!mint || !(price > 0)) return _sparkHist.get(mint) || [];
+  let pts = _sparkHist.get(mint);
+  if (!pts) { pts = []; _sparkHist.set(mint, pts); }
+  if (pts[pts.length - 1] !== price) { pts.push(price); if (pts.length > 32) pts.shift(); }
+  return pts;
+}
+
+function MiniSparkline({ mint, price, change }) {
   const up = (change || 0) >= 0;
   const color = up ? '#11b87f' : '#f0425a';
-  const seed = Math.abs(change || 0);
-  const pts = [];
-  for (let i = 0; i <= 10; i++) {
-    const t = i / 10;
-    const trend = up ? (8 + (1 - t) * 18) : (24 - (1 - t) * 18);
-    const wiggle = Math.sin(i * 1.7 + seed) * 2.2 + Math.cos(i * 0.9) * 1.6;
-    pts.push([i * 7.6, Math.max(2, Math.min(30, trend + wiggle))]);
+  const W = 76, H = 32, padY = 3;
+  const hist = recordSpark(mint, Number(price));
+  let line, fill;
+  if (hist.length >= 3) {
+    // Real observed-price trend, auto-scaled to the window (never zero-based).
+    const min = Math.min.apply(null, hist), max = Math.max.apply(null, hist);
+    const rng = (max - min) || (max * 0.0001) || 1;
+    const xOf = (i) => (i / (hist.length - 1)) * W;
+    const yOf = (v) => H - padY - ((v - min) / rng) * (H - 2 * padY);
+    line = hist.map((v, i) => (i === 0 ? 'M' : 'L') + xOf(i).toFixed(1) + ',' + yOf(v).toFixed(1)).join(' ');
+    fill = line + ' L ' + W + ',' + H + ' L 0,' + H + ' Z';
+  } else {
+    // Not enough live points yet — draw a directional placeholder from the 24h
+    // change so the row is never blank in its first seconds, then real data
+    // takes over as prices tick in.
+    const seed = Math.abs(change || 0);
+    const pts = [];
+    for (let i = 0; i <= 10; i++) {
+      const t = i / 10;
+      const trend = up ? (8 + (1 - t) * 18) : (24 - (1 - t) * 18);
+      const wiggle = Math.sin(i * 1.7 + seed) * 2.0 + Math.cos(i * 0.9) * 1.4;
+      pts.push([i * (W / 10), Math.max(2, Math.min(H - 2, trend + wiggle))]);
+    }
+    line = pts.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+    fill = line + ' L ' + W + ',' + H + ' L 0,' + H + ' Z';
   }
-  const line = pts.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
-  const fill = line + ' L 76,32 L 0,32 Z';
-  const gradId = 'sp-' + (up ? 'u' : 'd') + Math.round(seed * 10);
+  const gradId = 'spk' + (up ? 'u' : 'd') + (mint ? mint.slice(0, 8) : '');
   return (
     <div className="ap-spark">
-      <svg viewBox="0 0 76 32" preserveAspectRatio="none">
+      <svg viewBox={'0 0 ' + W + ' ' + H} preserveAspectRatio="none">
         <defs><linearGradient id={gradId} x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity={up ? '.28' : '.22'} /><stop offset="100%" stopColor={color} stopOpacity="0" /></linearGradient></defs>
         <path d={fill} fill={'url(#' + gradId + ')'} />
         <path d={line} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
@@ -1250,7 +1833,7 @@ const SpecimenRow = React.memo(function SpecimenRow({ token, ageMsLive, owned, c
   const ape = (e) => { e.stopPropagation(); if (busy) return; onApe(token); };
   const sell = (e) => { e.stopPropagation(); if (busy) return; onSell(token); };
   return (
-    <div className={'ap-row' + (isFresh ? ' fresh' : '')} onClick={()=>onOpen(token)}>
+    <div className={'ap-row' + (isFresh ? ' fresh' : '') + (ownedMode ? ' owned' : '')} onClick={()=>onOpen(token)}>
       <div className="ap-row-tk">
         <TokenFace token={token} ageMs={ageMsLive} />
         <div className="ap-name">
@@ -1267,7 +1850,7 @@ const SpecimenRow = React.memo(function SpecimenRow({ token, ageMsLive, owned, c
           </div>
         </div>
       </div>
-      <MiniSparkline change={token.change} />
+      <MiniSparkline mint={token.mint} price={token.price} change={token.change} />
       <span className={'ap-pill ' + r.tier}><span className="d" />{r.tier === 'low' ? 'low' : r.tier === 'med' ? 'medium' : 'high risk'}</span>
       {(ownedMode && pnl) ? (
         <div className={'ap-row-pnl' + (pnl.up ? ' up' : pnl.dn ? ' dn' : '')}>
@@ -2778,7 +3361,13 @@ function useAutoTrade(deps) {
 
   // Single mode (Custom only). Hard-cap per-trade buy at 1 SOL regardless of
   // any stored value, as the last guardrail on auto-buy blast radius.
-  const settings = { ...custom, perTradeSol: Math.min(1, Math.max(0.03, Number(custom.perTradeSol) || 0.2)) };
+  // Memoized so `effective` (and the exit-loop interval that depends on it)
+  // stays referentially stable across renders — otherwise the interval would
+  // tear down and rebuild on every render, re-polling prices needlessly.
+  const settings = useMemo(
+    () => ({ ...custom, perTradeSol: Math.min(1, Math.max(0.03, Number(custom.perTradeSol) || 0.2)) }),
+    [custom]
+  );
   const effective = useMemo(() => ({ ...settings, minAgeMin: Math.max(SAFETY_FLOOR.ageMinAbsolute, settings.minAgeMin) }), [settings]);
 
   const updateCustom = useCallback((patch) => {
@@ -2924,7 +3513,8 @@ function useAutoTrade(deps) {
               continue;
             }
             const tk = { mint: p.mint, sym: p.sym, name: p.name, icon: p.icon, price: px };
-            await executeSwap({ mode: 'sell', token: tk, tradeTokensRaw: BigInt(owned.amount || '0'), tradeTokensUi: owned.uiAmount, decimals: owned.decimals, feeLamports: 0n });
+            const exitFee = sellFeeLamports(owned.uiAmount, px, exitSolPriceRef.current);
+            await executeSwap({ mode: 'sell', token: tk, tradeTokensRaw: BigInt(owned.amount || '0'), tradeTokensUi: owned.uiAmount, decimals: owned.decimals, feeLamports: exitFee });
             const exitSol = (owned.uiAmount * px) / (exitSolPriceRef.current || 150);
             const pnlSol = exitSol - (p.entrySol || 0);
             setPositions(prev => prev.filter(x => x.mint !== p.mint));
@@ -2950,7 +3540,8 @@ function useAutoTrade(deps) {
         const owned = balancesRef.current && balancesRef.current[p.mint];
         if (!owned || !((owned.uiAmount || 0) > 0)) continue;
         const tk = { mint: p.mint, sym: p.sym, name: p.name, icon: p.icon, price: p.currentPriceUsd };
-        await executeSwap({ mode: 'sell', token: tk, tradeTokensRaw: BigInt(owned.amount || '0'), tradeTokensUi: owned.uiAmount, decimals: owned.decimals, feeLamports: 0n });
+        const flatFee = sellFeeLamports(owned.uiAmount, p.currentPriceUsd, exitSolPriceRef.current);
+        await executeSwap({ mode: 'sell', token: tk, tradeTokensRaw: BigInt(owned.amount || '0'), tradeTokensUi: owned.uiAmount, decimals: owned.decimals, feeLamports: flatFee });
         pushLog('sell', 'Flatten $' + p.sym);
       } catch (e) {
         pushLog('error', 'Flatten failed $' + p.sym);
@@ -2998,7 +3589,7 @@ function AutoPanel({ open, onClose, auto, solBalance, solPrice }) {
       <div className="wa-page">
         <div className="wa-eye"><span className="gl">◉</span><span>Auto-trade · alpha</span><span className="rule" /></div>
         <h1 className="wa-h1">Trade <span className="it">while you sleep.</span></h1>
-        <p className="wa-sub">A small bot watching the feed. It buys what looks safe by your rules and sells on take-profit, stop-loss, or time-out. <b>Test small first.</b></p>
+        <p className="wa-sub">A small bot watching the feed. It buys what looks safe by your rules and sells on take-profit or stop-loss. <b>Test small first.</b></p>
 
         {paused ? (
           <div className="wa-pause-banner">
