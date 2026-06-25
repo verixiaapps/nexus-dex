@@ -165,30 +165,26 @@ body.nexus-scroll-locked{overflow:hidden}
 .st-bal-usd{font-size:11px;font-weight:600;color:var(--ink-2)}
 .st-bal-pill.st-bal-usdc .st-bal-usd{color:var(--ink-2)}
 
-/* ===== chart (trade sheet) ===== */
-.st-chart{padding:6px 20px 4px}
-.st-chart-px{display:flex;align-items:baseline;gap:10px;padding:2px 0 2px}
-.st-chart-price{font-size:30px;font-weight:800;letter-spacing:-.03em;color:var(--ink)}
-.st-chart-chg{font-size:13px;font-weight:800;display:flex;align-items:center;gap:8px}
-.st-chart-chg.up{color:var(--greent)}
-.st-chart-chg.dn{color:var(--red)}
-.st-chart-chg .win{color:var(--ink-3);font-weight:700;font-size:11px;letter-spacing:.04em}
-.st-chart-canvas{position:relative;height:168px;margin:6px 0 2px}
-.st-chart-canvas svg{position:absolute;inset:0;width:100%;height:100%}
-.st-chart-base{position:absolute;left:0;right:0;border-top:1px dashed var(--border);pointer-events:none}
-.st-chart-hl{position:absolute;font-size:10px;font-weight:700;color:var(--ink-2);background:#fff;padding:0 4px;border-radius:4px;transform:translate(-50%,-150%);white-space:nowrap;pointer-events:none;font-variant-numeric:tabular-nums}
-.st-chart-hl.lo{transform:translate(-50%,55%)}
-.st-chart-load{height:168px;display:grid;place-items:center}
-.st-chart-none{height:168px;display:grid;place-items:center;text-align:center;font-size:12px;font-weight:600;color:var(--ink-3);padding:0 24px}
-.st-chart-tfs{display:flex;gap:4px;padding:6px 0 2px}
-.st-chart-tf{flex:1;text-align:center;font-size:12px;font-weight:800;color:var(--ink-2);background:transparent;border:none;padding:7px 0;border-radius:9px;cursor:pointer;transition:.12s}
+/* ===== chart (trade sheet) — embedded live chart ===== */
+.st-chart{padding:6px 20px 6px}
+.st-chart-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:2px 0 8px}
+.st-chart-price{font-size:24px;font-weight:800;letter-spacing:-.03em;color:var(--ink)}
+.st-chart-ca{display:flex;align-items:center;gap:7px;min-width:0}
+.st-chart-ca .lbl{font-size:9px;font-weight:800;letter-spacing:.06em;color:var(--ink-3);flex-shrink:0}
+.st-chart-ca .val{font-size:11px;font-weight:700;color:var(--ink-2);font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.st-chart-ca .cp{flex-shrink:0;font-size:9px;font-weight:800;letter-spacing:.04em;color:#fff;background:#0b0b0c;border:none;border-radius:7px;padding:5px 9px;cursor:pointer;transition:opacity .15s}
+.st-chart-ca .cp:hover{opacity:.88}
+.st-chart-prov{font-size:9px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3)}
+.st-chart-embed{position:relative;width:100%;height:clamp(300px,42dvh,440px);border:1px solid var(--hairline);border-radius:16px;overflow:hidden;background:#fff}
+.st-chart-frame{width:100%;height:100%;border:0;display:block}
+.st-chart-state{display:grid;place-items:center;text-align:center;font-size:12px;font-weight:600;color:var(--ink-3);padding:0 24px;background:var(--fill-2)}
+.st-chart-tfs{display:flex;align-items:center;gap:4px;padding:8px 2px 2px}
+.st-chart-tf{flex:0 0 auto;text-align:center;font-size:11px;font-weight:800;letter-spacing:.02em;color:var(--ink-2);background:transparent;border:none;padding:6px 11px;border-radius:8px;cursor:pointer;transition:.12s}
 .st-chart-tf:hover{color:var(--ink)}
 .st-chart-tf.on{background:var(--fill);color:var(--ink)}
 .st-chart-tf:disabled{opacity:.4;cursor:default}
-.st-chart-canvas{cursor:crosshair}
-.st-chart-cross{stroke:var(--ink-3);stroke-width:1;stroke-dasharray:4 4;opacity:.5;vector-effect:non-scaling-stroke;pointer-events:none}
-.st-chart-cross-dot{position:absolute;width:11px;height:11px;border-radius:50%;border:2px solid #fff;box-shadow:0 1px 5px rgba(11,11,12,.28);transform:translate(-50%,-50%);pointer-events:none;z-index:3}
-.st-chart-scrub{position:absolute;inset:0;z-index:4;touch-action:none}
+.st-chart-tfmeta{margin-left:auto;font-size:9px;font-weight:700;letter-spacing:.04em;color:var(--ink-3);text-transform:uppercase}
+@media(max-width:600px){.st-chart{padding:6px 14px 6px}.st-chart-embed{height:clamp(300px,50dvh,420px)}}
 
 /* sheet body / side switch */
 .st-sheet-body{padding:14px 20px 0}
@@ -810,127 +806,108 @@ function stkBuildPath(pts, w, h, pad = 2) {
   };
 }
 
+// ── Embedded chart (trade sheet) ──────────────────────────────────────
+// Switched from a hand-drawn SVG to the provider's live embedded chart —
+// GeckoTerminal primary, DexScreener fallback — reusing the same base-token
+// pool resolution as the sparklines so it can never show the wrong asset.
+// Defaults to the 1D (24-hour) view. Resolution per timeframe mirrors the
+// page's own STK_TF_PARAMS so 1H/1D/1W/1M/1Y feel the same as before.
+// (GeckoTerminal honors `resolution`; DexScreener honors `interval`. If a pool
+// can't serve a given granularity the provider falls back to its own default.)
+const STK_EMBED_RES = [
+  { key: '1H', gecko: '1m', dex: '1'   },
+  { key: '1D', gecko: '1h', dex: '60'  },
+  { key: '1W', gecko: '4h', dex: '240' },
+  { key: '1M', gecko: '1d', dex: '1D'  },
+  { key: '1Y', gecko: '1d', dex: '1D'  },
+];
+const STK_EMBED_DEFAULT = '1D'; // 24-hour view
+
+const stkEmbedPoolCache = new Map(); // mint -> { provider, addr } | null
+async function stkResolveEmbedPool(mint) {
+  if (stkEmbedPoolCache.has(mint)) return stkEmbedPoolCache.get(mint);
+  let res = null;
+  const gj = await stkFetchJson(`${STK_GT}/networks/solana/tokens/${encodeURIComponent(mint)}/pools`);
+  const gp = stkPickGeckoPool(gj?.data, mint);
+  if (gp?.attributes?.address) res = { provider: 'GECKOTERMINAL', addr: gp.attributes.address };
+  if (!res) {
+    const dj = await stkFetchJson(`${STK_DS}/tokens/${encodeURIComponent(mint)}`);
+    const dp = stkPickPair(dj?.pairs, mint);
+    if (dp?.pairAddress) res = { provider: 'DEXSCREENER', addr: dp.pairAddress };
+  }
+  stkEmbedPoolCache.set(mint, res);
+  return res;
+}
+
+function stkBuildEmbedSrc(pool, tfKey) {
+  if (!pool) return null;
+  const r = STK_EMBED_RES.find(x => x.key === tfKey) || STK_EMBED_RES[1];
+  if (pool.provider === 'GECKOTERMINAL') {
+    return `https://www.geckoterminal.com/solana/pools/${pool.addr}?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&bg_color=ffffff&resolution=${r.gecko}`;
+  }
+  return `https://dexscreener.com/solana/${pool.addr}?embed=1&theme=light&info=0&trades=0&interval=${r.dex}`;
+}
+
 function StockChart({ mint, price, symbol }) {
-  const [tf, setTf]           = useState('1D');
-  const [pts, setPts]         = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [ticks, setTicks]     = useState([]);
-  const [hover, setHover]     = useState(null); // scrub index (UI only)
-  const tickMintRef = useRef(null);
-  const gidRef = useRef('stk-area-' + Math.random().toString(36).slice(2));
+  const [tf, setTf]         = useState(STK_EMBED_DEFAULT); // '1D' = 24h
+  const [pool, setPool]     = useState(null);              // { provider, addr }
+  const [status, setStatus] = useState('loading');         // loading | ok | none | fail
+  const [copied, setCopied] = useState(false);
+  const reqRef = useRef(0);
 
-  // reset the crosshair whenever the underlying series changes
-  useEffect(() => { setHover(null); }, [tf, mint]);
-
-  // accumulate live ticks so the chart is never blank while history loads
-  useEffect(() => {
-    if (!mint) return;
-    if (tickMintRef.current !== mint) { tickMintRef.current = mint; setTicks([]); }
-    const p = Number(price) || 0;
-    if (p > 0) setTicks(prev => { const nx = [...prev, { t: Date.now(), c: p }]; return nx.length > 120 ? nx.slice(-120) : nx; });
-  }, [mint, price]);
+  // Reset to the 24-hour view each time a different stock opens.
+  useEffect(() => { setTf(STK_EMBED_DEFAULT); }, [mint]);
 
   useEffect(() => {
-    if (!mint) return;
-    let cancelled = false;
-    setLoading(true);
-    const load = () => stkFetchSeries(mint, tf).then(s => { if (!cancelled) { setPts(s); setLoading(false); } });
-    load();
-    const ms = tf === '1H' ? 20000 : tf === '1D' ? 45000 : 120000;
-    const id = setInterval(load, ms);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [mint, tf]);
+    if (!mint) { setStatus('none'); setPool(null); return; }
+    const id = ++reqRef.current;
+    setStatus('loading'); setPool(null);
+    stkResolveEmbedPool(mint)
+      .then(res => {
+        if (id !== reqRef.current) return;
+        if (res) { setPool(res); setStatus('ok'); }
+        else setStatus('none');
+      })
+      .catch(() => { if (id === reqRef.current) setStatus('fail'); });
+  }, [mint]);
 
-  const series = (pts && pts.length >= 2) ? pts : (ticks.length >= 2 ? ticks : null);
-  const live = (!pts || pts.length < 2) && ticks.length >= 2;
-  const W = 340, H = 168;
-  const built = series ? stkBuildPath(series, W, H) : null;
-  const first = series ? series[0].c : null;
-  const last  = series ? series[series.length - 1].c : (Number(price) || null);
-  const chg   = (first && last) ? ((last - first) / first) * 100 : null;
-  const periodUp = chg == null ? true : chg >= 0;
-  const col   = periodUp ? '#11b87f' : '#f0425a';     // line colour stays stable while scrubbing
-  const gid   = gidRef.current;
-
-  // hovered point (scrub) — pure presentation, reads the already-fetched series
-  const hv = (built && hover != null && built.coords[hover]) ? built.coords[hover] : null;
-  const dispC   = hv ? hv.c : last;
-  const dispChg = (first && dispC != null) ? ((dispC - first) / first) * 100 : chg;
-  const dispUp  = dispChg == null ? true : dispChg >= 0;
-
-  const fmtT = (t) => {
-    if (!t) return '';
-    const ms = t < 1e12 ? t * 1000 : t;
-    const d = new Date(ms);
-    if (Number.isNaN(d.getTime())) return '';
-    return (tf === '1H' || tf === '1D')
-      ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-      : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
-  };
-
-  const onScrub = (e) => {
-    if (!series || series.length < 2) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    if (!rect.width) return;
-    const frac = (e.clientX - rect.left) / rect.width;
-    const idx = Math.max(0, Math.min(series.length - 1, Math.round(frac * (series.length - 1))));
-    setHover(idx);
-  };
-  const clearScrub = () => setHover(null);
+  const src = useMemo(() => stkBuildEmbedSrc(pool, tf), [pool, tf]);
+  const shortCa = mint ? mint.slice(0, 4) + '…' + mint.slice(-4) : '';
+  const copyCa = async () => { try { await navigator.clipboard.writeText(mint); setCopied(true); setTimeout(() => setCopied(false), 1400); } catch (e) {} };
 
   return (
     <div className="st-chart">
-      <div className="st-chart-px">
-        <div className="st-chart-price">{fmtUsd(dispC != null ? dispC : price)}</div>
-        {dispChg != null && (
-          <div className={'st-chart-chg ' + (dispUp ? 'up' : 'dn')}>
-            {(dispUp ? '+' : '') + dispChg.toFixed(2) + '%'}
-            <span className="win">{hv ? fmtT(hv.t) : (live ? 'LIVE' : tf)}</span>
-          </div>
-        )}
+      <div className="st-chart-bar">
+        <div className="st-chart-ca">
+          <span className="lbl">CA</span>
+          <span className="val">{shortCa}</span>
+          <button type="button" className="cp" onClick={copyCa}>{copied ? 'COPIED' : 'COPY'}</button>
+        </div>
+        <span className="st-chart-prov">{status === 'ok' ? (pool?.provider === 'DEXSCREENER' ? 'DEXSCREENER' : 'GECKOTERMINAL') : 'CHART'}</span>
       </div>
-      <div className="st-chart-canvas">
-        {loading && !series ? (
-          <div className="st-chart-load"><span className="st-spinner" /></div>
-        ) : !series ? (
-          <div className="st-chart-none">No chart indexed yet — it will draw live as trades land.</div>
-        ) : (
-          <>
-            <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
-              <defs>
-                <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0" stopColor={col} stopOpacity="0.22" />
-                  <stop offset="1" stopColor={col} stopOpacity="0" />
-                </linearGradient>
-              </defs>
-              <path d={built.area} fill={`url(#${gid})`} />
-              <path d={built.line} fill="none" stroke={col} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-              {hv && <line className="st-chart-cross" x1={hv.x} y1="0" x2={hv.x} y2={H} />}
-              <circle cx={built.lastX} cy={built.lastY} r="3.2" fill={col} stroke="#fff" strokeWidth="2" />
-            </svg>
-            <div className="st-chart-base" style={{ top: (built.openY / H * 100) + '%' }} />
-            {!hv && (
-              <>
-                <div className="st-chart-hl" style={{ left: Math.max(12, Math.min(88, built.hiX / W * 100)) + '%', top: Math.max(15, built.hiY / H * 100) + '%' }}>{fmtUsd(built.hi)}</div>
-                <div className="st-chart-hl lo" style={{ left: Math.max(12, Math.min(88, built.loX / W * 100)) + '%', top: Math.min(85, built.loY / H * 100) + '%' }}>{fmtUsd(built.lo)}</div>
-              </>
-            )}
-            {hv && <div className="st-chart-cross-dot" style={{ left: (hv.x / W * 100) + '%', top: (hv.y / H * 100) + '%', background: col }} />}
-            <div
-              className="st-chart-scrub"
-              onPointerDown={onScrub}
-              onPointerMove={onScrub}
-              onPointerUp={clearScrub}
-              onPointerLeave={clearScrub}
-              onPointerCancel={clearScrub}
-            />
-          </>
-        )}
-      </div>
+      {status === 'ok' && src ? (
+        <div className="st-chart-embed">
+          <iframe
+            key={pool.provider + ':' + pool.addr + ':' + tf}
+            className="st-chart-frame"
+            src={src}
+            title={(symbol || 'Stock') + ' price chart'}
+            loading="lazy"
+            allow="clipboard-write"
+          />
+        </div>
+      ) : status === 'loading' ? (
+        <div className="st-chart-embed st-chart-state"><span className="st-spinner" /></div>
+      ) : status === 'none' ? (
+        <div className="st-chart-embed st-chart-state">No chart indexed yet for {symbol || 'this stock'} — it’ll appear once it’s trading on-chain.</div>
+      ) : (
+        <div className="st-chart-embed st-chart-state">Couldn’t load the chart. Try again shortly.</div>
+      )}
       <div className="st-chart-tfs">
         {STK_TFS.map(t => (
-          <button key={t} className={'st-chart-tf' + (t === tf ? ' on' : '')} onClick={() => setTf(t)} disabled={live}>{t}</button>
+          <button key={t} className={'st-chart-tf' + (t === tf ? ' on' : '')} disabled={status !== 'ok'} onClick={() => setTf(t)}>{t}</button>
         ))}
+        <span className="st-chart-tfmeta">{status === 'ok' ? '● Live · ' + tf : 'Live'}</span>
       </div>
     </div>
   );
