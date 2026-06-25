@@ -821,7 +821,7 @@ const STK_EMBED_RES = [
   { key: '1M', gecko: '1d', dex: '1D'  },
   { key: '1Y', gecko: '1d', dex: '1D'  },
 ];
-const STK_EMBED_DEFAULT = '1D'; // 24-hour view
+const STK_EMBED_DEFAULT = '1W'; // 1-week view
 
 const stkEmbedPoolCache = new Map(); // mint -> { provider, addr } | null
 async function stkResolveEmbedPool(mint) {
@@ -849,7 +849,7 @@ function stkBuildEmbedSrc(pool, tfKey) {
 }
 
 function StockChart({ mint, price, symbol }) {
-  const [tf, setTf]         = useState(STK_EMBED_DEFAULT); // '1D' = 24h
+  const [tf, setTf]         = useState(STK_EMBED_DEFAULT); // '1W' = 1 week
   const [pool, setPool]     = useState(null);              // { provider, addr }
   const [status, setStatus] = useState('loading');         // loading | ok | none | fail
   const [copied, setCopied] = useState(false);
@@ -927,7 +927,7 @@ function StockSparkline({ mint }) {
         if (e.isIntersecting && !doneRef.current) {
           doneRef.current = true;
           io.disconnect();
-          stkThrottle(() => stkFetchSeries(mint, '1D')).then(s => setPts(s || []));
+          stkThrottle(() => stkFetchSeries(mint, '1W')).then(s => setPts(s || []));
         }
       });
     }, { rootMargin: '140px' });
@@ -1566,4 +1566,3 @@ export default function Stocks({ onConnectWallet, walletAddress }) {
 
   return <BrandsInner onConnectWallet={onConnectWallet}/>;
 }
- 
