@@ -29,7 +29,7 @@ const MW_CSS = `
 .mw-root{
   --ink:#0a0a0a; --ink-2:#6b6b6b; --ink-3:#9a9a9a;
   --pink:#e0364f; --mint:#16a34a; --lav:#0a0a0a; --peach:#e8820c;
-  --sky:#2f6bff; --gold:#a67200; --green:#16a34a; --red:#e0364f;
+  --sky:#2f6bff; --gold:#a67200; --green:#16a34a; --red:#e0364f; --down:#fb7185;
   --glass:#ffffff; --glass-strong:#fafafa;
   --border:#e4e4e7; --hairline:#efeff1;
   --fill:#f5f5f6;
@@ -83,7 +83,7 @@ const MW_CSS = `
 .mw-ticker-item{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600}
 .mw-ticker-item .mw-sym{color:var(--ink);font-weight:700;font-family:ui-monospace,Menlo,monospace}
 .mw-up{color:var(--green)}
-.mw-down{color:var(--red)}
+.mw-down{color:var(--down)}
 
 .mw-section-head{display:flex;justify-content:space-between;align-items:center;padding:20px 16px 10px;position:relative;z-index:2}
 .mw-section-title{font-size:10px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;color:var(--ink);background:none;-webkit-text-fill-color:currentColor;display:flex;align-items:center;gap:7px}
@@ -127,7 +127,7 @@ const MW_CSS = `
 .mw-narr-emoji{font-size:17px}
 .mw-narr-name{font-size:12px;font-weight:700;margin-top:5px}
 .mw-narr-pct{font-family:ui-monospace,Menlo,monospace;font-size:14px;font-weight:700;margin-top:4px;color:var(--green)}
-.mw-narr-pct.mw-down{color:var(--red)}
+.mw-narr-pct.mw-down{color:var(--down)}
 .mw-narr-count{font-size:10px;color:var(--ink-2);margin-top:2px}
 
 .mw-hscroll{display:flex;gap:10px;padding:4px 16px;margin:0;overflow-x:auto;scroll-snap-type:x mandatory;position:relative;z-index:2;scrollbar-width:none}
@@ -141,7 +141,7 @@ const MW_CSS = `
 .mw-mini-avatar .mw-inner img{width:100%;height:100%;object-fit:cover;border-radius:50%}
 .mw-whale-sym{font-size:14px;font-weight:700}
 .mw-whale-pct{font-family:ui-monospace,Menlo,monospace;font-size:13px;font-weight:700;color:var(--green);margin-top:2px}
-.mw-whale-pct.mw-down{color:var(--red)}
+.mw-whale-pct.mw-down{color:var(--down)}
 .mw-whale-stats{display:flex;justify-content:space-between;margin-top:12px;font-family:ui-monospace,Menlo,monospace;font-size:11px;font-weight:700}
 .mw-whale-stats .mw-l{color:var(--ink-2)}
 .mw-whale-stats .mw-r{color:var(--green)}
@@ -156,7 +156,7 @@ const MW_CSS = `
 .mw-bo-token{display:flex;align-items:center;gap:8px;margin-top:12px}
 .mw-bo-sym{font-family:inherit;font-size:19px;font-weight:700;line-height:1;letter-spacing:-.01em}
 .mw-bo-pct{font-family:ui-monospace,Menlo,monospace;font-size:13px;font-weight:700;margin-top:6px;color:var(--green)}
-.mw-bo-pct.mw-down{color:var(--red)}
+.mw-bo-pct.mw-down{color:var(--down)}
 .mw-bo-meta{font-size:10px;color:var(--ink-2);margin-top:2px;font-weight:500}
 .mw-bo-empty{font-size:12px;color:var(--ink-2);margin-top:14px}
 
@@ -177,7 +177,7 @@ const MW_CSS = `
 .mw-trend-sub{font-family:ui-monospace,Menlo,monospace;font-size:10px;color:var(--ink-2);margin-top:2px;font-weight:500}
 .mw-trend-right{text-align:right;flex-shrink:0}
 .mw-trend-pct{font-family:ui-monospace,Menlo,monospace;font-size:14px;font-weight:700;color:var(--green)}
-.mw-trend-pct.mw-down{color:var(--red)}
+.mw-trend-pct.mw-down{color:var(--down)}
 .mw-trend-meta{font-family:ui-monospace,Menlo,monospace;font-size:10px;color:var(--ink-2);margin-top:2px;font-weight:500}
 
 .mw-activity{padding:0 16px;position:relative;z-index:2}
@@ -783,6 +783,41 @@ function BreakingOut({ tokens, whaleByMint, excludeMint, onOpen, onTrade }) {
   );
 }
 
+// Always-on directional sparkline — drawn from a token's price + 24h change.
+// A trend line (not tick data), self-contained so it never needs a fetch or a
+// cross-file import. Guarantees every token row shows a chart.
+function mwSparkVals(price, change) {
+  const p = Number(price);
+  if (!Number.isFinite(p) || p <= 0) return null;
+  const c = Number.isFinite(Number(change)) ? Number(change) : 0;
+  const start = c <= -100 ? p * 0.5 : p / (1 + c / 100);
+  const n = 7, o = [];
+  for (let i = 0; i < n; i++) o.push(start + (p - start) * (i / (n - 1)));
+  return o;
+}
+function mwSparkPath(vals, w, h, pad) {
+  const xs = vals.length - 1, mn = Math.min(...vals), mx = Math.max(...vals), rg = (mx - mn) || 1;
+  const X = i => (i / xs) * w, Y = v => h - pad - ((v - mn) / rg) * (h - 2 * pad);
+  let d = 'M' + X(0).toFixed(1) + ' ' + Y(vals[0]).toFixed(1);
+  for (let i = 1; i < vals.length; i++) d += ' L' + X(i).toFixed(1) + ' ' + Y(vals[i]).toFixed(1);
+  return { line: d, area: d + ' L' + w + ' ' + h + ' L0 ' + h + ' Z' };
+}
+function MwSparkline({ price, change, w = 50, h = 22, full = false }) {
+  const vals = mwSparkVals(price, change);
+  if (!vals) return null;
+  const up = (Number(change) || 0) >= 0;
+  const col = up ? 'var(--green)' : 'var(--down)';
+  const pa = mwSparkPath(vals, w, h, 2);
+  const id = 'mws' + Math.random().toString(36).slice(2, 7);
+  return (
+    <svg width={full ? '100%' : w} height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ flex: '0 0 auto', display: 'block' }}>
+      <defs><linearGradient id={id} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={col} stopOpacity="0.18" /><stop offset="1" stopColor={col} stopOpacity="0" /></linearGradient></defs>
+      <path d={pa.area} fill={`url(#${id})`} />
+      <path d={pa.line} fill="none" stroke={col} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function NewLaunches({ tokens, onOpen, onTrade }) {
   const [age, setAge] = useState('24h');
   const cutoffMs = age === '1h' ? 3600_000 : age === '6h' ? 6*3600_000 : 24*3600_000;
@@ -807,6 +842,7 @@ function NewLaunches({ tokens, onOpen, onTrade }) {
                   <div className="mw-launch-age">⏱ {t.age} OLD</div>
                 </div>
               </div>
+              <div style={{ margin: '8px 0 2px' }}><MwSparkline price={t.price} change={t.change} w={150} h={30} full /></div>
               <div className="mw-launch-row"><span className="mw-launch-l">Holders</span><span className="mw-launch-v">{t.holders ? format(t.holders) : '—'}</span></div>
               <div className="mw-launch-row"><span className="mw-launch-l">Liquidity</span><span className="mw-launch-v">${format(t.liquidity)}</span></div>
               <div className="mw-launch-row"><span className="mw-launch-l">Signal</span><span className="mw-launch-v" style={{ color: 'var(--green)' }}>{signalScore(t)}</span></div>
@@ -844,6 +880,7 @@ function TrendingNow({ tokens, onOpen }) {
               <div className="mw-trend-sym">${t.sym}</div>
               <div className="mw-trend-sub">{tab === 'traded' ? `Vol $${format(t.volume24h)}` : tab === 'viewed' ? `Signal ${signalScore(t)}` : formatPrice(t.price)}</div>
             </div>
+            <MwSparkline price={t.price} change={t.change} w={50} h={22} />
             <div className="mw-trend-right">
               <div className={'mw-trend-pct' + ((t.change || 0) < 0 ? ' mw-down' : '')}>{formatPct(t.change || 0)}</div>
               <div className="mw-trend-meta">${format(t.mcap)} mcap</div>
@@ -1035,7 +1072,7 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
         const d = await r.json();
         const list = Array.isArray(d) ? d : (d?.data || d?.tokens || []);
         if (!cancelled) {
-          setTokens(list.map(normalize).filter(t => t.mint));
+          setTokens(list.map(normalize).filter(t => t.mint && t.mint !== SOL_MINT && t.sym !== 'WSOL' && t.sym !== 'SOL'));
           setLoading(false);
         }
       } catch { if (!cancelled) setLoading(false); }
@@ -1372,43 +1409,27 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
 // unknown liquidity (brand-new tokens) still charts.
 function pickBestGeckoPool(pools, mint) {
   if (!Array.isArray(pools) || !pools.length) return null;
-  const wanted = ('solana_' + mint).toLowerCase();
-  const baseId  = p => p?.relationships?.base_token?.data?.id;
-  const quoteId = p => p?.relationships?.quote_token?.data?.id;
+  const wanted  = 'solana_' + mint;                       // EXACT match — Solana base58 is case-sensitive
   const hasAddr = p => !!p?.attributes?.address;
-  const baseMatches = pools.filter(p => hasAddr(p) && String(baseId(p) || '').toLowerCase() === wanted);
-  const pool = baseMatches.length
-    ? baseMatches
-    : pools.filter(p => hasAddr(p) && (
-        String(baseId(p) || '').toLowerCase() === wanted ||
-        String(quoteId(p) || '').toLowerCase() === wanted));
-  if (!pool.length) return null;
-  return pool.reduce(
-    (best, p) =>
-      (Number(p?.attributes?.reserve_in_usd) || 0) > (Number(best?.attributes?.reserve_in_usd) || 0) ? p : best,
-    pool[0],
-  );
+  const baseId  = p => String(p?.relationships?.base_token?.data?.id || '');
+  const quoteId = p => String(p?.relationships?.quote_token?.data?.id || '');
+  const liq     = p => Number(p?.attributes?.reserve_in_usd) || 0;
+  const base = pools.filter(p => hasAddr(p) && baseId(p) === wanted);                 // token is BASE → chart IS this token
+  const any  = pools.filter(p => hasAddr(p) && (baseId(p) === wanted || quoteId(p) === wanted));
+  const set  = base.length ? base : any;
+  if (!set.length) return null;
+  return set.reduce((best, p) => liq(p) > liq(best) ? p : best, set[0]);              // highest-liquidity pool
 }
 
 function pickBestPair(pairs, mint) {
   if (!Array.isArray(pairs) || !pairs.length) return null;
-  const wanted = String(mint).toLowerCase();
-  const baseMatches = pairs.filter(
-    p => p && p.chainId === 'solana' && p.pairAddress &&
-         p.baseToken?.address?.toLowerCase() === wanted,
-  );
-  const pool = baseMatches.length
-    ? baseMatches
-    : pairs.filter(
-        p => p && p.chainId === 'solana' && p.pairAddress &&
-             (p.baseToken?.address?.toLowerCase() === wanted ||
-              p.quoteToken?.address?.toLowerCase() === wanted),
-      );
-  if (!pool.length) return null;
-  return pool.reduce(
-    (best, p) => (Number(p.liquidity?.usd) || 0) > (Number(best.liquidity?.usd) || 0) ? p : best,
-    pool[0],
-  );
+  const ok  = p => p && p.chainId === 'solana' && p.pairAddress;
+  const liq = p => Number(p.liquidity?.usd) || 0;
+  const base = pairs.filter(p => ok(p) && p.baseToken?.address === mint);             // EXACT, case-sensitive
+  const any  = pairs.filter(p => ok(p) && (p.baseToken?.address === mint || p.quoteToken?.address === mint));
+  const set  = base.length ? base : any;
+  if (!set.length) return null;
+  return set.reduce((best, p) => liq(p) > liq(best) ? p : best, set[0]);              // highest-liquidity pair
 }
 
 /* ════════════════════════════════════════════════════════════════════
