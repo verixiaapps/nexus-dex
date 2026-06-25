@@ -31,23 +31,13 @@ bridge crypto assets
 bridge eth to optimism
 bridge eth to polygon
 bridge ethereum to solana
-bridge kaspa to base
 bridge kaspa to optimism
 bridge kaspa to polygon
-bridge kaspa to solana
-bridge link to arbitrum
-bridge link to base
 bridge link to optimism
 bridge link to polygon
-bridge link to solana
 bridge meme coins
-bridge near to arbitrum
-bridge near to base
 bridge near to optimism
 bridge near to polygon
-bridge near to solana
-bridge optimism to aptos
-bridge optimism to arbitrum
 bridge optimism to avalanche
 bridge optimism to base
 bridge optimism to bnb
