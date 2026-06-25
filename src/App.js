@@ -3,11 +3,11 @@ import { BrowserRouter, useNavigate, useLocation } from 'react-router-dom';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from './WalletContext.js';
 import SwapWidget          from './components/SwapWidget.jsx';
-import Stocks              from './components/Stocks.jsx';
+import Stocks, { BRANDS, fetchBrandPrices, stkFetchSeries, stkBuildPath, stkThrottle } from './components/Stocks.jsx';
 import CrossChainSwap      from './components/CrossChainSwap.jsx';
 import SolToBtcChainflip   from './components/SolToBtcChainflip.jsx';
 import MemeWonderland      from './components/MemeWonderland.jsx';
-import LaunchRadar         from './components/LaunchRadar.jsx';
+import LaunchRadar, { normalize } from './components/LaunchRadar.jsx';
 import Ape                 from './components/Ape.jsx';
 import Flipsy              from './components/Flipsy.jsx';
 import GetStarted          from './components/GetStarted.jsx';
@@ -173,79 +173,250 @@ function EcoStrip({ active, onGo }) {
 // =====================================================================
 // HOMEPAGE — SwapHero (compact, widget-first; widget renders below)
 // =====================================================================
-function SwapHero({ onStartTrading }) {
+function SwapHero() {
   return (
     <div style={{ maxWidth: 520, margin: '0 auto', width: '100%' }}>
-      <EcoStrip active="swap" onGo={onStartTrading} />
-
-      <div style={{ padding: '18px 4px 12px', textAlign: 'center' }}>
-        <div style={{
-          display: 'inline-flex', alignItems: 'center', gap: 6,
-          fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 700,
-          color: C.cyan, letterSpacing: '0.16em', marginBottom: 10,
-        }}>
-          <span style={{ width: 5, height: 5, borderRadius: '50%', background: C.cyan, boxShadow: `0 0 8px ${C.cyan}`, animation: 'nx-pulse 1.6s infinite' }} />
-          POWERED BY JUPITER
-        </div>
-
-        <h1 style={{
-          fontFamily: "'Instrument Serif', serif", fontWeight: 400,
-          fontSize: 'clamp(34px, 9vw, 42px)', lineHeight: 0.95, letterSpacing: '-0.025em',
-          margin: '0 0 8px', color: C.ink,
-        }}>
-          The Solana <em style={{
-            fontStyle: 'italic',
-            background: 'linear-gradient(120deg, #A0E7FF 0%, #B794F6 50%, #FF8FBE 100%)',
-            backgroundSize: '200% 100%',
-            WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent',
-            animation: 'nx-shimmer 7s linear infinite',
-          }}>super-app.</em>
-        </h1>
-
-        <p style={{
-          color: C.ink2, fontSize: 13, fontWeight: 500, lineHeight: 1.45,
-          maxWidth: 340, margin: '0 auto 12px',
-        }}>
-          Swap, bridge, predict, trade stocks.<br />
-          Non-custodial. Your keys.
-        </p>
-
-        <div style={{
-          display: 'inline-flex', alignItems: 'center', gap: 10,
-          padding: '7px 14px', borderRadius: 999,
-          background: C.glass, backdropFilter: 'blur(10px)',
-          border: `1px solid ${C.border}`,
-        }}>
-          {['No KYC', 'No Account', 'No Limits'].map((label, i) => (
-            <React.Fragment key={label}>
-              {i > 0 && <span style={{ color: C.ink3, opacity: 0.5 }}>·</span>}
-              <span style={{
-                fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 700,
-                color: C.ink, letterSpacing: '0.12em',
-              }}>
-                <span style={{ color: C.cyan, fontWeight: 800, marginRight: 3 }}>✕</span>
-                {label}
-              </span>
-            </React.Fragment>
-          ))}
-        </div>
+      {/* THE EDGE — our differentiator, up top */}
+      <div style={{ display: 'flex', gap: 7, marginTop: 4 }}>
+        {['No KYC', 'No Account', 'No Limits'].map(label => (
+          <div key={label} style={{
+            flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+            background: C.glassStrong, border: `1px solid ${C.border}`, borderRadius: 12,
+            padding: '10px 4px', fontFamily: "'Space Grotesk', sans-serif",
+            fontWeight: 800, fontSize: 13, color: C.ink, letterSpacing: '-0.01em',
+          }}>
+            <span style={{ color: C.cyan, fontWeight: 800 }}>✕</span>{label}
+          </div>
+        ))}
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 4px 6px' }}>
-        <div style={{
-          fontFamily: "'Instrument Serif', serif", fontWeight: 400, fontSize: 22, color: C.ink, letterSpacing: '-0.015em', lineHeight: 1,
-        }}>Swap</div>
+      {/* TRUST ROW — real signals only */}
+      <div style={{
+        marginTop: 9, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        gap: 8, flexWrap: 'wrap', fontFamily: "'JetBrains Mono', monospace",
+        fontSize: 10, fontWeight: 700, color: C.ink3, letterSpacing: '0.08em',
+      }}>
+        <span>Powered by</span>
+        <span style={{ color: C.ink2, fontWeight: 800 }}>JUPITER</span>
+        <span style={{ opacity: 0.4 }}>·</span>
+        <span style={{ color: C.ink2, fontWeight: 800 }}>DEXSCREENER</span>
+        <span style={{ opacity: 0.4 }}>·</span>
+        <span style={{ color: C.ink2, fontWeight: 800 }}>CHAINALYSIS</span>
+      </div>
+
+      {/* SWAP label — serif kept only as a whisper */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 4px 6px' }}>
+        <div style={{ fontFamily: "'Instrument Serif', serif", fontWeight: 400, fontSize: 22, color: C.ink, letterSpacing: '-0.015em', lineHeight: 1 }}>Swap</div>
         <div style={{
           display: 'flex', alignItems: 'center', gap: 5,
-          fontFamily: "'JetBrains Mono', monospace", fontSize: 9, fontWeight: 700, color: C.cyan,
-          letterSpacing: '0.12em',
-          background: 'rgba(61,212,245,.10)', border: `1px solid ${C.border}`,
+          fontFamily: "'JetBrains Mono', monospace", fontSize: 9, fontWeight: 700, color: C.green,
+          letterSpacing: '0.12em', background: 'rgba(22,192,138,.10)', border: `1px solid ${C.border}`,
           padding: '4px 10px', borderRadius: 999,
         }}>
-          <span style={{ width: 4, height: 4, borderRadius: '50%', background: C.cyan, boxShadow: `0 0 6px ${C.cyan}`, animation: 'nx-pulse 1.6s infinite' }} />LIVE QUOTE
+          <span style={{ width: 4, height: 4, borderRadius: '50%', background: C.green, boxShadow: `0 0 6px ${C.green}`, animation: 'nx-pulse 1.6s infinite' }} />LIVE QUOTE
         </div>
       </div>
     </div>
+  );
+}
+
+// =====================================================================
+// HomeLive — live Launch Radar + xStocks strips (inlined). Reuses the
+// SAME calls as the full pages: /api/dex/launches (+ normalize), the
+// BRANDS catalog priced via fetchBrandPrices (Jupiter price/v3), and
+// stkFetchSeries/stkBuildPath sparklines paced by stkThrottle.
+// =====================================================================
+const MONO = "'JetBrains Mono', monospace";
+const SERIF = "'Instrument Serif', serif";
+
+function fmtUsd(n) {
+  if (!Number.isFinite(n) || n <= 0) return '—';
+  if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return '$' + (n / 1e3).toFixed(1) + 'K';
+  if (n >= 1)   return '$' + n.toFixed(2);
+  if (n >= 0.01) return '$' + n.toFixed(4);
+  return '$' + n.toPrecision(2);
+}
+function fmtPct(n) {
+  if (!Number.isFinite(n)) return '—';
+  return (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
+}
+function pctFromSeries(pts) {
+  if (!pts || pts.length < 2) return null;
+  const a = pts[0].c, b = pts[pts.length - 1].c;
+  if (!(a > 0)) return null;
+  return ((b - a) / a) * 100;
+}
+
+// draw-only sparkline (data fetched by the strip so we never double-fetch)
+function Spark({ pts, w = 54, h = 24 }) {
+  const ok = pts && pts.length >= 2;
+  const path = ok ? stkBuildPath(pts, w, h, 2) : null;
+  const up = ok ? pts[pts.length - 1].c >= pts[0].c : true;
+  const col = up ? C.green : C.red;
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: 'block', flex: '0 0 auto' }}>
+      {path && (
+        <>
+          <path d={path.area} fill={up ? 'rgba(22,192,138,.12)' : 'rgba(240,66,90,.12)'} />
+          <path d={path.line} fill="none" stroke={col} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+        </>
+      )}
+    </svg>
+  );
+}
+
+function SectionHead({ title, italic, meta, onAll }) {
+  return (
+    <div style={{ padding: '24px 4px 10px', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10 }}>
+      <h2 style={{ fontFamily: SERIF, fontSize: 22, lineHeight: 1, color: C.ink, letterSpacing: '-0.015em', fontWeight: 400, margin: 0 }}>
+        {title} <em style={{ fontStyle: 'italic', background: 'linear-gradient(120deg,#A0E7FF,#FF8FBE)', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' }}>{italic}</em>
+      </h2>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontFamily: MONO, fontSize: 9, fontWeight: 700, color: C.green, letterSpacing: '0.12em', background: 'rgba(22,192,138,.10)', border: `1px solid ${C.border}`, padding: '3px 8px', borderRadius: 999 }}>
+          <span style={{ width: 5, height: 5, borderRadius: '50%', background: C.green, boxShadow: `0 0 6px ${C.green}`, animation: 'nx-pulse 1.4s infinite' }} />{meta}
+        </span>
+        {onAll && (
+          <button onClick={onAll} style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: MONO, fontSize: 10, fontWeight: 700, color: C.cyan, letterSpacing: '0.06em' }}>All →</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ListShell({ children }) {
+  return (
+    <div style={{ borderRadius: 18, overflow: 'hidden', background: C.glass, backdropFilter: 'blur(10px)', border: `1px solid ${C.border}` }}>
+      {children}
+    </div>
+  );
+}
+
+function Row({ onClick, last, ico, grad, sym, tag, sub, price, pct, pts }) {
+  const up = Number.isFinite(pct) ? pct >= 0 : true;
+  const isImg = typeof ico === 'string' && /^https?:\/\//.test(ico);
+  return (
+    <button onClick={onClick} style={{
+      display: 'flex', alignItems: 'center', gap: 11, padding: '12px 14px', width: '100%',
+      background: 'transparent', border: 'none', borderBottom: last ? 'none' : `1px solid ${C.hairline}`,
+      cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+    }}>
+      <div style={{
+        width: 32, height: 32, borderRadius: 10, display: 'grid', placeItems: 'center', flex: '0 0 auto',
+        color: '#fff', fontWeight: 800, fontSize: 13, background: grad, backgroundSize: 'cover', backgroundPosition: 'center',
+        ...(isImg ? { backgroundImage: `url(${ico})` } : {}),
+      }}>{!isImg ? (ico || '?') : ''}</div>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, letterSpacing: '-0.01em', display: 'flex', alignItems: 'center', gap: 6, color: C.ink }}>
+          {sym}
+          {tag && <span style={{ fontFamily: MONO, fontSize: 8.5, fontWeight: 700, color: C.ink3, background: '#f4f4f5', padding: '1px 5px', borderRadius: 4, letterSpacing: '0.04em' }}>{tag}</span>}
+        </div>
+        <div style={{ fontSize: 11, color: C.ink3, fontWeight: 500, marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sub}</div>
+      </div>
+      <Spark pts={pts} />
+      <div style={{ textAlign: 'right', flex: '0 0 auto', minWidth: 74 }}>
+        <div style={{ fontFamily: MONO, fontSize: 13, fontWeight: 700, color: C.ink }}>{price}</div>
+        <div style={{ fontFamily: MONO, fontSize: 11, fontWeight: 700, marginTop: 1, color: up ? C.green : C.red }}>{fmtPct(pct)}</div>
+      </div>
+    </button>
+  );
+}
+
+// ── Launch Radar strip — same /api/dex/launches feed ──────────────────
+export function LaunchRadarStrip({ onSwitchTab }) {
+  const [toks, setToks] = useState([]);
+  const [series, setSeries] = useState({});
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch('/api/dex/launches');
+        if (!r.ok) return;
+        const d = await r.json();
+        const list = (Array.isArray(d?.tokens) ? d.tokens : []).map(normalize).filter(Boolean).slice(0, 4);
+        if (cancelled) return;
+        setToks(list);
+        list.forEach(t => {
+          stkThrottle(() => stkFetchSeries(t.mint, '1D'))
+            .then(s => { if (!cancelled && s && s.length >= 2) setSeries(prev => ({ ...prev, [t.mint]: s })); })
+            .catch(() => {});
+        });
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  if (!toks.length) return null;
+
+  return (
+    <>
+      <SectionHead title="Launch" italic="Radar" meta="LIVE" onAll={() => onSwitchTab('launchradar')} />
+      <ListShell>
+        {toks.map((t, i) => (
+          <Row
+            key={t.mint}
+            last={i === toks.length - 1}
+            onClick={() => onSwitchTab('launchradar')}
+            ico={t.icon || t.emoji}
+            grad="linear-gradient(135deg,#f5921b,#d4760a)"
+            sym={t.sym}
+            tag={t.age}
+            sub={`MC ${fmtUsd(t.mcap)} · Liq ${fmtUsd(t.liquidity)}`}
+            price={fmtUsd(t.price)}
+            pct={Number.isFinite(t.change) ? t.change : pctFromSeries(series[t.mint])}
+            pts={series[t.mint]}
+          />
+        ))}
+      </ListShell>
+    </>
+  );
+}
+
+// ── xStocks strip — same BRANDS catalog + Jupiter price/v3 ─────────────
+export function XStocksStrip({ onSwitchTab }) {
+  const picks = BRANDS.slice(0, 4);
+  const [prices, setPrices] = useState({});
+  const [series, setSeries] = useState({});
+  useEffect(() => {
+    let cancelled = false;
+    fetchBrandPrices(picks.map(b => b.mint)).then(p => { if (!cancelled) setPrices(p || {}); }).catch(() => {});
+    picks.forEach(b => {
+      stkThrottle(() => stkFetchSeries(b.mint, '1W'))
+        .then(s => { if (!cancelled && s && s.length >= 2) setSeries(prev => ({ ...prev, [b.mint]: s })); })
+        .catch(() => {});
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <>
+      <SectionHead title="x" italic="Stocks" meta="LIVE" onAll={() => onSwitchTab('markets')} />
+      <ListShell>
+        {picks.map((b, i) => {
+          const pts = series[b.mint];
+          const live = prices[b.mint];
+          const last = pts && pts.length ? pts[pts.length - 1].c : null;
+          const price = Number.isFinite(live) ? live : last;
+          return (
+            <Row
+              key={b.mint}
+              last={i === picks.length - 1}
+              onClick={() => onSwitchTab('markets')}
+              ico={b.symbol.charAt(0)}
+              grad="linear-gradient(135deg,#2f6bff,#1e49c9)"
+              sym={b.symbol}
+              tag="24/7"
+              sub={b.name}
+              price={fmtUsd(price)}
+              pct={pctFromSeries(pts)}
+              pts={pts}
+            />
+          );
+        })}
+      </ListShell>
+    </>
   );
 }
 
@@ -314,21 +485,6 @@ function HomeBelow({ onSwitchTab, walletAddress }) {
   return (
     <div style={{ maxWidth: 520, margin: '0 auto', width: '100%' }}>
 
-      {/* TRUST STRIP */}
-      <div style={{
-        marginTop: 16, padding: '12px 14px', borderRadius: 14,
-        background: C.glass, backdropFilter: 'blur(10px)',
-        border: `1px solid ${C.border}`,
-        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, flexWrap: 'wrap',
-        fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 700, color: C.ink2,
-        letterSpacing: '0.1em',
-      }}>
-        <span>Powered by</span>
-        <span style={{ color: C.ink, fontWeight: 800 }}>JUPITER</span>
-        <span style={{ color: C.ink3, opacity: 0.5 }}>·</span>
-        <span style={{ color: C.ink, fontWeight: 800 }}>CHAINALYSIS</span>
-      </div>
-
       {/* LIVE TICKER */}
       {sectionHead('Live', 'swaps', 'UPDATED NOW', true)}
       <div style={{
@@ -360,10 +516,14 @@ function HomeBelow({ onSwitchTab, walletAddress }) {
         </div>
       </div>
 
+      {/* TRADE LIVE — real Launch Radar + xStocks feeds (same calls) */}
+      <LaunchRadarStrip onSwitchTab={onSwitchTab} />
+      <XStocksStrip onSwitchTab={onSwitchTab} />
+
       {/* EXPANDED PRODUCT GRID */}
-      {sectionHead('All products.', 'One wallet.', 'SUPER-APP')}
+      {sectionHead('Explore the', 'super-app', 'TOOLS')}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-        {products.map((p, i) => (
+        {products.filter(p => p.tab !== 'markets' && p.tab !== 'launchradar').map((p, i) => (
           <button
             key={p.tab}
             onClick={() => onSwitchTab(p.tab)}
@@ -1122,6 +1282,7 @@ function AppInner() {
       }}>
         {tab === 'swap' && (
           <>
+            <SwapHero />
             <div ref={swapWidgetRef}>
               <SwapWidget {...sharedProps} />
             </div>
