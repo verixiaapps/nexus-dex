@@ -852,6 +852,11 @@ export function stkBuildPath(pts, w, h, pad = 2) {
   };
 }
 
+// Some components import the path builder under the name `stkSmoothPath`.
+// It is the SAME function as stkBuildPath (no new logic) — aliased here so the
+// import resolves and the build compiles.
+export const stkSmoothPath = stkBuildPath;
+
 // ── Embedded chart (trade sheet) ──────────────────────────────────────
 // Switched from a hand-drawn SVG to the provider's live embedded chart —
 // GeckoTerminal primary, DexScreener fallback — reusing the same base-token
