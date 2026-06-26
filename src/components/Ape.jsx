@@ -53,6 +53,7 @@ import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
    CONFIG
    ============================================================ */
 const SOL_MINT   = 'So11111111111111111111111111111111111111112';
+const DUST_MIN_USD = 0.05; // owned-tab: hide positions worth less than this (amount × price)
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
 const FEE_BPS    = 300;
 const SOL_RESERVE = 0; // no reserve — MAX buy uses the full balance, nothing held back for ATA rent / fees
@@ -2924,7 +2925,12 @@ export default function Ape({ mainWalletPubkey }) {
         // Prefer live feed data for the token if present, else resolve metadata.
         const fromFeed = recent.find(t => t.mint === mint);
         const tok = fromFeed || resolveToken(mint);
-        if (tok) held.push(tok);
+        if (!tok) continue;
+        // Hide dust: positions worth under DUST_MIN_USD by amount owned × price.
+        // Unpriced tokens (price 0) count as $0 and are hidden as dust.
+        const value = (bal.uiAmount || 0) * (tok.price || 0);
+        if (value < DUST_MIN_USD) continue;
+        held.push(tok);
       }
       held.sort((a, b) => {
         const av = ((balances[a.mint] && balances[a.mint].uiAmount) || 0) * (a.price || 0);
