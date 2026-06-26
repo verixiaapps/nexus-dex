@@ -2,14 +2,6 @@
 // Sections: Hero · Top Signal · Narratives · Whale Radar · Breaking Out · New Launches · Trending · Live Feed.
     
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { stkFetchSeries, stkBuildPath, stkSmoothPath, stkThrottle } from './Stocks.jsx';
-// Local copy of stkSeed so this file builds regardless of the Stocks.jsx version
-// shipped alongside it (older Stocks.jsx builds may not export stkSeed).
-function stkSeed(str) {
-  let h = 0; const s = String(str || '');
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
-  return (Math.abs(h) || 1) >>> 0;
-}
 import { Buffer } from 'buffer';
 import {
   Connection,
@@ -869,13 +861,11 @@ function BreakingOut({ tokens, whaleByMint, excludeMint, onOpen, onTrade }) {
   );
 }
 
-// Row sparkline — REAL DATA ONLY, no synthetic fallback. Two real sources:
-//   1) GeckoTerminal/DexScreener OHLCV via stkFetchSeries (contract-matched,
-//      highest-liquidity pool, cached + throttled) — immediate real history.
-//   2) Live observed price the feed already polls, accumulated per mint.
-// Whichever is available draws; if neither has ≥2 points yet, nothing renders
-// (no straight-line / wiggle fakery). Every priced token charts as soon as its
-// real data exists.
+// Row sparkline — contract-correct and self-contained. NO Stocks module. Draws
+// from prices the live feed observes per mint (recordSpark, keyed by contract).
+// Until ≥2 points accumulate, a gentle line in the direction of the % keeps the
+// card from being blank. Path is built locally (mwSparkPath) — nothing here
+// reaches into Stocks.
 const _sparkHist = new Map(); // mint -> number[] (observed prices)
 function recordSpark(mint, price) {
   if (!mint || !(price > 0)) return _sparkHist.get(mint) || [];
@@ -884,28 +874,31 @@ function recordSpark(mint, price) {
   if (pts[pts.length - 1] !== price) { pts.push(price); if (pts.length > 32) pts.shift(); }
   return pts;
 }
+// Local SVG sparkline path builder (replaces the Stocks helper). pts: [{c}, …].
+function mwSparkPath(pts, w, h) {
+  const vals = pts.map(p => Number(p?.c)).filter(Number.isFinite);
+  if (vals.length < 2) {
+    const midY = h / 2;
+    return { line: `M 0 ${midY} L ${w} ${midY}`, area: `M 0 ${midY} L ${w} ${midY} L ${w} ${h} L 0 ${h} Z`, lastX: w, lastY: midY, up: true };
+  }
+  const min = Math.min(...vals), max = Math.max(...vals), span = (max - min) || 1, pad = 2, ih = h - pad * 2;
+  const xy = vals.map((v, i) => [ (i / (vals.length - 1)) * w, pad + (1 - (v - min) / span) * ih ]);
+  const line = 'M ' + xy.map(([x, y]) => `${x.toFixed(2)} ${y.toFixed(2)}`).join(' L ');
+  const area = `${line} L ${w.toFixed(2)} ${h.toFixed(2)} L 0 ${h.toFixed(2)} Z`;
+  const [lastX, lastY] = xy[xy.length - 1];
+  return { line, area, lastX, lastY, up: vals[vals.length - 1] >= vals[0] };
+}
 function MwSparkline({ mint, price, change, w = 50, h = 22, full = false }) {
-  const [series, setSeries] = useState(null);
-  useEffect(() => {
-    if (!mint) return;
-    let cancelled = false;
-    stkThrottle(() => stkFetchSeries(mint, '1D'))
-      .then(s => { if (!cancelled && Array.isArray(s) && s.length >= 2) setSeries(s); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [mint]);
-
   const hist = recordSpark(mint, Number(price));
-  const obs = hist.length >= 2 ? hist.map(c => ({ c })) : null;
-  let pts = (series && series.length >= 2) ? series : obs;
-  // Every token gets a sparkline. If no real series has loaded yet, draw a
-  // gentle line in the direction of the % so the card is never blank.
+  let pts = hist.length >= 2 ? hist.map(c => ({ c })) : null;
+  // No observed history yet → gentle line in the direction of the % so the card
+  // is never blank.
   if (!pts) {
     const dir = (Number.isFinite(change) ? change : 0) >= 0 ? 1 : -1;
     pts = [0, 1, 2, 3, 4].map(i => ({ c: 100 + dir * i * 6 }));
   }
 
-  const path = stkSmoothPath(pts, w, h, 2, stkSeed(mint));
+  const path = mwSparkPath(pts, w, h);
   // Color must match the % shown next to it — never a red line on a green +%.
   const up = Number.isFinite(change) ? change >= 0 : path.up;
   const col = up ? 'var(--green)' : 'var(--down)';
@@ -1189,29 +1182,43 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  // Compute chart-window % from the same 1D OHLCV the sparkline uses. Throttled
-  // and de-duped (≤ once / 45s per mint); stkFetchSeries caches, so the sparkline
-  // and this share the fetch rather than doubling it.
+  // Per-mint 24h % for the list — sourced from DexScreener (Solana DEX data) and
+  // CONTRACT-MATCHED via pickBestPair (baseToken.address === mint, then highest
+  // liquidity): the SAME provider + match the detail chart uses. This deliberately
+  // does NOT use stkFetchSeries — that's the Stocks module, unrelated to these meme
+  // mints; routing through it pulled wrong-contract history and produced the absurd
+  // percentages. Throttled ≤ once / 45s per mint; bulk (≤30 mints per request).
   useEffect(() => {
     let cancelled = false;
     const now = Date.now();
-    tokens.forEach(t => {
-      const mint = t.mint;
-      if (!mint) return;
-      const last = chgTsRef.current.get(mint) || 0;
-      if (now - last < 45000) return;
-      chgTsRef.current.set(mint, now);
-      stkThrottle(() => stkFetchSeries(mint, '1D'))
-        .then(s => {
-          if (cancelled || !Array.isArray(s) || s.length < 2) return;
-          // Same as App.js pctFromSeries: % across the chart series, first → last.
-          const a = Number(s[0]?.c), b = Number(s[s.length - 1]?.c);
-          if (!(a > 0) || !Number.isFinite(b)) return;
-          const pct = ((b - a) / a) * 100;
-          setChartChg(prev => (Math.abs((prev[mint] ?? NaN) - pct) < 0.01 ? prev : { ...prev, [mint]: pct }));
-        })
-        .catch(() => {});
-    });
+    const due = tokens
+      .map(t => t.mint)
+      .filter(m => m && (now - (chgTsRef.current.get(m) || 0)) >= 45000);
+    if (!due.length) return;
+    due.forEach(m => chgTsRef.current.set(m, now));
+
+    (async () => {
+      for (let i = 0; i < due.length; i += 30) {
+        const group = due.slice(i, i + 30);
+        try {
+          const r = await fetchTO('https://api.dexscreener.com/latest/dex/tokens/' + group.join(','), 6000);
+          if (cancelled || !r.ok) continue;
+          const j = await r.json();
+          if (cancelled) return;
+          const pairs = Array.isArray(j?.pairs) ? j.pairs : [];
+          setChartChg(prev => {
+            const next = { ...prev };
+            for (const m of group) {
+              const best = pickBestPair(pairs, m);           // exact base-token contract match + highest liquidity
+              const h24  = Number(best?.priceChange?.h24);
+              next[m] = Number.isFinite(h24) ? h24 : null;   // null ⇒ shows "—", never Jupiter
+            }
+            return next;
+          });
+        } catch { /* skip this group, retry next cycle */ }
+      }
+    })();
+
     return () => { cancelled = true; };
   }, [tokens]);
 
@@ -1307,10 +1314,15 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
   // over the 1D window), so the number always matches the sparkline. Jupiter's
   // stats24h.priceChange is NOT used for display — it spikes on fresh/thin
   // pools. Fall back to the Jupiter figure only until that mint's series loads.
+  // Displayed % comes ONLY from the chart series (chartChg). NO Jupiter, ever.
+  //   finite number → valid chart-derived %  → show it
+  //   null / undefined (rejected or not-yet-loaded) → show "—"
+  // We never fall back to t.change (Jupiter's stats24h.priceChange) — that was
+  // the source of the +600000% readings on tokens whose series didn't resolve.
   const tokensCC = useMemo(
     () => tokens.map(t => {
       const cc = chartChg[t.mint];
-      return Number.isFinite(cc) ? { ...t, change: cc } : t;
+      return { ...t, change: Number.isFinite(cc) ? cc : null };
     }),
     [tokens, chartChg]
   );
@@ -1542,6 +1554,19 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
 // no quote-side fallback), and pick the highest-USD-liquidity matching pool.
 // The reduce is seeded with the first candidate so a single pool with 0 /
 // unknown liquidity (brand-new tokens) still charts.
+// fetch() with a hard timeout — without this, a hung provider request never
+// settles and the chart is stuck on 'loading' forever. On timeout it aborts
+// (rejects), so the caller falls through to the next provider / 'none'.
+async function fetchTO(url, ms = 5000) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), ms);
+  try {
+    return await fetch(url, { headers: { Accept: 'application/json' }, signal: ac.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function pickBestGeckoPool(pools, mint) {
   if (!Array.isArray(pools) || !pools.length) return null;
   const wanted  = 'solana_' + mint;                       // EXACT match — Solana base58 is case-sensitive
@@ -1610,12 +1635,12 @@ function MwTokenChart({ mint, symbol = '' }) {
     (async () => {
       const url = `https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}/pools`;
 
-      // GeckoTerminal first (covers pump.fun curves + graduated pairs), retrying
-      // transient 429/5xx/blips. If GT has no pool, fall back to DexScreener so
-      // every token still gets a chart when clicked.
-      for (let attempt = 0; attempt < 3; attempt++) {
+      // GeckoTerminal first (covers pump.fun curves + graduated pairs). Keep
+      // retries tight so a rate-limited GT doesn't park the user on a spinner —
+      // fall through to DexScreener quickly. Contract match stays strict.
+      for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          const r = await fetch(url, { headers: { Accept: 'application/json' } });
+          const r = await fetchTO(url, 4500);
           if (id !== reqRef.current) return;
           if (r.ok) {
             const j = await r.json();
@@ -1627,15 +1652,14 @@ function MwTokenChart({ mint, symbol = '' }) {
           if (r.status !== 429 && r.status < 500) break; // permanent 4xx → try DexScreener
         } catch { /* network error → retry */ }
         if (id !== reqRef.current) return;
-        await new Promise(res => setTimeout(res, 700 * (attempt + 1)));
+        await new Promise(res => setTimeout(res, 350 * (attempt + 1)));
         if (id !== reqRef.current) return;
       }
       if (id !== reqRef.current) return;
 
       // GeckoTerminal had nothing → DexScreener fallback.
       try {
-        const r = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + mint,
-          { headers: { Accept: 'application/json' } });
+        const r = await fetchTO('https://api.dexscreener.com/latest/dex/tokens/' + mint, 6000);
         if (id !== reqRef.current) return;
         if (r.ok) {
           const j = await r.json();
