@@ -46,7 +46,7 @@ const C = {
   gold:   '#a67200',
   green:  '#16c08a',
   red:    '#f0425a',
-  down:   '#fb7185',
+  down:   '#9d8cff',
   glass:        '#ffffff',
   glassStrong:  '#ffffff',
   border:       '#e9e9eb',
@@ -275,16 +275,27 @@ function recordSpark(mint, price) {
 }
 // Thin series → resample into a few eased points so the curve reads as a soft
 // trend, not a straight line. Keeps the real first/last values (true direction).
-function _spkPrep(vals) {
+function _spkSeed(str) {
+  let h = 0; const s = String(str || '');
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return (Math.abs(h) || 1) >>> 0;
+}
+function _spkPrep(vals, seed = 0) {
   if (vals.length >= 6) return vals;
   const a = vals[0], b = vals[vals.length - 1];
-  const n = 6;
-  const out = [];
+  // Seeded wobble so two thin tokens don't render the identical S-curve.
+  const span = Math.abs(b - a) || Math.abs(a) * 0.04 || 1;
+  const amp  = span * 0.55;
+  let s = (seed >>> 0) || 1;
+  const rnd = () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const n = 6, out = [];
   for (let i = 0; i < n; i++) {
-    const t = i / (n - 1);
-    const ease = t * t * (3 - 2 * t);     // smoothstep
-    out.push(a + (b - a) * ease);
+    const t = i / (n - 1), e = t * t * (3 - 2 * t);
+    let v = a + (b - a) * e;
+    if (i > 0 && i < n - 1) v += (rnd() - 0.5) * amp * Math.sin(t * Math.PI);
+    out.push(v);
   }
+  out[0] = a; out[n - 1] = b;
   return out;
 }
 function _spkSmoothPath(vals, w, h, pad) {
@@ -308,7 +319,7 @@ function Spark({ pts, mint, price, w = 60, h = 30 }) {
   const obs  = hist.length >= 2 ? hist.map(c => ({ c })) : null;
   const use  = (pts && pts.length >= 2) ? pts : obs;   // prefer OHLCV, else observed ticks
   if (!use) return <svg width={w} height={h} style={{ display: 'block', flex: '0 0 auto' }} />;
-  const vals = _spkPrep(use.map(p => p.c));
+  const vals = _spkPrep(use.map(p => p.c), _spkSeed(mint));
   const up   = vals[vals.length - 1] >= vals[0];
   const col  = up ? C.green : C.down;
   const path = _spkSmoothPath(vals, w, h, 3);
@@ -412,16 +423,14 @@ const CHART_RES_DEFAULT = '1s';
 
 function pickBestGeckoPool(pools, mint) {
   if (!Array.isArray(pools) || !pools.length) return null;
-  const wanted = ('solana_' + mint).toLowerCase();
-  const baseId  = p => p?.relationships?.base_token?.data?.id;
-  const quoteId = p => p?.relationships?.quote_token?.data?.id;
+  const wanted = 'solana_' + mint;                         // EXACT — Solana base58 is case-sensitive
+  const baseId  = p => String(p?.relationships?.base_token?.data?.id || '');
+  const quoteId = p => String(p?.relationships?.quote_token?.data?.id || '');
   const hasAddr = p => !!p?.attributes?.address;
-  const baseMatches = pools.filter(p => hasAddr(p) && String(baseId(p) || '').toLowerCase() === wanted);
+  const baseMatches = pools.filter(p => hasAddr(p) && baseId(p) === wanted);
   const pool = baseMatches.length
     ? baseMatches
-    : pools.filter(p => hasAddr(p) && (
-        String(baseId(p) || '').toLowerCase() === wanted ||
-        String(quoteId(p) || '').toLowerCase() === wanted));
+    : pools.filter(p => hasAddr(p) && (baseId(p) === wanted || quoteId(p) === wanted));
   if (!pool.length) return null;
   return pool.reduce(
     (best, p) => (Number(p?.attributes?.reserve_in_usd) || 0) > (Number(best?.attributes?.reserve_in_usd) || 0) ? p : best,
@@ -430,16 +439,15 @@ function pickBestGeckoPool(pools, mint) {
 }
 function pickBestPair(pairs, mint) {
   if (!Array.isArray(pairs) || !pairs.length) return null;
-  const wanted = String(mint).toLowerCase();
   const baseMatches = pairs.filter(
     p => p && p.chainId === 'solana' && p.pairAddress &&
-         p.baseToken?.address?.toLowerCase() === wanted);
+         p.baseToken?.address === mint);                   // EXACT, case-sensitive
   const pool = baseMatches.length
     ? baseMatches
     : pairs.filter(
         p => p && p.chainId === 'solana' && p.pairAddress &&
-             (p.baseToken?.address?.toLowerCase() === wanted ||
-              p.quoteToken?.address?.toLowerCase() === wanted));
+             (p.baseToken?.address === mint ||
+              p.quoteToken?.address === mint));
   if (!pool.length) return null;
   return pool.reduce(
     (best, p) => (Number(p.liquidity?.usd) || 0) > (Number(best.liquidity?.usd) || 0) ? p : best,
@@ -451,7 +459,7 @@ function buildEmbedSrc(pool, resKey) {
   const r = CHART_RES.find(x => x.key === resKey) || CHART_RES[0];
   if (pool.provider === 'GECKOTERMINAL') {
     return 'https://www.geckoterminal.com/solana/pools/' + pool.addr +
-      '?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&bg_color=ffffff&resolution=' + r.gecko;
+      '?embed=1&info=0&swaps=0&grayscale=0&light_chart=1&bg_color=ffffff&resolution=' + r.gecko;
   }
   return 'https://dexscreener.com/solana/' + pool.addr +
     '?embed=1&theme=light&info=0&trades=0&interval=' + r.dex;
@@ -472,7 +480,7 @@ function SheetChart({ mint, sym }) {
 
     (async () => {
       let networkOk = false;
-      // 1) GeckoTerminal — covers pump.fun bonding-curve pools.
+      // GeckoTerminal only — covers pump.fun bonding-curve pools and graduated pairs.
       try {
         const r = await fetch(
           'https://api.geckoterminal.com/api/v2/networks/solana/tokens/' + mint + '/pools',
@@ -485,21 +493,6 @@ function SheetChart({ mint, sym }) {
           const best = pickBestGeckoPool(j?.data, mint);
           const addr = best?.attributes?.address;
           if (addr) { setPool({ provider: 'GECKOTERMINAL', addr }); setStatus('ok'); return; }
-        }
-      } catch (e) {}
-      if (id !== reqRef.current) return;
-
-      // 2) DexScreener — fallback for graduated / older pairs.
-      try {
-        const r = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + mint,
-          { headers: { Accept: 'application/json' } });
-        if (id !== reqRef.current) return;
-        if (r.ok) {
-          networkOk = true;
-          const j = await r.json();
-          if (id !== reqRef.current) return;
-          const best = pickBestPair(j?.pairs, mint);
-          if (best?.pairAddress) { setPool({ provider: 'DEXSCREENER', addr: best.pairAddress }); setStatus('ok'); return; }
         }
       } catch (e) {}
       if (id !== reqRef.current) return;
@@ -756,7 +749,7 @@ function TokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
   const solBalance   = balances[SOL_MINT];
   const tokenBalance = balances[token.mint];
   const ownedUiAmount = tokenBalance?.uiAmount || 0;
-  const availSol = Math.max(0, (solBalance?.uiAmount || 0) - SOL_RESERVE);
+  const availSol = Math.max(0, (solBalance?.uiAmount || 0)); // no reserve
 
   const swapParams = useMemo(() => {
     if (!amount) return null;
@@ -788,13 +781,12 @@ function TokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
   const hasFunds = (() => {
     if (!amount || Number(amount) <= 0) return false;
     if (isBuy) return Number(amount) <= availSol;
-    return ownedUiAmount > 0 && (solBalance?.uiAmount || 0) >= 0.003;
+    return ownedUiAmount > 0;
   })();
   const needsWallet = !canSign;
-  const confirmDisabled = confirming || !swapParams || !hasFunds || !!error;
+  const confirmDisabled = confirming || !swapParams || (!needsWallet && !hasFunds) || !!error;
 
   const handleConfirm = async () => {
-    if (needsWallet) { if (onConnectWallet) onConnectWallet(); return; }
     if (!swapParams || confirming) return;
     setConfirming(true); setError(null);
     try {
@@ -846,7 +838,7 @@ function TokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, fontFamily: MONO, fontSize: 11, fontWeight: 700, color: C.ink3 }}>
           <span>{isBuy ? 'You pay (SOL)' : 'You sell (%)'}</span>
           <span>{isBuy
-            ? <>Wallet: {tradeFmtSol(solBalance?.uiAmount || 0)} SOL{availSol > 0 && <button onClick={() => setAmount(String(Math.floor(availSol * 10000) / 10000))} style={{ marginLeft: 8, background: C.ink, color: '#fff', border: 'none', borderRadius: 6, padding: '2px 7px', fontSize: 9, fontWeight: 800, cursor: 'pointer', fontFamily: MONO }}>MAX</button>}</>
+            ? <>Wallet: {tradeFmtSol(solBalance?.uiAmount || 0)} SOL{availSol > 0 && <button onClick={() => setAmount(String(Math.floor(Math.max(0, availSol - 0.002) * 10000) / 10000))} style={{ marginLeft: 8, background: C.ink, color: '#fff', border: 'none', borderRadius: 6, padding: '2px 7px', fontSize: 9, fontWeight: 800, cursor: 'pointer', fontFamily: MONO }}>MAX</button>}</>
             : <>You own: {tradeFmtTokens(ownedUiAmount)} {token.sym}</>}</span>
         </div>
 
@@ -870,25 +862,18 @@ function TokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
         {error && <div style={{ marginTop: 12, padding: '10px 14px', borderRadius: 12, background: 'rgba(240,66,90,.10)', color: C.red, fontSize: 12, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif" }}>{error}</div>}
         {done && <div style={{ marginTop: 12, padding: '10px 14px', borderRadius: 12, background: 'rgba(22,192,138,.10)', color: C.green, fontSize: 12, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif" }}>{done.mode === 'buy' ? 'Bought' : 'Sold'} {token.sym} ✓ <a href={`https://solscan.io/tx/${done.sig}`} target="_blank" rel="noopener noreferrer" style={{ color: C.green, textDecoration: 'underline' }}>view</a></div>}
 
-        <button onClick={handleConfirm} disabled={!needsWallet && confirmDisabled} style={{
+        <button onClick={handleConfirm} disabled={confirmDisabled} style={{
           marginTop: 16, width: '100%', padding: 16, borderRadius: 16, border: 'none',
-          cursor: (!needsWallet && confirmDisabled) ? 'not-allowed' : 'pointer',
-          background: needsWallet ? C.ink : (isBuy ? C.green : C.red),
-          opacity: (!needsWallet && confirmDisabled) ? 0.5 : 1,
+          cursor: confirmDisabled ? 'not-allowed' : 'pointer',
+          background: isBuy ? C.green : C.red,
+          opacity: confirmDisabled ? 0.5 : 1,
           color: '#fff', fontWeight: 800, fontSize: 15, fontFamily: "'Space Grotesk', sans-serif", letterSpacing: '0.01em',
         }}>
-          {needsWallet ? 'Connect wallet'
-            : confirming ? (isBuy ? 'Buying…' : 'Selling…')
+          {confirming ? (isBuy ? 'Buying…' : 'Selling…')
             : !amount || Number(amount) <= 0 ? (isBuy ? 'Enter SOL amount' : 'Enter percentage')
-            : !hasFunds ? (isBuy ? 'Insufficient SOL' : (ownedUiAmount <= 0 ? `No ${token.sym} to sell` : 'Need ~0.003 SOL for fees'))
+            : (!needsWallet && !hasFunds) ? (isBuy ? 'Insufficient SOL' : `No ${token.sym} to sell`)
             : (isBuy ? `Buy ${amount} SOL of ${token.sym}` : `Sell ${Math.min(100, Number(amount))}% of ${token.sym}`)}
         </button>
-
-        <button onClick={onOpenFull} style={{
-          marginTop: 10, width: '100%', padding: 13, borderRadius: 14, cursor: 'pointer',
-          background: 'transparent', border: `1px solid ${C.hairline}`, color: C.ink3, fontWeight: 600, fontSize: 13,
-          fontFamily: "'Space Grotesk', sans-serif",
-        }}>Open full page</button>
       </div>
     </>
   );
@@ -913,6 +898,10 @@ function lrAgeStr(iso) {
   const h = m / 60;
   if (h < 24) return Math.round(h) + 'h';
   return Math.round(h / 24) + 'd';
+}
+function _uniqMint(list) {
+  const seen = new Set();
+  return list.filter(t => t && t.mint && !seen.has(t.mint) && seen.add(t.mint));
 }
 function normalize(t) {
   const mint = t && t.mint;
@@ -953,7 +942,7 @@ export function LaunchRadarStrip({ onSwitchTab, onOpenToken }) {
         const r = await fetch('/api/dex/launches');
         if (!r.ok) return;
         const d = await r.json();
-        const list = (Array.isArray(d?.tokens) ? d.tokens : []).map(normalize).filter(Boolean).slice(0, 12);
+        const list = _uniqMint((Array.isArray(d?.tokens) ? d.tokens : []).map(normalize).filter(Boolean)).slice(0, 12);
         if (cancelled) return;
         setToks(list);
         loadSeries(list);
@@ -971,7 +960,7 @@ export function LaunchRadarStrip({ onSwitchTab, onOpenToken }) {
       <SectionHead title="Launch" italic="Radar" meta="LIVE" onAll={() => onSwitchTab('launchradar')} />
       <ListShell>
         {toks.map((t, i) => {
-          const pct = Number.isFinite(t.change) ? t.change : pctFromSeries(series[t.mint]);
+          const _cs = pctFromSeries(series[t.mint]); const pct = Number.isFinite(_cs) ? _cs : (Number.isFinite(t.change) ? t.change : null);
           return (
             <Row
               key={t.mint}
@@ -1024,7 +1013,7 @@ function LiveTokenFeeds({ onSwitchTab, onOpenToken, onConnectWallet }) {
         const r = await fetch('/api/dex/launches');
         if (!r.ok) return;
         const d = await r.json();
-        const list = (Array.isArray(d?.tokens) ? d.tokens : []).map(normalize).filter(Boolean).slice(0, 30);
+        const list = _uniqMint((Array.isArray(d?.tokens) ? d.tokens : []).map(normalize).filter(Boolean)).slice(0, 30);
         if (cancelled) return;
         setToks(list);
         loadSeries(list);
@@ -1047,7 +1036,7 @@ function LiveTokenFeeds({ onSwitchTab, onOpenToken, onConnectWallet }) {
   const gainCount = toks.filter(t => Number.isFinite(t.change) && t.change > 0).length;
 
   const mkRow = (t, i, n, sub) => {
-    const pct = Number.isFinite(t.change) ? t.change : pctFromSeries(series[t.mint]);
+    const _cs = pctFromSeries(series[t.mint]); const pct = Number.isFinite(_cs) ? _cs : (Number.isFinite(t.change) ? t.change : null);
     return (
       <Row
         key={t.mint}
@@ -1248,6 +1237,38 @@ function SwapLabel() {
           <span style={{ width: 4, height: 4, borderRadius: '50%', background: C.green, boxShadow: `0 0 6px ${C.green}`, animation: 'nx-pulse 1.6s infinite' }} />LIVE QUOTE
         </div>
       </div>
+    </div>
+  );
+}
+
+// Prominent 50%-referral banner for the home page — mirrors the dark CTA
+// banner from the SEO landing template (mint-green accents, "50%" highlighted).
+function HomeReferralBanner({ onSwitchTab }) {
+  return (
+    <div style={{ maxWidth: 520, margin: '18px auto 4px', width: '100%' }}>
+      <button
+        onClick={() => onSwitchTab('referrals')}
+        style={{
+          width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          gap: 12, padding: '15px 18px', borderRadius: 16, cursor: 'pointer',
+          border: 'none', textAlign: 'left', fontFamily: 'inherit',
+          background: 'linear-gradient(100deg,#0a0a0a,#1c1c22)',
+          boxShadow: '0 10px 30px rgba(10,10,10,.22)',
+          transition: 'transform .15s, box-shadow .15s',
+          animation: 'nx-rise .45s cubic-bezier(.2,1,.4,1) backwards',
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = '0 14px 34px rgba(10,10,10,.30)'; }}
+        onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 10px 30px rgba(10,10,10,.22)'; }}
+      >
+        <span style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, fontWeight: 700, letterSpacing: '0.14em', color: '#9bf5cf' }}>REFERRAL</span>
+          <span style={{ fontFamily: 'inherit', fontSize: 17, fontWeight: 800, lineHeight: 1.2, color: '#fff', letterSpacing: '-0.01em' }}>
+            Earn <em style={{ fontFamily: "'JetBrains Mono', monospace", fontStyle: 'normal', fontWeight: 800, color: C.green }}>50%</em> of fees from everyone you refer
+          </span>
+          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9.5, fontWeight: 600, letterSpacing: '0.06em', color: '#a7a7b2', marginTop: 2 }}>FOREVER · PAID DAILY IN SOL</span>
+        </span>
+        <span style={{ flexShrink: 0, fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 700, color: '#9bf5cf', whiteSpace: 'nowrap' }}>Join →</span>
+      </button>
     </div>
   );
 }
@@ -1990,13 +2011,6 @@ function AppInner() {
       <div className="nx-fixed-blob" style={{ width: 420, height: 420, background: C.pink, top: '35%', left: -160, animationDelay: '3s' }} />
       <div className="nx-fixed-blob" style={{ width: 300, height: 300, background: C.gold, bottom: '15%', right: -80, animationDelay: '6s' }} />
 
-      <div onClick={() => switchTab('referrals')} style={{ position: 'relative', zIndex: 101, maxWidth: 1100, margin: '0 auto', padding: '8px 16px 0', cursor: 'pointer' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(22,192,138,0.10)', border: '1px solid rgba(22,192,138,0.22)', borderRadius: 12, padding: '9px 12px' }}>
-          <span style={{ width: 22, height: 22, borderRadius: 7, background: '#16c08a', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 800, flexShrink: 0 }}>%</span>
-          <span style={{ flex: 1, fontSize: 12, fontWeight: 700, color: '#0b0b0c', fontFamily: "-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif" }}>Earn <b style={{ color: '#11b87f' }}>50% of every fee</b> — on-chain, same block</span>
-          <span style={{ color: '#11b87f', fontWeight: 800, fontSize: 15 }}>→</span>
-        </div>
-      </div>
       {/* HEADER */}
       <header style={{
         position: 'sticky', top: 0, zIndex: 100,
@@ -2077,6 +2091,7 @@ function AppInner() {
             <div ref={swapWidgetRef}>
               <SwapWidget key={swapOutputMint || 'default'} defaultOutputMint={swapOutputMint || undefined} {...sharedProps} />
             </div>
+            <HomeReferralBanner onSwitchTab={switchTab} />
             <XStocksStrip onSwitchTab={switchTab} onOpenToken={openToken} onOpenStock={openStockTrade} />
             <HomeBelow onSwitchTab={switchTab} walletAddress={wallet.walletAddress} onOpenToken={openToken} />
           </>
@@ -2196,4 +2211,3 @@ function AppInner() {
 }
 
 export default function App() { return (<BrowserRouter><AppInner /></BrowserRouter>); }
- 
