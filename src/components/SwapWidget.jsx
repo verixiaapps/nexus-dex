@@ -119,6 +119,11 @@ const SW_CSS = `
 .sw-token-row-bal{font-size:13px;font-weight:700;color:var(--ink);flex-shrink:0;text-align:right}
 `;
 
+function _uniqAddr(list) {
+  const seen = new Set();
+  return list.filter(t => t && t.address && !seen.has(t.address) && seen.add(t.address));
+}
+
 function useSwCSS() {
   useEffect(() => {
     const id = 'nexus-sw-css';
@@ -246,7 +251,7 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
           decimals: t.decimals,
           logoURI:  t.icon || t.logoURI || null,
         })).filter(t => t.address && t.symbol && t.decimals != null);
-        setTokens(norm);
+        setTokens(_uniqAddr(norm));
       } catch (e) {
         console.warn('[swap] token list failed', e);
         setTokens([
@@ -416,7 +421,7 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
   const setMax = () => {
     if (!inputBalance || !inputBalance.uiAmount || inputBalance.uiAmount <= 0) { setAmount('0'); return; }
     let maxAmt = inputBalance.uiAmount;
-    if (inputMint === SOL_MINT) maxAmt = Math.max(0, maxAmt - 0.01); // leave ~0.01 SOL for fees
+    if (inputMint === SOL_MINT) maxAmt = Math.max(0, maxAmt - 0.002); // leave gas
     // Floor to the token's decimals so MAX can never exceed the real balance,
     // and emit a plain decimal string — no float artifacts, no scientific notation.
     const dp = Math.min(Number.isFinite(inputBalance.decimals) ? inputBalance.decimals : 9, 9);
@@ -794,13 +799,13 @@ function TokenPicker({ tokens, loading, balances, excludeMint, onSelect, onClose
         const r = await fetch(`/api/jupiter/tokens/search?query=${encodeURIComponent(query.trim())}`);
         const data = await r.json();
         const list = Array.isArray(data) ? data : (data?.tokens || []);
-        setSearchResults(list.map(t => ({
+        setSearchResults(_uniqAddr(list.map(t => ({
           address:  t.id || t.address || t.mint,
           symbol:   t.symbol,
           name:     t.name,
           decimals: t.decimals,
           logoURI:  t.icon || t.logoURI || null,
-        })).filter(t => t.address && t.symbol && t.decimals != null));
+        })).filter(t => t.address && t.symbol && t.decimals != null)));
       } catch (e) {
         console.warn('[swap] search failed', e);
       } finally {
