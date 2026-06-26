@@ -1359,6 +1359,7 @@ function TokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
      character-for-character; only the wrapper name + local tradeConnection +
      balance refresh differ). Mirrors the Jupiter handleSwap placement above.
      ════════════════════════════════════════════════════════════════════ */
+  const executePumpSwap = useCallback(async ({ mode, swapParams, token }) => {
     if (!wallet.publicKey || !wallet.signTransaction) {
       throw new Error('Please connect a wallet (Phantom, Solflare, Backpack).');
     }
@@ -1482,7 +1483,9 @@ function TokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
       throw new Error('Trade failed on-chain — price likely moved past slippage.');
     }
 
+    setTimeout(() => { refreshSol(); refreshOneToken(token.mint); }, 1500);
     return { sig, confirmed, mode, token, route: route.route };
+  }, [wallet, refreshSol, refreshOneToken]);
 
   const isPumpToken = token.route
     ? token.route === 'pump'
