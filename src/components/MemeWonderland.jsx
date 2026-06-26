@@ -1,6 +1,6 @@
 // MemeWonderland.jsx — pastel wonderland. Jupiter swap, full 3% fee → FEE_WALLET.
 // Sections: Hero · Top Signal · Narratives · Whale Radar · Breaking Out · New Launches · Trending · Live Feed.
-   
+    
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { stkFetchSeries, stkBuildPath, stkSmoothPath, stkThrottle } from './Stocks.jsx';
 // Local copy of stkSeed so this file builds regardless of the Stocks.jsx version
