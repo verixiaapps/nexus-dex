@@ -1176,7 +1176,7 @@ export function XStocksStrip({ onSwitchTab, onOpenToken, onOpenStock }) {
     fetchBrandPrices(picks.map(b => b.mint)).then(p => { if (!cancelled) setPrices(p || {}); }).catch(() => {});
     appFetchBrandIcons(picks.map(b => b.mint)).then(ic => { if (!cancelled) setIcons(ic || {}); }).catch(() => {});
     picks.forEach(b => {
-      stkThrottle(() => stkFetchSeries(b.mint, '1W'))
+      stkThrottle(() => stkFetchSeries(b.mint, '1M'))
         .then(s => { if (!cancelled && s && s.length >= 2) setSeries(prev => ({ ...prev, [b.mint]: s })); })
         .catch(() => {});
     });
