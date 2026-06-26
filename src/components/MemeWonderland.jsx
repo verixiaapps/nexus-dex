@@ -899,7 +899,8 @@ function MwSparkline({ mint, price, change, w = 50, h = 22, full = false }) {
   if (!pts) return null;                       // real data only — nothing until it exists
 
   const path = stkSmoothPath(pts, w, h, 2, stkSeed(mint));
-  const up = path.up;
+  // Color must match the % shown next to it — never a red line on a green +%.
+  const up = Number.isFinite(change) ? change >= 0 : path.up;
   const col = up ? 'var(--green)' : 'var(--down)';
   const id = 'mws' + (up ? 'u' : 'd') + (mint ? String(mint).slice(0, 8) : '');
   return (
@@ -1196,9 +1197,14 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
       stkThrottle(() => stkFetchSeries(mint, '1D'))
         .then(s => {
           if (cancelled || !Array.isArray(s) || s.length < 2) return;
-          const first = Number(s[0]?.c), lastC = Number(s[s.length - 1]?.c);
-          if (!(first > 0) || !Number.isFinite(lastC)) return;
-          const pct = ((lastC - first) / first) * 100;
+          // Anchor to a RECENT window, not s[0] (the launch print, often a
+          // near-zero microprice that makes fresh tokens read +9000%). Use the
+          // last ~6 candles of momentum so the % tracks the visible chart.
+          const lookback = Math.min(6, s.length - 1);
+          const ref = Number(s[s.length - 1 - lookback]?.c);
+          const lastC = Number(s[s.length - 1]?.c);
+          if (!(ref > 0) || !Number.isFinite(lastC)) return;
+          const pct = ((lastC - ref) / ref) * 100;
           setChartChg(prev => (Math.abs((prev[mint] ?? NaN) - pct) < 0.01 ? prev : { ...prev, [mint]: pct }));
         })
         .catch(() => {});
@@ -1294,17 +1300,14 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
     return () => document.removeEventListener('mousedown', onDoc);
   }, []);
 
-  // Tokens shown with the feed's real 24h % (stats24h.priceChange).
-  // NOTE: we deliberately do NOT override `change` with chartChg here.
-  // chartChg is (lastClose - firstClose)/firstClose over the entire fetched
-  // series, anchored to s[0] — the oldest/launch candle — so for fresh meme
-  // pools it yields an all-time change (e.g. +1010%, +7302%) mislabeled as
-  // "24h". Use it only as a fallback when the feed has no 24h value at all.
+  // Displayed % is derived from the SAME chart series the sparkline/chart draw
+  // (chartChg = change across the fetched candles), so the number, the line, and
+  // the chart always agree. Falls back to the feed's value only until the series
+  // for that mint has loaded.
   const tokensCC = useMemo(
     () => tokens.map(t => {
-      const hasFeed = Number.isFinite(t.change) && t.change !== 0;
       const cc = chartChg[t.mint];
-      return (!hasFeed && Number.isFinite(cc)) ? { ...t, change: cc } : t;
+      return Number.isFinite(cc) ? { ...t, change: cc } : t;
     }),
     [tokens, chartChg]
   );
