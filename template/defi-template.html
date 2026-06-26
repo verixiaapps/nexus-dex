@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{{TITLE}}</title>
 <meta name="description" content="{{DESCRIPTION}}">
 <meta name="keywords" content="{{KEYWORD}}">
@@ -49,6 +49,7 @@
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://api.geckoterminal.com" crossorigin>
 <link rel="preconnect" href="https://api.dexscreener.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
 
@@ -245,13 +246,6 @@ header.nx-header{
 .nx-trust-pill .lbl{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;color:var(--ink);letter-spacing:0.12em}
 .nx-trust-pill .cross{color:var(--cyan);font-weight:800;margin-right:3px}
 
-  display:inline-flex;align-items:center;gap:6px;margin:0 0 14px 0;
-  padding:5px 11px;border-radius:999px;font-family:'JetBrains Mono',monospace;
-  font-size:10px;font-weight:700;letter-spacing:.10em;text-transform:uppercase;
-  background:linear-gradient(135deg,rgba(255,176,136,.25),rgba(255,212,107,.25));
-  border:1px solid rgba(255,176,136,.45);color:#8B4F00;
-}
-
 .nx-swap-label{display:flex;align-items:center;justify-content:space-between;padding:6px 4px 8px}
 .nx-swap-label-title{font-family:'Instrument Serif',serif;font-weight:400;font-size:22px;line-height:1;color:var(--ink);letter-spacing:-0.015em}
 .nx-swap-label-title em{font-style:italic;background:linear-gradient(120deg,#A0E7FF,#FF8FBE);-webkit-background-clip:text;background-clip:text;color:transparent}
@@ -442,21 +436,16 @@ footer.nx-foot .non-custodial b{color:var(--ink);font-weight:800}
 
 /* ============================================================================
    GMGN-LIGHT REDESIGN  —  layered over the original styles.
-   Re-skins the page chrome to the Verixia app palette (white / near-black ink /
-   blue #2f6bff / green up / red down, JetBrains Mono for data) with GMGN
-   trading-terminal density. Does NOT touch the swap widget (.sw-* / --sw-*) or
-   the is-live / display visibility gates. Comes last in the cascade so it wins
-   on the page-chrome classes by source order.
    ========================================================================== */
 :root{
-  --ink:#0a0a0a; --ink-2:#6b6b6b; --ink-3:#9a9a9a;
+  --ink:#0a0a0a; --ink-2:#6b6b6b; --ink-3:#767676;
   --cyan:#2f6bff; --sky:#2f6bff; --lav:#2f6bff;
   --pink:#f0425a; --peach:#16c08a; --gold:#a67200;
   --mint:#16c08a; --green:#16c08a; --red:#f0425a; --amber:#a67200;
   --glass:#ffffff; --glass-strong:#fafafa;
   --border:#e7e7ea; --border-hi:#0a0a0a; --hairline:#f0f0f2;
-  --blue:#2f6bff; --up:#16c08a; --down:#f0425a;
-  --up-bg:#e7f8f1; --down-bg:#fdeaed; --blue-bg:#eaf1ff;
+  --blue:#2f6bff; --up:#16c08a; --down:#9d8cff;
+  --up-bg:#e7f8f1; --down-bg:#efecff; --blue-bg:#eaf1ff;
   --fill:#f6f6f7; --fill-2:#fafafa;
   --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
 }
@@ -472,12 +461,13 @@ main{max-width:540px;margin:0 auto;background:#fff;
 
 /* Promo strip */
 .nx-promo{display:flex;align-items:center;justify-content:center;gap:8px;
-  background:#0a0a0a;color:#fff;text-decoration:none;font-size:12.5px;font-weight:500;
+  background:linear-gradient(90deg,#2f6bff,#7c5cff,#FF8FBE);background-size:200% 100%;
+  animation:nx-shimmer 9s linear infinite;color:#fff;text-decoration:none;font-size:12.5px;font-weight:500;
   padding:9px 14px;text-align:center}
 .nx-promo .badge{font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.08em;
-  background:var(--up);color:#06281c;padding:2px 6px;border-radius:5px}
+  background:rgba(255,255,255,.92);color:#2f6bff;padding:2px 6px;border-radius:5px}
 .nx-promo b{font-weight:700}
-.nx-promo .arr{color:#9bf5cf}
+.nx-promo .arr{color:#fff}
 
 /* Header */
 .nx-header{position:sticky;top:0;z-index:40;background:rgba(255,255,255,.88);
@@ -487,7 +477,7 @@ main{max-width:540px;margin:0 auto;background:#fff;
 .nx-logo{display:flex;align-items:center;gap:8px;text-decoration:none;color:var(--ink)}
 .nx-logo-mark{width:28px;height:28px;border-radius:8px;background:var(--blue);color:#fff;
   display:grid;place-items:center;font-weight:800;font-size:15px}
-.nx-wordmark{font-weight:700;font-size:16px;letter-spacing:-.02em;display:flex;align-items:center;gap:6px}
+.nx-wordmark{font-weight:800;font-size:16px;letter-spacing:-.02em;display:flex;align-items:center;gap:6px}
 .nx-dex-pill{font-family:var(--mono);font-size:10px;font-weight:700;background:var(--ink);color:#fff;
   padding:2px 6px;border-radius:5px;letter-spacing:.06em}
 .nx-connect{border:none;background:var(--blue);color:#fff;font-family:'Space Grotesk',sans-serif;
@@ -527,6 +517,8 @@ main{max-width:540px;margin:0 auto;background:#fff;
 .spark{width:100%;height:70px;display:block}
 .spark-meta{font-family:var(--mono);font-size:10px;color:var(--ink-3);position:absolute;left:0;top:10px}
 .spark-meta-r{font-family:var(--mono);font-size:10px;color:var(--ink-3);position:absolute;right:0;top:10px}
+.px-attr{display:block;margin-top:9px;font-family:var(--mono);font-size:9px;letter-spacing:.04em;color:var(--ink-3);text-decoration:none;text-align:right}
+.px-attr:hover{color:var(--ink-2);text-decoration:underline}
 
 /* Stat strip (signature) */
 .px-stats{grid-template-columns:repeat(4,1fr);border:1px solid var(--border);border-radius:12px;
@@ -577,18 +569,24 @@ main{max-width:540px;margin:0 auto;background:#fff;
 .nx-trust-strip b{color:var(--ink-2);font-weight:700}
 .nx-trust-strip .sep{color:var(--ink-3)}
 
-/* Ecosystem */
+/* Ecosystem — 2-col descriptive cards */
 .nx-eco-wrap{margin:20px 0}
 .nx-eco-head{display:flex;align-items:center;justify-content:space-between;
   font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
   color:var(--ink-3);margin-bottom:9px}
-.nx-eco{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}
-.nx-eco-btn{display:flex;flex-direction:column;align-items:center;gap:5px;padding:11px 4px;
-  background:#fff;border:1px solid var(--border);border-radius:11px;text-decoration:none;
-  color:var(--ink);font-size:11px;font-weight:600}
-.nx-eco-btn:hover{border-color:var(--blue)}
-.nx-eco-ic{font-size:17px}
-.nx-eco-lbl{font-size:11px}
+.nx-eco{display:grid;grid-template-columns:1fr 1fr;gap:8px;overflow:visible;padding:0}
+.nx-eco-btn{flex:initial;min-width:0;flex-direction:row;align-items:flex-start;gap:10px;padding:12px;
+  background:#fff;border:1px solid var(--border);border-radius:12px;text-decoration:none;color:var(--ink)}
+.nx-eco-btn:active{border-color:var(--blue)}
+.nx-eco-ic{width:34px;height:34px;border-radius:9px;background:var(--fill);display:grid;place-items:center;flex:0 0 auto;color:var(--ink)}
+.nx-eco-ic svg{width:19px;height:19px;display:block}
+.nx-eco-tx{min-width:0}
+.nx-eco-name{font-family:'Space Grotesk',sans-serif;font-size:13.5px;font-weight:700;letter-spacing:-.01em;
+  text-transform:none;color:var(--ink);display:flex;align-items:center;gap:6px}
+.nx-eco-name .tag{font-family:var(--mono);font-size:8px;font-weight:700;letter-spacing:.06em;
+  background:var(--up-bg);color:#0c7a55;padding:1px 5px;border-radius:4px;text-transform:uppercase}
+.nx-eco-desc{font-family:'Space Grotesk',sans-serif;font-size:10.5px;font-weight:500;color:var(--ink-3);
+  line-height:1.35;margin-top:3px;letter-spacing:0;text-transform:none}
 
 /* 50% referral banner (sits above the swap) */
 .nx-refer-stack{margin:16px 0 12px}
@@ -601,6 +599,7 @@ main{max-width:540px;margin:0 auto;background:#fff;
 .nx-refer-l b em{font-family:var(--mono);font-style:normal;color:var(--up)}
 .nx-refer-l span span,.nx-refer-l>span{font-size:10px;color:#a7a7b2;letter-spacing:.02em}
 .nx-refer-r{font-family:var(--mono);font-size:13px;font-weight:700;color:#9bf5cf;white-space:nowrap}
+.nx-refer.pump-tier::after{display:none}
 
 /* SEO sections */
 .section{margin:22px 0}
@@ -622,7 +621,7 @@ main{max-width:540px;margin:0 auto;background:#fff;
 .faq-item summary{list-style:none;cursor:pointer;padding:13px 15px;font-weight:600;font-size:14px;
   color:var(--ink);display:flex;align-items:center;justify-content:space-between;gap:10px}
 .faq-item summary::-webkit-details-marker{display:none}
-.faq-item .plus{font-family:var(--mono);color:var(--ink-3);font-weight:700}
+.faq-item .plus{font-family:var(--mono);color:var(--ink-3);font-weight:700;background:none;width:auto;height:auto}
 .faq-item[open] .plus{transform:rotate(45deg)}
 .faq-a{padding:0 15px 13px;font-size:13px;color:var(--ink-2);line-height:1.55}
 
@@ -663,7 +662,7 @@ main{max-width:540px;margin:0 auto;background:#fff;
 <body>
 <a class="nx-promo" href="https://swap.verixiaapps.com">
   <span class="badge">NEW</span>
-  <b>Verixia</b>: Swap, Bridge, Stocks &amp; Prediction Markets all in one app
+  <b>Verixia</b>: Swap, Bridge, xStocks &amp; Memecoins all in one app
   <span class="arr">&rarr;</span>
 </a>
 
@@ -674,8 +673,8 @@ main{max-width:540px;margin:0 auto;background:#fff;
 <header class="nx-header">
   <div class="nx-header-inner">
     <a href="https://swap.verixiaapps.com" class="nx-logo">
-      <div class="nx-logo-mark">N</div>
-      <span class="nx-wordmark">nexus<span class="nx-dex-pill">DEX</span></span>
+      <div class="nx-logo-mark">V</div>
+      <span class="nx-wordmark">Verixia<span class="nx-dex-pill">DEX</span></span>
     </a>
     <button class="nx-connect" id="verixia-header-connect" type="button">Connect</button>
   </div>
@@ -689,7 +688,7 @@ main{max-width:540px;margin:0 auto;background:#fff;
       <span class="txt">{{STATIC_INTRO}}</span>
     </div>
     <h1 class="nx-h1">{{STATIC_H1}}</h1>
-    <p class="nx-lede"><b>Non-custodial. No KYC.</b> Best price on every Solana token, routed live through Jupiter &mdash; settled in your wallet in seconds.</p>
+    <p class="nx-lede"><b>Non-custodial. No KYC.</b> Best route on every Solana token, quoted live through Jupiter &mdash; settled in your wallet in seconds.</p>
 
     <div class="px-card" id="nx-px-card">
       <div class="px-top">
@@ -707,9 +706,10 @@ main{max-width:540px;margin:0 auto;background:#fff;
       </div>
       <div class="spark-wrap">
         <svg class="spark" id="nx-spark" viewBox="0 0 320 60" preserveAspectRatio="none"></svg>
-        <span class="spark-meta">24H</span>
+        <span class="spark-meta">7D</span>
         <span class="spark-meta-r" id="nx-spark-range">&mdash;</span>
       </div>
+      <a class="px-attr" href="https://www.geckoterminal.com" target="_blank" rel="noopener nofollow">Chart data &middot; GeckoTerminal</a>
     </div>
 
     <div class="px-stats" id="nx-px-stats">
@@ -731,16 +731,16 @@ main{max-width:540px;margin:0 auto;background:#fff;
   <div class="nx-refer-stack">
     <a class="nx-refer pump-tier" href="https://swap.verixiaapps.com">
       <span class="nx-refer-l">
-        <span class="nx-refer-tag">PUMP.FUN TIER</span>
-        <b>Earn <em>50%</em> of every pump.fun trade</b>
-        <span>FROM EVERYONE YOU REFER &middot; FOREVER &middot; PAID DAILY IN SOL</span>
+        <span class="nx-refer-tag">REFERRAL</span>
+        <b>Earn <em>50%</em> of fees from everyone you refer</b>
+        <span>FOREVER &middot; PAID DAILY IN SOL</span>
       </span>
       <span class="nx-refer-r">Join &rarr;</span>
     </a>
   </div>
 
   <div class="nx-swap-label">
-    <div class="nx-swap-label-title">Swap <em>right here</em></div>
+    <div class="nx-swap-label-title">Live swap &mdash; <em>trade now</em></div>
     <div class="nx-live-pill"><span class="dot"></span>LIVE QUOTE</div>
   </div>
 
@@ -771,8 +771,6 @@ main{max-width:540px;margin:0 auto;background:#fff;
     <span>Powered by</span>
     <b>JUPITER</b>
     <span class="sep">&middot;</span>
-    <b>LI.FI</b>
-    <span class="sep">&middot;</span>
     <b>CHAINALYSIS</b>
   </div>
 
@@ -782,14 +780,14 @@ main{max-width:540px;margin:0 auto;background:#fff;
       <span>SUPER-APP</span>
     </div>
     <div class="nx-eco">
-      <a class="nx-eco-btn" href="https://swap.verixiaapps.com"><span class="nx-eco-ic">&#8645;</span><span class="nx-eco-lbl">Swap</span></a>
-      <a class="nx-eco-btn" href="https://swap.verixiaapps.com"><span class="nx-eco-ic">&#129421;</span><span class="nx-eco-lbl">Ape</span></a>
-      <a class="nx-eco-btn" href="https://swap.verixiaapps.com"><span class="nx-eco-ic">&#10024;</span><span class="nx-eco-lbl">Wonderland</span></a>
-      <a class="nx-eco-btn" href="https://swap.verixiaapps.com"><span class="nx-eco-ic">&#128640;</span><span class="nx-eco-lbl">Radar</span></a>
-      <a class="nx-eco-btn" href="https://swap.verixiaapps.com"><span class="nx-eco-ic">&#127753;</span><span class="nx-eco-lbl">Cross-Chain</span></a>
-      <a class="nx-eco-btn" href="https://swap.verixiaapps.com"><span class="nx-eco-ic">&#8383;</span><span class="nx-eco-lbl">SOL &rarr; BTC</span></a>
-      <a class="nx-eco-btn" href="https://swap.verixiaapps.com"><span class="nx-eco-ic">&#128200;</span><span class="nx-eco-lbl">Markets</span></a>
-      <a class="nx-eco-btn" href="https://swap.verixiaapps.com"><span class="nx-eco-ic">&#127919;</span><span class="nx-eco-lbl">Flipsy</span></a>
+      <a class="nx-eco-btn" href="https://swap.verixiaapps.com/?tab=swap"><span class="nx-eco-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4v16"/><path d="M3 8l4-4 4 4"/><path d="M17 20V4"/><path d="M21 16l-4 4-4-4"/></svg></span><span class="nx-eco-tx"><span class="nx-eco-name">Swap</span><span class="nx-eco-desc">Best-route swaps on any Solana token</span></span></a>
+      <a class="nx-eco-btn" href="https://swap.verixiaapps.com/?tab=ape"><span class="nx-eco-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-2 8 9-12h-7l2-8z"/></svg></span><span class="nx-eco-tx"><span class="nx-eco-name">Ape</span><span class="nx-eco-desc">Snipe pump.fun launches the second they go live</span></span></a>
+      <a class="nx-eco-btn" href="https://swap.verixiaapps.com/?tab=wonderland"><span class="nx-eco-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 4.9L18.5 9 13.8 10.8 12 15.5l-1.8-4.7L5.5 9l4.7-1.1L12 3z"/><path d="M18.5 14l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7.7-2z"/></svg></span><span class="nx-eco-tx"><span class="nx-eco-name">Meme World</span><span class="nx-eco-desc">Trending &amp; brand-new memecoins</span></span></a>
+      <a class="nx-eco-btn" href="https://swap.verixiaapps.com/?tab=launchradar"><span class="nx-eco-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c3 1.6 4.8 4.6 4.8 8 0 1.5-.4 2.9-1 4.1H8.2c-.6-1.2-1-2.6-1-4.1 0-3.4 1.8-6.4 4.8-8z"/><circle cx="12" cy="9.3" r="1.6"/><path d="M8.4 16.5l-2.2 4 3.2-1.1M15.6 16.5l2.2 4-3.2-1.1"/></svg></span><span class="nx-eco-tx"><span class="nx-eco-name">Launch Radar</span><span class="nx-eco-desc">Fresh token launches, updated live</span></span></a>
+      <a class="nx-eco-btn" href="https://swap.verixiaapps.com/?tab=bridge"><span class="nx-eco-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8v11M21 8v11"/><path d="M3 11c5 0 6-3 9-3s4 3 9 3"/><path d="M3 19h18"/><path d="M9 19v-4M15 19v-4M12 19v-4.5"/></svg></span><span class="nx-eco-tx"><span class="nx-eco-name">Bridge</span><span class="nx-eco-desc">Move funds across Solana, ETH, Base &amp; more</span></span></a>
+      <a class="nx-eco-btn" href="https://swap.verixiaapps.com/?tab=solbtc"><span class="nx-eco-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 8h4a2 2 0 0 1 0 4h-4m0 0h4.3a2 2 0 0 1 0 4H9.5m0-8V7m3-1v1.5m-3 8.5v1m3-1v1.5"/></svg></span><span class="nx-eco-tx"><span class="nx-eco-name">SOL &rarr; BTC</span><span class="nx-eco-desc">Swap Solana straight to native Bitcoin</span></span></a>
+      <a class="nx-eco-btn" href="https://swap.verixiaapps.com/?tab=stocks"><span class="nx-eco-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4v16h16"/><path d="M7 14l4-4 3 3 5-6"/><path d="M19 7v3.5h-3.5"/></svg></span><span class="nx-eco-tx"><span class="nx-eco-name">xStocks</span><span class="nx-eco-desc">Tokenized stocks &amp; ETFs, trade 24/7</span></span></a>
+      <a class="nx-eco-btn" href="https://swap.verixiaapps.com/?tab=flipsy"><span class="nx-eco-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg></span><span class="nx-eco-tx"><span class="nx-eco-name">Flipsy <span class="tag">New</span></span><span class="nx-eco-desc">On-chain prediction markets</span></span></a>
     </div>
   </div>
 
@@ -856,30 +854,28 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
 <!-- =============================================================================
      VERIXIA SWAP WIDGET — Jupiter-only. Per-page isolated. No pump.fun.
 
+     Chart data: GeckoTerminal (CoinGecko on-chain). No DexScreener for charts,
+     and NO synthesized/fake chart — if a subject token has no real OHLCV we fall
+     back to a random liquid Solana token so the chart is always real.
+
      APIs:
        /api/jupiter/tokens                token list
        /api/jupiter/tokens/search         token search
        /api/seo/jupiter/build             SEO-keyed quote+build
        /api/solana-rpc                    balances, blockhash, simulate, submit
        /api/dex/sol-price                 SOL price for USD subtitles + presets
-       /api/dex/chart/:mint               24h OHLCV for the price-card sparkline
+       GeckoTerminal /networks/solana/... price card + sparkline OHLCV
 
      Atomic 3% fee: SystemProgram.transfer if input is SOL, else SPL
-     transferChecked. Bundled into the same v0 tx as the Jupiter swap and the
-     ALTs Jupiter built used.
+     transferChecked. Bundled into the same v0 tx as the Jupiter swap.
 
      Wallet: window.VerixiaWallet from /nexus-dex/verixia-wc.js
-     (.open / .subscribe / .getProvider / .disconnect). State shape:
-     { isConnected, address, walletName, providerType }.
 ============================================================================= -->
 
 <script>
 (function __verixiaSwapBoot() {
   "use strict";
 
-  // ---------------------------------------------------------------------------
-  // 1. Wait for DOM and window.solanaWeb3, then run __verixiaApp.
-  // ---------------------------------------------------------------------------
   var WEB3_URLS = [
     '/solana-web3.iife.min.js',
     'https://cdn.jsdelivr.net/npm/@solana/web3.js@1.95.8/lib/index.iife.min.js',
@@ -949,9 +945,6 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
   else start();
 
-  // ===========================================================================
-  // 2. __verixiaApp — the widget. Closure-scoped, isolated per page.
-  // ===========================================================================
   function __verixiaApp() {
     var sw = window.solanaWeb3;
     var Connection = sw.Connection;
@@ -962,10 +955,8 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
     var AddressLookupTableAccount = sw.AddressLookupTableAccount;
     var TransactionInstruction = sw.TransactionInstruction;
 
-    // base64 helpers
     var b64ToBytes = function (b64) { return Uint8Array.from(atob(b64), function (c) { return c.charCodeAt(0); }); };
 
-    // SPL helpers (hand-rolled, no spl-token dep)
     var TOKEN_PROGRAM_ID       = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
     var TOKEN_2022_PROGRAM_ID  = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
     var ASSOC_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
@@ -1008,7 +999,6 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       });
     }
 
-    // Config
     var ORIGIN          = window.location.origin;
     var _cfgRpc         = (window.__VERIXIA_CONFIG__ && window.__VERIXIA_CONFIG__.rpc) || '';
     var RPC_URL         = /^https?:\/\//i.test(_cfgRpc) ? _cfgRpc : (ORIGIN + '/api/solana-rpc');
@@ -1017,21 +1007,20 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
     var SOL_MINT        = 'So11111111111111111111111111111111111111112';
     var USDC_MINT       = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
     var GT_API          = 'https://api.geckoterminal.com/api/v2';
-    var BLUE_CHIPS      = ['DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263','JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN','EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm']; // BONK, JUP, WIF (pinned fallbacks)
+    var BLUE_CHIPS      = ['DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263','JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN','EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm'];
     var SLIPPAGE_BPS    = 500;
     var PRIORITY_FEE_MICROLAMPORTS = 50000;
-    var SOL_RESERVE     = 0.01;
+    var SOL_RESERVE     = 0.002;   // gas buffer kept back on MAX
     var DISCONNECT_FLAG = 'verixia:disconnected';
     var MINT_RE         = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
     var connection = new Connection(RPC_URL, 'confirmed');
 
-    // State
     var S = {
       provider: null, publicKey: null, walletName: null,
       tokens: [], tokensLoading: true,
       inputMint: SOL_MINT, outputMint: USDC_MINT,
-      amount: '0.5',  // conversion lever — initial quote within ~1s of load
+      amount: '0.5',
       quote: null, quoting: false, quoteError: null,
       swapping: false, swapError: null, swapResult: null,
       balances: {}, balancesLoading: false,
@@ -1042,8 +1031,8 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
     var _hasExplicitOutput = false;
     var _chartIsRandom = false;
     var _chartTries = 0;
+    var _chartPool = null;   // GeckoTerminal pool address for the subject token's sparkline
 
-    // Formatters
     function fmtAmount(n, decimals) {
       decimals = decimals || 6;
       if (n == null || isNaN(n)) return '0';
@@ -1081,7 +1070,6 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       return (err && err.message) || 'Swap failed. Please try again.';
     }
 
-    // Jupiter build response → TransactionInstruction
     function deserJupIx(ix) {
       return {
         programId: new PublicKey(ix.programId),
@@ -1092,7 +1080,6 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       };
     }
 
-    // Wallet bundle readiness (verixia-wc.js exposes window.VerixiaWallet)
     function appKitReady() {
       return typeof window !== 'undefined' && window.VerixiaWallet
           && typeof window.VerixiaWallet.open === 'function';
@@ -1111,9 +1098,6 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       });
     }
 
-    // ========================================================================
-    // 3. Token list, subject auto-select
-    // ========================================================================
     function tokenBy(mint) {
       for (var i = 0; i < S.tokens.length; i++) if (S.tokens[i].address === mint) return S.tokens[i];
       return null;
@@ -1166,11 +1150,8 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       var kwMeta = document.querySelector('meta[name="keywords"]');
       var kw = kwMeta ? kwMeta.content : '';
       var combinedRaw = h1Text + ' ' + kw;
-      // Explicit mint is case-sensitive base58 — match on the ORIGINAL text, never lowercased.
       var mintMatch = combinedRaw.match(/\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/);
       if (mintMatch) return mintMatch[0];
-      // Everything else is CASE-INSENSITIVE: lowercase, drop action/stop words, keep the
-      // token term(s). "Buy BONK", "buy bonk" and "Buy Bonk" all resolve the same.
       var STOP = { buy:1,sell:1,swap:1,swaps:1,trade:1,trades:1,trading:1,bridge:1,move:1,convert:1,
         exchange:1,get:1,send:1,receive:1,to:1,from:1,into:1,for:1,with:1,on:1,in:1,at:1,of:1,
         the:1,a:1,an:1,and:1,or:1,vs:1,price:1,prices:1,chart:1,charts:1,live:1,best:1,cheap:1,
@@ -1180,16 +1161,13 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       var words = combinedRaw.toLowerCase().replace(/[^a-z0-9$\s]/g, ' ').split(/\s+/);
       var cand = [];
       for (var i = 0; i < words.length; i++) {
-        var w = words[i].replace(/^\$+/, '');   // allow $TICKER style
+        var w = words[i].replace(/^\$+/, '');
         if (w.length >= 2 && !STOP[w]) cand.push(w);
       }
       if (!cand.length) return null;
-      // Pass the surviving term(s) to DexScreener/GeckoTerminal search.
       return cand.join(' ');
     }
 
-    // --- Always-show-a-chart: pick a good, liquid Solana token when the page
-    // --- doesn't name one. Quality-filtered so a public page never surfaces junk.
     function vxShuffle(a){for(var i=a.length-1;i>0;i--){var j=Math.floor(Math.random()*(i+1));var t=a[i];a[i]=a[j];a[j]=t;}return a;}
     async function fetchBestPairLiquidity(mint){
       try{
@@ -1206,40 +1184,32 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
     }
     async function pickRandomSolanaToken(exclude){
       var STABLE={}; STABLE[SOL_MINT]=1; STABLE[USDC_MINT]=1; STABLE['Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB']=1;
-      // 1) Prefer DexScreener-trending tokens that are also Jupiter-swappable.
       var trending=[];
       try{
         var r=await fetch('https://api.dexscreener.com/token-boosts/top/v1');
         var d=await r.json();
         if(Array.isArray(d))trending=d.filter(function(t){return t&&t.chainId==='solana'&&t.tokenAddress&&!STABLE[t.tokenAddress]&&tokenBy(t.tokenAddress);}).map(function(t){return t.tokenAddress;});
       }catch(e){}
-      // 2) Otherwise the loaded Jupiter list (swappable, decimals known).
       var jup=[]; for(var i=0;i<S.tokens.length;i++){var a=S.tokens[i].address; if(a&&!STABLE[a])jup.push(a);}
       var pool=trending.length?trending:jup;
       if(exclude)pool=pool.filter(function(m){return m!==exclude;});
       vxShuffle(pool);
-      // 3) First one clearing a liquidity bar = a "good" token; uses its highest-liquidity pair.
       for(var k=0;k<pool.length&&k<12;k++){
         var info=await fetchBestPairLiquidity(pool[k]);
         if(info&&info.liq>=50000&&info.symbol&&!/^(SOL|USDC|USDT)$/i.test(info.symbol))return info.mint;
       }
-      // 4) Last resort: a pinned blue-chip so a chart renders even if both APIs hiccup.
       var chips=vxShuffle(BLUE_CHIPS.slice()).filter(function(m){return m!==exclude;});
       for(var b=0;b<chips.length;b++){ if(tokenBy(chips[b])) return chips[b]; }
       return chips[0]||trending[0]||(jup.length?jup[Math.floor(Math.random()*jup.length)]:USDC_MINT);
     }
     async function useRandomChartToken(){
-      if(_hasExplicitOutput) return;                          // respect an explicit per-page output token
+      if(_hasExplicitOutput) return;
       try{
         var mint=await pickRandomSolanaToken();
-        if(mint&&mint!==SOL_MINT&&mint!==USDC_MINT){ _chartIsRandom=true; applyOutputMint(mint); }  // SOL (pay) -> token (receive) + chart
+        if(mint&&mint!==SOL_MINT&&mint!==USDC_MINT){ _chartIsRandom=true; applyOutputMint(mint); }
       }catch(e){ console.warn('[verixia] random chart token failed', e); }
     }
 
-    // Resolve a keyword term to a real Solana mint by going DIRECTLY to DexScreener
-    // (then GeckoTerminal) and taking the HIGHEST-LIQUIDITY Solana pair. The winning
-    // contract is used for BOTH the chart and the swap receive token, so the contract
-    // always matches the token named in the keyword.
     async function dexDecimalsFor(mint) {
       var t = tokenBy(mint);
       if (t && t.decimals != null) return t.decimals;
@@ -1286,7 +1256,7 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
         for (var i = 0; i < pools.length; i++) {
           var a = pools[i].attributes || {};
           var rel = pools[i].relationships || {};
-          var bt = rel.base_token && rel.base_token.data && rel.base_token.data.id; // "solana_<mint>"
+          var bt = rel.base_token && rel.base_token.data && rel.base_token.data.id;
           var liq = Number(a.reserve_in_usd || 0);
           if (bt && liq > bestLiq) { bestLiq = liq; best = bt; }
         }
@@ -1306,7 +1276,7 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       if (!hit) hit = await bestSolanaPairGecko(term);
       if (!hit) return null;
       var dec = await dexDecimalsFor(hit.address);
-      if (dec == null) return null;                       // no decimals -> can't swap safely -> skip
+      if (dec == null) return null;
       if (!hit.symbol) {
         var meta = await geckoTokenMeta(hit.address);
         if (meta) { hit.symbol = meta.symbol || 'TOKEN'; hit.name = hit.name || meta.name || hit.symbol; hit.logoURI = hit.logoURI || meta.logoURI; }
@@ -1316,10 +1286,9 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
     }
 
     async function resolveSubjectFromTokens() {
-      if (_hasExplicitOutput) return;                     // explicit per-page output token wins
+      if (_hasExplicitOutput) return;
       var raw = _subjectRaw;
       if (!raw) { await useRandomChartToken(); return; }
-      // Explicit mint in the keyword -> use that contract directly.
       if (MINT_RE.test(raw)) {
         var dec0 = await dexDecimalsFor(raw);
         if (dec0 != null) {
@@ -1330,10 +1299,8 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
           applyOutputMint(raw); return;
         }
       }
-      // Keyword names a token -> DexScreener/GeckoTerminal highest-liquidity Solana pair.
       var resolved = await resolveTermToMint(raw);
       if (resolved) { upsertToken(resolved); applyOutputMint(resolved.address); return; }
-      // Nothing matched -> still show a chart.
       await useRandomChartToken();
     }
 
@@ -1344,7 +1311,7 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       S.quoteError = null;
       renderAll();
       scheduleQuote();
-      bootPriceCard();  // refresh price card for the new token
+      bootPriceCard();
       if (S.publicKey) refreshBalances();
     }
 
@@ -1357,9 +1324,6 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       } catch (e) {}
     }
 
-    // ========================================================================
-    // 4. Balances — Alchemy via /api/solana-rpc
-    // ========================================================================
     function mergeTokenAccounts(out, accs) {
       if (!accs || !accs.value) return;
       for (var i = 0; i < accs.value.length; i++) {
@@ -1398,9 +1362,6 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       renderRows();
     }
 
-    // ========================================================================
-    // 5. Quote — Jupiter only, via SEO-keyed build endpoint
-    // ========================================================================
     function rawAmount() {
       var t = tokenBy(S.inputMint);
       if (!S.amount || !t) return '';
@@ -1464,10 +1425,14 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       var n = Number(S.quote.priceImpactPct);
       return Number.isFinite(n) ? n * (Math.abs(n) <= 1 ? 100 : 1) : null;
     }
+    function feeUi() {
+      var t = tokenBy(S.inputMint);
+      if (!t) return null;
+      var n = Number(S.amount);
+      if (!Number.isFinite(n) || n <= 0) return null;
+      return n * (FEE_BPS / 10000);
+    }
 
-    // ========================================================================
-    // 6. Swap execution — Jupiter only
-    // ========================================================================
     async function handleSwap() {
       var inputToken  = tokenBy(S.inputMint);
       var outputToken = tokenBy(S.outputMint);
@@ -1603,9 +1568,6 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       }
     }
 
-    // ========================================================================
-    // 7. UI — buildDom, renderRows, renderDetails, renderBanners, renderButton
-    // ========================================================================
     var CHEV  = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
     var FLIP  = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4v16M7 4l-3 3M7 4l3 3M17 20V4M17 20l-3-3M17 20l3-3" transform="rotate(90 12 12)"/></svg>';
     var CLOSE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
@@ -1692,7 +1654,7 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       if (!uiAmt || uiAmt <= 0) return 0;
       if (mint === SOL_MINT && S.solPrice > 0) return uiAmt * S.solPrice;
       if (mint === USDC_MINT) return uiAmt;
-      if (mint === 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB') return uiAmt; // USDT
+      if (mint === 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB') return uiAmt;
       return 0;
     }
 
@@ -1779,9 +1741,13 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       var piClass = pi == null ? 'sw-impact-neutral' : pi > 5 ? 'sw-impact-bad' : pi > 1 ? 'sw-impact-warn' : 'sw-impact-good';
       var rate = (oa / Number(S.amount)) || 0;
       var mr = minReceived();
+      var fee = feeUi();
+      var feeUsd = fee != null ? computeUsd(S.inputMint, fee) : 0;
+      var feeStr = fee != null ? (fmtAmount(fee, inputToken.decimals) + ' ' + esc(inputToken.symbol) + (feeUsd > 0 ? ' \u2248 ' + fmtUsd(feeUsd) : '')) : '\u2014';
       els.details.style.display = '';
       els.details.innerHTML =
         '<div class="sw-detail-row"><span>Rate</span><span class="sw-detail-val">1 ' + esc(inputToken.symbol) + ' \u2248 ' + esc(fmtAmount(rate, outputToken.decimals)) + ' ' + esc(outputToken.symbol) + '</span></div>' +
+        '<div class="sw-detail-row"><span>Fee (3%)</span><span class="sw-detail-val">' + feeStr + '</span></div>' +
         '<div class="sw-detail-row"><span>Minimum received</span><span class="sw-detail-val">' + esc(fmtAmount(mr, outputToken.decimals)) + ' ' + esc(outputToken.symbol) + '</span></div>' +
         '<div class="sw-detail-row"><span>Price impact</span><span class="sw-detail-val ' + piClass + '">' + (pi != null ? pi.toFixed(2) + '%' : '\u2014') + '</span></div>';
     }
@@ -1824,16 +1790,12 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
     }
     function renderAll() { renderRows(); renderDetails(); renderBanners(); renderButton(); updateHeader(); }
 
-    // ========================================================================
-    // 8. Picker — canonical pins (SOL/USDC/USDT/JUP/BONK) + spam filter +
-    //    lazy image loading. Address paste also looks up via Jupiter search.
-    // ========================================================================
     var CANONICAL_ORDER = [
-      'So11111111111111111111111111111111111111112',                // SOL
-      'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',                // USDC
-      'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',                // USDT
-      'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN',                 // JUP
-      'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263'                 // BONK
+      'So11111111111111111111111111111111111111112',
+      'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
+      'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN',
+      'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263'
     ];
     function isLikelySpam(t) {
       var s = String(t.symbol || '');
@@ -1995,9 +1957,6 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
     }
     function closePicker() { if (pickerEl) { pickerEl.remove(); pickerEl = null; } }
 
-    // ========================================================================
-    // 9. Wallet — uses window.VerixiaWallet from /nexus-dex/verixia-wc.js
-    // ========================================================================
     function doOpenWallet() {
       try { sessionStorage.removeItem(DISCONNECT_FLAG); } catch (e) {}
       try { window.VerixiaWallet.open(); }
@@ -2149,88 +2108,25 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
     }
 
     // ========================================================================
-    // 10. Live price card + SMOOTH bezier sparkline
-    //     - Real OHLCV pulled from /api/dex/chart/:mint (24h)
-    //     - Catmull-Rom cubic bezier smoothing for natural curves
-    //     - If only synthetic data available, hide the chart entirely
-    //       (synthetic looks "wonky" — better to show price + change only)
+    // Live price card + SMOOTH bezier sparkline — GeckoTerminal (CG) only.
+    // No DexScreener for chart data, and NEVER a synthesized/fake chart: if the
+    // subject token has no real OHLCV, fall back to a random liquid Solana token.
     // ========================================================================
-    async function fetchChartPoints(mint) {
+    async function fetchChartPoints(pool) {
+      if (!pool) return null;
       try {
-        var r = await fetch(ORIGIN + '/api/dex/chart/' + encodeURIComponent(mint) + '?tf=24H');
+        var r = await fetch(GT_API + '/networks/solana/pools/' + encodeURIComponent(pool) + '/ohlcv/hour?aggregate=4&limit=42&currency=usd', { headers: { Accept: 'application/json' } });
         if (!r.ok) return null;
         var data = await r.json();
-        var pts = data && Array.isArray(data.points) ? data.points : null;
-        if (!pts || pts.length < 4) return null;
-        return pts.map(function (p) { return { ts: Number(p.ts), price: Number(p.price) }; })
-                  .filter(function (p) { return Number.isFinite(p.ts) && Number.isFinite(p.price) && p.price > 0; });
+        var list = data && data.data && data.data.attributes && data.data.attributes.ohlcv_list;
+        if (!Array.isArray(list) || list.length < 4) return null;
+        var pts = list.map(function (x) { return { ts: Number(x[0]), price: Number(x[4]) }; })
+                      .filter(function (p) { return Number.isFinite(p.ts) && Number.isFinite(p.price) && p.price > 0; })
+                      .sort(function (a, b) { return a.ts - b.ts; });
+        return pts.length >= 4 ? pts : null;
       } catch (e) { return null; }
     }
 
-    // Seed a small PRNG from the mint string so the same token always gets the
-    // same synthetic shape (looks consistent across refreshes — not random
-    // every reload).
-    function mulberry32(seed) {
-      return function () {
-        seed |= 0; seed = seed + 0x6D2B79F5 | 0;
-        var t = Math.imul(seed ^ seed >>> 15, 1 | seed);
-        t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
-        return ((t ^ t >>> 14) >>> 0) / 4294967296;
-      };
-    }
-    function seedFromMint(mint) {
-      var s = String(mint || '');
-      var h = 2166136261;
-      for (var i = 0; i < s.length; i++) {
-        h ^= s.charCodeAt(i); h = Math.imul(h, 16777619);
-      }
-      return h >>> 0;
-    }
-
-    // Synthesize a natural-looking 24h price curve when /api/dex/chart returns
-    // nothing. Anchors start and end to real values (current price, 24h ago
-    // implied by change%), so the chart line tells the truth about the actual
-    // 24h movement. The interior is two sine waves + low-amplitude noise —
-    // smooth wiggles, not the jagged mulberry32 line we used to draw.
-    function synthesizeChart(currentPrice, change24Pct, mint) {
-      if (!currentPrice || !isFinite(currentPrice) || currentPrice <= 0) return null;
-      var n = 24;
-      var pct = (change24Pct != null && isFinite(change24Pct)) ? change24Pct : 0;
-      var startPrice = currentPrice / (1 + pct / 100);
-      if (!isFinite(startPrice) || startPrice <= 0) startPrice = currentPrice;
-      var rand = mulberry32(seedFromMint(mint));
-      // Burn a few values so the seed mixes well.
-      for (var b = 0; b < 8; b++) rand();
-      var phase1 = rand() * Math.PI * 2;
-      var phase2 = rand() * Math.PI * 2;
-      // Amplitude scales with |change%|: bigger moves get more dramatic
-      // interior swings, calm tokens get gentle ripples. Clamped so it never
-      // dwarfs the actual trend.
-      var ampSlow = Math.min(0.025, 0.005 + Math.abs(pct) / 100 * 0.20);
-      var ampFast = ampSlow * 0.45;
-      var ampNoise = ampSlow * 0.35;
-      var pts = [];
-      for (var i = 0; i < n; i++) {
-        var t = i / (n - 1);
-        var trendPrice = startPrice + (currentPrice - startPrice) * t;
-        // Two layered sines (different frequencies) for organic wave shape.
-        var wave = Math.sin(t * Math.PI * 1.7 + phase1) * ampSlow
-                 + Math.sin(t * Math.PI * 3.3 + phase2) * ampFast;
-        var noise = (rand() - 0.5) * ampNoise;
-        // Taper the deviation toward the endpoints so start/end stay anchored.
-        var taper = Math.sin(t * Math.PI);
-        var mult = 1 + (wave + noise) * taper;
-        pts.push({ ts: i, price: Math.max(currentPrice * 0.001, trendPrice * mult) });
-      }
-      // Hard-pin endpoints to the truth.
-      pts[0].price = startPrice;
-      pts[n - 1].price = currentPrice;
-      return pts;
-    }
-
-    // Catmull-Rom → cubic bezier path. Produces a smooth curve through every
-    // data point without overshoot. tension=0.5 reads as "natural" vs the
-    // jagged straight-segment fallback that earlier looked wonky.
     function buildSmoothPath(points, w, h, padX, padY) {
       if (!points || points.length < 2) return '';
       var n = points.length;
@@ -2268,9 +2164,6 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
     async function bootPriceCard() {
       var card = document.getElementById('nx-px-card');
       if (!card) return;
-      // The price card shows the page-subject token. On SEO pages the subject
-      // is the output token (e.g. "swap SOL to BONK" → BONK). Fall back to
-      // input if output is SOL/USDC. Hide entirely if both are stables/native.
       var mint = null;
       if (S.outputMint && S.outputMint !== SOL_MINT && S.outputMint !== USDC_MINT) mint = S.outputMint;
       else if (S.inputMint && S.inputMint !== SOL_MINT && S.inputMint !== USDC_MINT) mint = S.inputMint;
@@ -2290,28 +2183,37 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       var volEl    = document.getElementById('nx-stat-vol');
       var txEl     = document.getElementById('nx-stat-tx');
 
-      // Fetch DexScreener data
+      // ---- All market data from GeckoTerminal (CoinGecko on-chain) ----
       var price = null, change24 = null, fdv = null, liq = null, vol24 = null, txns24 = null;
       var symbol = null, name = null, icon = null;
+      _chartPool = null;
       try {
-        var r = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + encodeURIComponent(mint));
-        var data = await r.json();
-        if (data && Array.isArray(data.pairs) && data.pairs.length) {
-          var solanaPairs = data.pairs.filter(function (p) { return p.chainId === 'solana'; });
-          var pairs = solanaPairs.length ? solanaPairs : data.pairs;
-          pairs.sort(function (a, b) {
-            return (b.liquidity && b.liquidity.usd || 0) - (a.liquidity && a.liquidity.usd || 0);
-          });
-          var best = pairs[0];
-          price    = best.priceUsd ? Number(best.priceUsd) : null;
-          change24 = best.priceChange && best.priceChange.h24 != null ? Number(best.priceChange.h24) : null;
-          fdv      = best.fdv ? Number(best.fdv) : (best.marketCap ? Number(best.marketCap) : null);
-          liq      = best.liquidity && best.liquidity.usd ? Number(best.liquidity.usd) : null;
-          vol24    = best.volume && best.volume.h24 ? Number(best.volume.h24) : null;
-          if (best.txns && best.txns.h24) txns24 = Number(best.txns.h24.buys || 0) + Number(best.txns.h24.sells || 0);
-          symbol   = best.baseToken && best.baseToken.symbol || null;
-          name     = best.baseToken && best.baseToken.name || null;
-          icon     = best.info && best.info.imageUrl || null;
+        var rt = await fetch(GT_API + '/networks/solana/tokens/' + encodeURIComponent(mint) + '?include=top_pools', { headers: { Accept: 'application/json' } });
+        var dt = await rt.json();
+        var at = (dt && dt.data && dt.data.attributes) || {};
+        if (at.price_usd != null)            price  = Number(at.price_usd);
+        if (at.fdv_usd != null)              fdv    = Number(at.fdv_usd);
+        if (at.market_cap_usd != null)       fdv    = Number(at.market_cap_usd) || fdv;
+        if (at.total_reserve_in_usd != null) liq    = Number(at.total_reserve_in_usd);
+        if (at.volume_usd && at.volume_usd.h24 != null) vol24 = Number(at.volume_usd.h24);
+        symbol = at.symbol || null; name = at.name || null; icon = at.image_url || null;
+        var inc = (dt && dt.included) || [];
+        if (Array.isArray(inc) && inc.length) {
+          var bestPool = null, bestLiq = -1;
+          for (var pi = 0; pi < inc.length; pi++) {
+            var pa0 = inc[pi].attributes || {};
+            var rl = Number(pa0.reserve_in_usd || 0);
+            if (rl > bestLiq) { bestLiq = rl; bestPool = inc[pi]; }
+          }
+          if (bestPool) {
+            var pa = bestPool.attributes || {};
+            _chartPool = pa.address || (bestPool.id ? String(bestPool.id).replace(/^solana_/, '') : null);
+            if (pa.price_change_percentage && pa.price_change_percentage.h24 != null) change24 = Number(pa.price_change_percentage.h24);
+            if (pa.transactions && pa.transactions.h24) txns24 = Number(pa.transactions.h24.buys || 0) + Number(pa.transactions.h24.sells || 0);
+            if (liq == null && pa.reserve_in_usd != null) liq = Number(pa.reserve_in_usd);
+            if (vol24 == null && pa.volume_usd && pa.volume_usd.h24 != null) vol24 = Number(pa.volume_usd.h24);
+            if (price == null && pa.base_token_price_usd != null) price = Number(pa.base_token_price_usd);
+          }
         }
       } catch (e) {}
 
@@ -2320,9 +2222,9 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       if (!name && tok) name = tok.name;
       if (!icon && tok) icon = tok.logoURI;
 
-      // No market data for this token (e.g. a non-Solana subject like "Arbitrum"
-      // on a bridge/cross-chain page, or a dead pool)? Fall back to a random good
-      // Solana token so a chart ALWAYS renders. Capped so it can never loop.
+      // No GeckoTerminal market data (dead/non-Solana subject)? Fall back to a
+      // random good Solana token so a real chart ALWAYS renders. Capped so it
+      // can never loop.
       if (price == null && _chartTries < 2) {
         _chartTries++;
         try {
@@ -2362,14 +2264,22 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
         }
       }
 
-      // Sparkline. SVG already in markup with viewBox 0 0 320 60. We only
-      // write the <path> children, leaving the SVG host intact.
+      // Sparkline from the GeckoTerminal pool OHLCV. No real data -> never
+      // synthesize: pull a random liquid token instead, else hide the chart.
       if (!sparkEl) return;
-      var points = await fetchChartPoints(mint);
-      if ((!points || points.length < 4) && price != null && price > 0) {
-        points = synthesizeChart(price, change24, mint);
-      }
+      var points = await fetchChartPoints(_chartPool);
       if (!points || points.length < 4) {
+        if (_chartTries < 2) {
+          _chartTries++;
+          try {
+            var altMint2 = await pickRandomSolanaToken(mint);
+            if (altMint2 && altMint2 !== mint && altMint2 !== SOL_MINT && altMint2 !== USDC_MINT) {
+              _chartIsRandom = true;
+              applyOutputMint(altMint2);
+              return;
+            }
+          } catch (e) {}
+        }
         sparkEl.innerHTML = '';
         if (rangeEl) rangeEl.textContent = '\u2014';
         return;
@@ -2377,9 +2287,10 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       var w = 320, h = 60, padX = 4, padY = 4;
       var path = buildSmoothPath(points, w, h, padX, padY);
       if (!path || !path.d) { sparkEl.innerHTML = ''; return; }
-      var isUp = change24 == null ? true : change24 >= 0;
-      var stroke = isUp ? '#0a7a4c' : '#D14B6A';
-      var fill   = isUp ? 'rgba(10,122,76,0.10)' : 'rgba(209,75,106,0.10)';
+      var wChg = ((points[points.length - 1].price - points[0].price) / points[0].price) * 100;
+      var isUp = Number.isFinite(wChg) ? wChg >= 0 : true;
+      var stroke = isUp ? '#0a7a4c' : '#9d8cff';
+      var fill   = isUp ? 'rgba(10,122,76,0.10)' : 'rgba(157,140,255,0.12)';
       var lastPt = path.pts[path.pts.length - 1];
       var areaD = path.d + ' L ' + lastPt.x.toFixed(2) + ' ' + (h - padY).toFixed(2) +
                   ' L ' + path.pts[0].x.toFixed(2) + ' ' + (h - padY).toFixed(2) + ' Z';
@@ -2387,16 +2298,13 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
         '<path d="' + areaD + '" fill="' + fill + '" stroke="none"/>' +
         '<path d="' + path.d + '" fill="none" stroke="' + stroke + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
       if (rangeEl) {
-        rangeEl.textContent = change24 != null
-          ? (change24 >= 0 ? '+' : '') + change24.toFixed(2) + '%'
+        rangeEl.textContent = Number.isFinite(wChg)
+          ? (isUp ? '+' : '') + wChg.toFixed(2) + '%'
           : '\u2014';
-        rangeEl.style.color = change24 == null ? '' : (change24 >= 0 ? '#0a7a4c' : '#D14B6A');
+        rangeEl.style.color = isUp ? '#0a7a4c' : '#9d8cff';
       }
     }
 
-    // ========================================================================
-    // 11. USD presets ($25 / $100 / $500 / $1K) — uses cached SOL price
-    // ========================================================================
     function bootPresets() {
       var presetEl = document.getElementById('nx-presets');
       if (!presetEl) return;
@@ -2414,10 +2322,9 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
             } else if (S.inputMint === USDC_MINT || S.inputMint === 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB') {
               S.amount = usd.toFixed(2);
             } else {
-              return; // No price for unknown input tokens — preset noop.
+              return;
             }
             if (els.amount) els.amount.value = S.amount;
-            // Visual: mark this preset active.
             for (var j = 0; j < btns.length; j++) btns[j].classList.remove('is-active');
             btn.classList.add('is-active');
             renderRows(); scheduleQuote();
@@ -2426,14 +2333,10 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       }
     }
 
-    // ========================================================================
-    // 12. Init
-    // ========================================================================
     function init() {
       root = document.getElementById('verixia-swap-root');
       if (!root) return;
 
-      // Subject auto-detect — sets output token to match page topic.
       _subjectRaw = detectSubjectRaw();
       var di  = root.getAttribute('data-input-mint');
       var dom = root.getAttribute('data-output-mint');
@@ -2454,10 +2357,8 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
       });
       updateHeader();
 
-      // Kick the initial quote with the prefilled 0.5 SOL.
       scheduleQuote();
 
-      // Subscribe to wallet bundle state changes.
       waitForAppKit().then(function (ok) {
         if (!ok) {
           console.warn('[verixia] wallet bundle not loaded \u2014 Connect button will error on click');
@@ -2465,7 +2366,6 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
         }
         try {
           window.VerixiaWallet.subscribe(onWalletStateChange);
-          // Pull current state in case we already missed the initial event.
           if (typeof window.VerixiaWallet.getState === 'function') {
             var cur = window.VerixiaWallet.getState();
             if (cur) onWalletStateChange(cur);
@@ -2506,4 +2406,3 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
 
 </body>
 </html>
- 
