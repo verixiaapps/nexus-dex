@@ -565,6 +565,8 @@ function SheetChart({ mint, sym }) {
 const SOL_MINT    = 'So11111111111111111111111111111111111111112';
 const FEE_WALLET  = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
 const FEE_BPS     = 300;   // 3%
+// Identify pump tokens by dexId — copied from server.js / LaunchRadar.
+const PUMP_DEX_IDS = new Set(['pumpfun', 'pumpswap']);
 // Regular (graduated / non-pump) path — Jupiter swap, copied verbatim from
 // MemeWonderland.jsx (the working meme trader). 5% slippage, 3% fee from input.
 const SLIPPAGE_BPS = 500;
@@ -573,17 +575,6 @@ const deserIx = (ix) => ({
   keys: ix.accounts.map(a => ({ pubkey: new PublicKey(a.pubkey), isSigner: a.isSigner, isWritable: a.isWritable })),
   data: Buffer.from(ix.data, 'base64'),
 });
-async function jupBuild({ inputMint, outputMint, amount, taker }) {
-  const params = new URLSearchParams({
-    inputMint, outputMint, amount: String(amount), slippageBps: String(SLIPPAGE_BPS),
-    taker: taker || '11111111111111111111111111111111',
-  });
-  const r = await fetch('/api/jupiter/build?' + params.toString());
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data?.error || ('Quote failed (' + r.status + ')'));
-  if (!data || (!data.swapInstruction && !data.outAmount)) throw new Error('No route available for this token.');
-  return data;
-}
 const SOL_RESERVE = 0.01;
 const TRADE_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
 const TRADE_SELL_PRESETS = [25, 50, 100];
@@ -646,7 +637,7 @@ const tradeFriendlyError = (err) => {
   if (m.includes('rate')) return 'Rate limited — try again.';
   return err?.message?.slice(0, 200) || 'Trade failed.';
 };
-function tradeDescribeSimLogs(logs, fallbackMsg) {
+function describeSimLogs(logs, fallbackMsg) {
   const arr = Array.isArray(logs) ? logs : [];
   const j = arr.join('\n').toLowerCase();
   if (j.includes('slippage') || j.includes('toomuchsol') || j.includes('toolittlesol')) return 'Price moved past slippage — try again.';
@@ -656,7 +647,7 @@ function tradeDescribeSimLogs(logs, fallbackMsg) {
   if (ctx) return 'Sim failed → ' + ctx;
   return fallbackMsg ? ('Sim failed → ' + String(fallbackMsg).slice(0, 160)) : 'Sim failed (no logs returned).';
 }
-async function tradeDecodeBuiltTx(b64, connection) {
+async function decodeBuiltTx(b64, connection) {
   const txBytes = Buffer.from(b64, 'base64');
   const tx      = VersionedTransaction.deserialize(txBytes);
   const message = tx.message;
@@ -672,20 +663,20 @@ async function tradeDecodeBuiltTx(b64, connection) {
   const decompiled = TransactionMessage.decompile(message, { addressLookupTableAccounts: alts });
   return { instructions: decompiled.instructions, alts };
 }
-async function tradeGetPumpRoute({ action, mint, user, amount, decimals, connection }) {
+async function getPumpRoute({ action, mint, user, amount, decimals, connection }) {
   const body = { action, mint, user: user.toBase58(), amount: String(amount) };
   if (decimals != null) body.decimals = Number(decimals);
   const r = await fetch('/api/pumpfun/trade', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const data = await r.json().catch(() => ({}));
-  if (!r.ok) { const err = new Error(data?.error || ('pump HTTP ' + r.status)); if (r.status === 404) err.notPump = true; throw err; }
+  if (!r.ok) throw new Error(data?.error || ('pump HTTP ' + r.status));
   if (!data.tx) throw new Error('PumpPortal returned no tx.');
-  const { instructions, alts } = await tradeDecodeBuiltTx(data.tx, connection);
+  const { instructions, alts } = await decodeBuiltTx(data.tx, connection);
   return { instructions, alts, pool: data.pool, route: data.route };
 }
 
 // Balances + SOL price + executeSwap, packaged as a hook so TokenSheet stays clean.
 function useTradeEngine() {
-  const walletObj = useWallet();   // adapter wallet — publicKey + signTransaction (same as LaunchRadar)
+  const wallet = useWallet();   // adapter wallet — publicKey + signTransaction (same as LaunchRadar)
   const [solPrice, setSolPrice] = useState(0);
   const [balances, setBalances] = useState({});
   useEffect(() => {
@@ -697,14 +688,14 @@ function useTradeEngine() {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
   const refreshSol = useCallback(async () => {
-    if (!walletObj.publicKey) return;
-    try { const lamports = await balRpcRace(c => c.getBalance(walletObj.publicKey, BAL_COMMITMENT)); setBalances(prev => ({ ...prev, [SOL_MINT]: { amount: String(lamports), decimals: 9, uiAmount: lamports / 1e9 } })); } catch {}
-  }, [walletObj.publicKey]);
+    if (!wallet.publicKey) return;
+    try { const lamports = await balRpcRace(c => c.getBalance(wallet.publicKey, BAL_COMMITMENT)); setBalances(prev => ({ ...prev, [SOL_MINT]: { amount: String(lamports), decimals: 9, uiAmount: lamports / 1e9 } })); } catch {}
+  }, [wallet.publicKey]);
   const refreshOneToken = useCallback(async (mintStr) => {
-    if (!walletObj.publicKey || !mintStr || mintStr === SOL_MINT) return;
+    if (!wallet.publicKey || !mintStr || mintStr === SOL_MINT) return;
     let mintPk; try { mintPk = new PublicKey(mintStr); } catch { return; }
     try {
-      const accs = await balRpcRace(c => c.getParsedTokenAccountsByOwner(walletObj.publicKey, { mint: mintPk }, BAL_COMMITMENT));
+      const accs = await balRpcRace(c => c.getParsedTokenAccountsByOwner(wallet.publicKey, { mint: mintPk }, BAL_COMMITMENT));
       let best = null;
       for (const acc of (accs?.value || [])) {
         const info = acc.account?.data?.parsed?.info; const amt = info?.tokenAmount?.amount;
@@ -713,15 +704,15 @@ function useTradeEngine() {
       }
       setBalances(prev => ({ ...prev, [mintStr]: best || { amount: '0', decimals: 6, uiAmount: 0 } }));
     } catch {}
-  }, [walletObj.publicKey]);
+  }, [wallet.publicKey]);
 
   const executePumpSwap = useCallback(async ({ mode, swapParams, token }) => {
-    if (!walletObj.publicKey || !walletObj.signTransaction) throw new Error('Please connect a wallet (Phantom, Solflare, Backpack).');
+    if (!wallet.publicKey || !wallet.signTransaction) throw new Error('Please connect a wallet (Phantom, Solflare, Backpack).');
     if (!swapParams) throw new Error('Nothing to trade.');
     const isBuy = mode === 'buy';
-    const userPk = walletObj.publicKey;
+    const userPk = wallet.publicKey;
     const tradeConnection = getTradeConn('confirmed');
-    const route = await tradeGetPumpRoute({
+    const route = await getPumpRoute({
       action: isBuy ? 'buy' : 'sell', mint: token.mint, user: userPk,
       amount: isBuy ? swapParams.tradeLamports : swapParams.tradeTokens,
       decimals: isBuy ? undefined : swapParams.decimals, connection: tradeConnection,
@@ -740,15 +731,15 @@ function useTradeEngine() {
     try {
       const sim = await tradeConnection.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true, commitment: 'processed' });
       simLogs = sim?.value?.logs || null;
-      if (sim?.value?.err) throw new Error(tradeDescribeSimLogs(simLogs, JSON.stringify(sim.value.err)));
+      if (sim?.value?.err) throw new Error(describeSimLogs(simLogs, JSON.stringify(sim.value.err)));
     } catch (simErr) {
       if (simErr instanceof Error && /sim failed/i.test(simErr.message)) throw simErr;
     }
-    const signed = await walletObj.signTransaction(tx);
+    const signed = await wallet.signTransaction(tx);
     const raw = signed.serialize();
     let sig;
     try { sig = await tradeConnection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 5 }); }
-    catch (sendErr) { let logs = sendErr?.logs || null; if (!logs && typeof sendErr?.getLogs === 'function') { try { logs = await sendErr.getLogs(tradeConnection); } catch {} } throw new Error(tradeDescribeSimLogs(logs, sendErr?.message)); }
+    catch (sendErr) { let logs = sendErr?.logs || null; if (!logs && typeof sendErr?.getLogs === 'function') { try { logs = await sendErr.getLogs(tradeConnection); } catch {} } throw new Error(describeSimLogs(logs, sendErr?.message)); }
     let confirmed = false, onchainErr = null; const startedAt = Date.now();
     while (Date.now() - startedAt < 60000) {
       try { const st = await tradeConnection.getSignatureStatus(sig, { searchTransactionHistory: true }); if (st?.value?.err) { onchainErr = st.value.err; break; } const cs = st?.value?.confirmationStatus; if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; } } catch {}
@@ -759,7 +750,7 @@ function useTradeEngine() {
     if (onchainErr) throw new Error('Trade failed on-chain — price likely moved past slippage.');
     setTimeout(() => { refreshSol(); refreshOneToken(token.mint); }, 1500);
     return { sig, confirmed };
-  }, [walletObj, refreshSol, refreshOneToken]);
+  }, [wallet, refreshSol, refreshOneToken]);
 
   // REGULAR (graduated / non-pump) path — Jupiter swap. Ported VERBATIM from
   // MemeWonderland.jsx handleSwap: /api/jupiter/build, 3% fee from input,
@@ -767,10 +758,10 @@ function useTradeEngine() {
   // `connection` (/api/solana-rpc) for sim + confirm. Build → sim → user signs
   // THAT tx → send. No refetch between sim and sign.
   const executeRegularSwap = useCallback(async ({ mode, swapParams, token }) => {
-    if (!walletObj.publicKey || !walletObj.signTransaction) throw new Error('Please connect a wallet (Phantom, Solflare, Backpack).');
+    if (!wallet.publicKey || !wallet.signTransaction) throw new Error('Please connect a wallet (Phantom, Solflare, Backpack).');
     if (!swapParams) throw new Error('Nothing to trade.');
     const isBuy = mode === 'buy';
-    const userPk = walletObj.publicKey;
+    const userPk = wallet.publicKey;
     const connection = tradeGetConn('confirmed'); // /api/solana-rpc — MemeWonderland's `connection`
     const inputMint  = isBuy ? SOL_MINT : token.mint;
     const outputMint = isBuy ? token.mint : SOL_MINT;
@@ -780,7 +771,21 @@ function useTradeEngine() {
 
     const net = (rawAmount * BigInt(10000 - FEE_BPS)) / 10000n;
     if (net <= 0n) throw new Error('Amount too small.');
-    const build = await jupBuild({ inputMint, outputMint, amount: net, taker: userPk.toBase58() });
+    const params = new URLSearchParams({
+      inputMint,
+      outputMint,
+      amount:      net.toString(),
+      slippageBps: String(SLIPPAGE_BPS),
+      taker:       wallet.publicKey
+        ? wallet.publicKey.toBase58()
+        : '11111111111111111111111111111111',
+    });
+    const r = await fetch(`/api/jupiter/build?${params}`);
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body.error || `Quote failed (${r.status})`);
+    }
+    const build = await r.json();
 
     // Full 3% fee → FEE_WALLET
     const feeAmount = (rawAmount * BigInt(FEE_BPS)) / 10000n;
@@ -837,7 +842,7 @@ function useTradeEngine() {
       console.warn('[swap] sim non-fatal', simErr);
     }
 
-    const signed = await walletObj.signTransaction(tx);
+    const signed = await wallet.signTransaction(tx);
     const serialized = signed.serialize();
 
     // Send via trade RPC (Alchemy primary, Ankr fallback).
@@ -868,26 +873,20 @@ function useTradeEngine() {
 
     setTimeout(() => { refreshSol(); refreshOneToken(token.mint); }, 1500);
     return { sig, confirmed };
-  }, [walletObj, refreshSol, refreshOneToken]);
+  }, [wallet, refreshSol, refreshOneToken]);
 
-  // Routing: always try pump.fun first. The pump path builds → simulates →
-  // user signs THAT simulated tx → sends (no re-fetch between sim and sign).
-  // Only if the server reports the mint isn't a pump.fun token (404, pre-sign,
-  // no signature spent) do we fall back to the Jupiter path — which itself
-  // builds → simulates → signs that same tx → sends. "Not on pump.fun → Jupiter."
+  // Route by token type, identified the same way the rest of the app does:
+  // dexId in {pumpfun, pumpswap} → pump.fun curve (PumpPortal); otherwise the
+  // token has graduated / is a normal SPL token → Jupiter. (xStocks never reach
+  // here — they open the Stocks TradeModal directly.)
   const executeSwap = useCallback(async ({ mode, swapParams, token }) => {
-    try {
-      return await executePumpSwap({ mode, swapParams, token });
-    } catch (e) {
-      const m = String(e?.message || '').toLowerCase();
-      if (e?.notPump || /not a pump|does not support this mint|not indexed|graduat|no tx|http 404/.test(m)) {
-        return executeRegularSwap({ mode, swapParams, token });
-      }
-      throw e;
-    }
+    const isPump = PUMP_DEX_IDS.has(String(token.dexId || '').toLowerCase());
+    return isPump
+      ? executePumpSwap({ mode, swapParams, token })
+      : executeRegularSwap({ mode, swapParams, token });
   }, [executePumpSwap, executeRegularSwap]);
 
-  return { solPrice, balances, refreshSol, refreshOneToken, executeSwap, canSign: !!(walletObj.publicKey && walletObj.signTransaction) };
+  return { solPrice, balances, refreshSol, refreshOneToken, executeSwap, canSign: !!(wallet.publicKey && wallet.signTransaction) };
 }
 
 function TokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
@@ -1080,6 +1079,7 @@ function normalize(t) {
     volume24h: Number(t.volume24h || 0),
     liquidity: Number(t.liquidity || 0),
     decimals:  Number(t.decimals == null ? 6 : t.decimals),
+    dexId:     t.dexId || null,
   };
 }
 
