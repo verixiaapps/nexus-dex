@@ -1580,10 +1580,10 @@ function mwBuildEmbedSrc(pool, resKey) {
   const r = MW_CHART_RES.find(x => x.key === resKey) || MW_CHART_RES[0];
   if (pool.provider === 'GECKOTERMINAL') {
     return 'https://www.geckoterminal.com/solana/pools/' + pool.addr +
-      '?embed=1&info=0&swaps=0&grayscale=0&light_chart=1&bg_color=ffffff&resolution=' + r.gecko;
+      '?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&bg_color=0a0b0d&resolution=' + r.gecko;
   }
   return 'https://dexscreener.com/solana/' + pool.addr +
-    '?embed=1&theme=light&info=0&trades=0&interval=' + r.dex;
+    '?embed=1&theme=dark&info=0&trades=0&interval=' + r.dex;
 }
 
 function MwTokenChart({ mint, symbol = '' }) {
@@ -1603,22 +1603,31 @@ function MwTokenChart({ mint, symbol = '' }) {
 
     (async () => {
       let networkOk = false;
+      const url = `https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}/pools`;
 
       // GeckoTerminal only — covers pump.fun bonding-curve pools and graduated pairs.
-      try {
-        const r = await fetch(
-          `https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}/pools`,
-          { headers: { Accept: 'application/json' } });
-        if (id !== reqRef.current) return;
-        if (r.ok) {
-          networkOk = true;
-          const j = await r.json();
+      // Retry transient failures (429 rate-limit / 5xx / network blips) before giving up,
+      // otherwise a single hiccup shows "Couldn't load the chart".
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const r = await fetch(url, { headers: { Accept: 'application/json' } });
           if (id !== reqRef.current) return;
-          const best = pickBestGeckoPool(j?.data, mint);
-          const addr = best?.attributes?.address;
-          if (addr) { setPool({ provider: 'GECKOTERMINAL', addr }); setStatus('ok'); return; }
-        }
-      } catch {}
+          if (r.ok) {
+            networkOk = true;
+            const j = await r.json();
+            if (id !== reqRef.current) return;
+            const best = pickBestGeckoPool(j?.data, mint);
+            const addr = best?.attributes?.address;
+            if (addr) { setPool({ provider: 'GECKOTERMINAL', addr }); setStatus('ok'); return; }
+            break; // clean response, just not indexed yet → don't retry
+          }
+          // 429 or 5xx → retryable; other 4xx → permanent, stop
+          if (r.status !== 429 && r.status < 500) break;
+        } catch { /* network error → retry */ }
+        if (id !== reqRef.current) return;
+        await new Promise(res => setTimeout(res, 700 * (attempt + 1)));
+        if (id !== reqRef.current) return;
+      }
       if (id !== reqRef.current) return;
 
       // No pool. If GeckoTerminal responded, the token just isn't indexed yet
@@ -1900,8 +1909,7 @@ function TradeSheet({
         }));
       } else {
         const mintPk = new PublicKey(inputMint);
-        // Buy/sell critical path → trade RPC (Alchemy primary, Ankr fallback).
-        const mintInfo = await rpcRaceTrade('getMintInfo', c => c.getAccountInfo(mintPk));
+        const mintInfo = await connection.getAccountInfo(mintPk);
         if (!mintInfo) throw new Error('Input mint not found on-chain.');
         const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
           ? TOKEN_2022_PROGRAM_ID
@@ -1933,16 +1941,14 @@ function TradeSheet({
       const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
       let alts = [];
       if (altKeys.length > 0) {
-        const infos = await rpcRaceTrade('getAlts',
-          c => c.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k))));
+        const infos = await connection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
         alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
           key:   new PublicKey(k),
           state: AddressLookupTableAccount.deserialize(infos[i].data),
         }) : null).filter(Boolean);
       }
 
-      const latest = await rpcRaceTrade('getLatestBlockhash',
-        c => c.getLatestBlockhash('confirmed'));
+      const latest = await connection.getLatestBlockhash('confirmed');
       const message = new TransactionMessage({
         payerKey:        wallet.publicKey,
         recentBlockhash: latest.blockhash,
@@ -1974,13 +1980,11 @@ function TradeSheet({
       }
 
       const signed = await wallet.signTransaction(tx);
-      const serialized = signed.serialize();
 
-      // Send via trade RPC (Alchemy primary, Ankr fallback).
-      const sig = await rpcRaceTrade('sendTx', c => c.sendRawTransaction(serialized, {
+      const sig = await connection.sendRawTransaction(signed.serialize(), {
         skipPreflight: false,
         maxRetries: 3,
-      }));
+      });
 
       let confirmed = false;
       try {
@@ -1999,8 +2003,7 @@ function TradeSheet({
         while (Date.now() < deadline) {
           await new Promise(r => setTimeout(r, 2000));
           try {
-            const st = await rpcRaceTrade('getSigStatus',
-              c => c.getSignatureStatus(sig, { searchTransactionHistory: true }));
+            const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
             const cs = st?.value?.confirmationStatus;
             if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
             if (st?.value?.err) throw new Error('Swap tx failed on-chain.');
