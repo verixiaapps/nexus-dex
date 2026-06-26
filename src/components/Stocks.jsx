@@ -801,6 +801,42 @@ async function stkResolvePool(mint) {
   return pool;
 }
 
+// GeckoTerminal series — real OHLCV (pool resolve + ohlcv). Higher fidelity but
+// can be slow / rate-limited. Never throws; returns pts | null.
+async function stkGeckoSeries(mint, tf) {
+  const pool = await stkResolvePool(mint);
+  if (!pool) return null;
+  const p = STK_TF_PARAMS[tf] || STK_TF_PARAMS['1D'];
+  const url = `${STK_GT}/networks/solana/pools/${pool}/ohlcv/${p.unit}?aggregate=${p.agg}&limit=${p.limit}&currency=usd`;
+  const j = await stkFetchJson(url, 6000);
+  const list = j?.data?.attributes?.ohlcv_list;
+  if (!Array.isArray(list) || list.length < 2) return null;
+  const pts = list
+    .map(r => ({ t: Number(r[0]), c: Number(r[4]) }))
+    .filter(x => Number.isFinite(x.t) && Number.isFinite(x.c) && x.c > 0)
+    .sort((a, b) => a.t - b.t);
+  return pts.length >= 2 ? pts : null;
+}
+
+// DexScreener fallback — one fast request. No OHLCV, so we synthesize a coarse
+// real-direction series from the live price + its 24h/6h/1h/5m % changes
+// (price_then = price_now / (1 + chg/100)). Enough to draw an accurate sparkline
+// the instant GeckoTerminal is slow/rate-limited.
+async function stkDexSeries(mint) {
+  const j = await stkFetchJson(`${STK_DS}/tokens/${encodeURIComponent(mint)}`, 4000);
+  const pair = stkPickPair(j?.pairs, mint);
+  const price = Number(pair?.priceUsd);
+  if (!(price > 0)) return null;
+  const pc = pair.priceChange || {};
+  const at = chg => { const c = Number(chg); return Number.isFinite(c) ? price / (1 + c / 100) : null; };
+  const raw = [at(pc.h24), at(pc.h6), at(pc.h1), at(pc.m5), price]; // oldest → now
+  const pts = raw.filter(v => Number.isFinite(v) && v > 0).map((c, i) => ({ t: i, c }));
+  return pts.length >= 2 ? pts : null;
+}
+
+// How long we'll wait on GeckoTerminal before dropping to DexScreener pricing.
+const STK_GECKO_GRACE_MS = 1400;
+
 const stkSeriesInflight = new Map(); // key -> Promise (dedup concurrent fetches of same series)
 export async function stkFetchSeries(mint, tf) {
   const key = mint + '|' + tf;
@@ -808,25 +844,34 @@ export async function stkFetchSeries(mint, tf) {
   const cached = stkLsGet(STK_SERIES_LS + key, STK_SERIES_TTL);
   if (cached !== undefined) { stkSeriesCache.set(key, cached); return cached; }
   if (stkSeriesInflight.has(key)) return stkSeriesInflight.get(key);
+
   const inflightP = (async () => {
-    const pool = await stkResolvePool(mint);
-    if (!pool) { stkSeriesCache.set(key, null); stkLsSet(STK_SERIES_LS + key, null); return null; }
-    const p = STK_TF_PARAMS[tf] || STK_TF_PARAMS['1D'];
-    const url = `${STK_GT}/networks/solana/pools/${pool}/ohlcv/${p.unit}?aggregate=${p.agg}&limit=${p.limit}&currency=usd`;
-    const j = await stkFetchJson(url);
-    const list = j?.data?.attributes?.ohlcv_list;
-    let out = null;
-    if (Array.isArray(list) && list.length >= 2) {
-      const pts = list
-        .map(r => ({ t: Number(r[0]), c: Number(r[4]) }))
-        .filter(x => Number.isFinite(x.t) && Number.isFinite(x.c) && x.c > 0)
-        .sort((a, b) => a.t - b.t);
-      if (pts.length >= 2) out = pts;
+    const save = (out) => { stkSeriesCache.set(key, out); stkLsSet(STK_SERIES_LS + key, out); return out; };
+
+    // Fire both providers at once.
+    const geckoP = stkGeckoSeries(mint, tf).catch(() => null);
+    const dexP   = stkDexSeries(mint).catch(() => null);
+
+    // Prefer GeckoTerminal, but only if it answers within the grace window —
+    // otherwise fall straight back to DexScreener pricing so the sparkline paints fast.
+    const raced = await Promise.race([
+      geckoP.then(p => (p ? { p } : null)),               // resolves null if gecko had no data
+      new Promise(res => setTimeout(() => res('SLOW'), STK_GECKO_GRACE_MS)),
+    ]);
+    if (raced && raced !== 'SLOW' && raced.p) return save(raced.p);
+
+    // Gecko slow or empty → use DexScreener now.
+    const dex = await dexP;
+    if (dex) {
+      // Let a successful Gecko result quietly upgrade the cache afterwards.
+      geckoP.then(p => { if (p) save(p); });
+      return save(dex);
     }
-    stkSeriesCache.set(key, out);
-    stkLsSet(STK_SERIES_LS + key, out);
-    return out;
+
+    // DexScreener empty too → wait out Gecko as last resort.
+    return save(await geckoP);
   })();
+
   stkSeriesInflight.set(key, inflightP);
   try { return await inflightP; } finally { stkSeriesInflight.delete(key); }
 }
