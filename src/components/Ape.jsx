@@ -2119,7 +2119,7 @@ function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPr
     if (swapParams.mode === 'buy') { const tradeSol = Number(swapParams.tradeLamports)/1e9; const tokens = (tradeSol*solPrice)/token.price; return tokens>0?{tokens}:null; }
     const grossSol = (swapParams.tradeTokensUi * token.price)/solPrice; const netSol = grossSol*(1-FEE_BPS/10000); return netSol>0?{sol:netSol}:null;
   }, [swapParams, token && token.price, solPrice]);
-  const BUY_MIN_SOL = 0.03;
+  const BUY_MIN_SOL = 0;
   const belowBuyMin = isBuy && amount && Number(amount) > 0 && Number(amount) < BUY_MIN_SOL;
   const hasFunds = (() => {
     if (!amount || Number(amount) <= 0) return false;
@@ -2473,7 +2473,10 @@ export default function Ape({ mainWalletPubkey }) {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const d = await r.json();
         if (cancelled) return;
-        const list = Array.isArray(d?.tokens) ? d.tokens.map(normalize) : [];
+        const raw = Array.isArray(d?.tokens) ? d.tokens.map(normalize) : [];
+        const seen = new Set();
+        const list = [];
+        for (const t of raw) { if (t && t.mint && !seen.has(t.mint)) { seen.add(t.mint); list.push(t); } }
         setRecent(list);
         setTokenIndex(prev => { const next = { ...prev }; for (const t of list) if (t && t.mint) next[t.mint] = t; return next; });
         setFeedError(null);
@@ -2525,7 +2528,11 @@ export default function Ape({ mainWalletPubkey }) {
         const d = await r.json();
         if (cancelled) return;
         // Server already normalized to our token shape; keep mint verbatim.
-        const list = Array.isArray(d?.tokens) ? d.tokens.filter(t => t && t.mint) : [];
+        const _seen = new Set();
+        const list = (Array.isArray(d?.tokens) ? d.tokens : []).filter(t => {
+          if (!t || !t.mint || _seen.has(t.mint)) return false;
+          _seen.add(t.mint); return true;
+        });
         setDiscTokens(list);
         setTokenIndex(prev => { const next = { ...prev }; for (const t of list) if (t && t.mint && !next[t.mint]) next[t.mint] = t; return next; });
         setDiscError(null);
