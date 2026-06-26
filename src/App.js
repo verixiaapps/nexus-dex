@@ -487,11 +487,9 @@ function SheetChart({ mint, sym }) {
     let stop = false;
     const alive = () => !stop && id === reqRef.current;
 
-    // GeckoTerminal — live 1s candles, preferred. DexScreener — fallback that
-    // covers pools/chains Gecko hasn't indexed. Both are fired in parallel so
-    // whichever has the pool wins immediately; we only wait on Dex if Gecko is
-    // empty. A few short retries cover seconds-old mints, then we settle to
-    // 'none' instead of spinning forever.
+    // GeckoTerminal first (live 1s candles). Only if it returns no pool do we
+    // fall back to DexScreener. No racing. A few short retries cover seconds-old
+    // mints, then we settle to 'none' instead of spinning forever.
     const fetchGecko = async () => {
       try {
         const r = await fetch(
@@ -516,17 +514,16 @@ function SheetChart({ mint, sym }) {
 
     (async () => {
       for (let attempt = 0; attempt < 4 && alive(); attempt++) {
-        const geckoP = fetchGecko();
-        const dexP   = attempt === 0 ? fetchDex() : null; // one Dex lookup is enough
-        const g = await geckoP;
+        // 1) GeckoTerminal first.
+        const g = await fetchGecko();
         if (!alive()) return;
         if (g) { setPool(g); setStatus('ok'); return; }
-        if (dexP) {
-          const d = await dexP;
-          if (!alive()) return;
-          if (d) { setPool(d); setStatus('ok'); return; }
-        }
-        await new Promise(r => setTimeout(r, 700 + attempt * 600)); // fresh mint / 429 → quick retry
+        // 2) Gecko had nothing → try DexScreener.
+        const d = await fetchDex();
+        if (!alive()) return;
+        if (d) { setPool(d); setStatus('ok'); return; }
+        // Neither yet (fresh mint / 429) → short backoff, retry.
+        await new Promise(r => setTimeout(r, 700 + attempt * 600));
       }
       if (alive()) setStatus('none');
     })();
@@ -3014,4 +3011,3 @@ function AppInner() {
 }
 
 export default function App() { return (<BrowserRouter><AppInner /></BrowserRouter>); }
- 
