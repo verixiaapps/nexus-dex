@@ -1,5 +1,5 @@
 // Ape.jsx — Nexus DEX · Ape (early-launch trading terminal)
-//  
+//
 // Fully self-contained single-file build. The React surface, the CSS, the
 // heavy auxiliary panels (StatsPanel + AutoPanel + useAutoTrade), AND the
 // former ./ape-helpers logic (executeSwap, formatters, riskRead, vibe-check,
@@ -209,10 +209,6 @@ function riskRead(t) {
   return { score, verdict, tier, label, knowns, unknowns };
 }
 
-function _uniqMint(list) {
-  const seen = new Set();
-  return list.filter(t => t && t.mint && !seen.has(t.mint) && seen.add(t.mint));
-}
 function normalize(t) {
   const rawMint = t && t.mint;
   if (!rawMint || typeof rawMint !== 'string' || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(rawMint)) return null;
@@ -1511,16 +1507,16 @@ const CHART_RES_DEFAULT = '1s';
 // be for a look-alike token.
 function pickBestGeckoPool(pools, mint) {
   if (!Array.isArray(pools) || !pools.length) return null;
-  const wanted = 'solana_' + mint; // exact, case-sensitive
+  const wanted = ('solana_' + mint).toLowerCase();
   const baseId  = p => p?.relationships?.base_token?.data?.id;
   const quoteId = p => p?.relationships?.quote_token?.data?.id;
   const hasAddr = p => !!p?.attributes?.address;
-  const baseMatches = pools.filter(p => hasAddr(p) && String(baseId(p) || '') === wanted);
+  const baseMatches = pools.filter(p => hasAddr(p) && String(baseId(p) || '').toLowerCase() === wanted);
   const pool = baseMatches.length
     ? baseMatches
     : pools.filter(p => hasAddr(p) && (
-        String(baseId(p) || '') === wanted ||
-        String(quoteId(p) || '') === wanted));
+        String(baseId(p) || '').toLowerCase() === wanted ||
+        String(quoteId(p) || '').toLowerCase() === wanted));
   if (!pool.length) return null;
   return pool.reduce(
     (best, p) => (Number(p?.attributes?.reserve_in_usd) || 0) > (Number(best?.attributes?.reserve_in_usd) || 0) ? p : best,
@@ -1532,15 +1528,16 @@ function pickBestGeckoPool(pools, mint) {
 // quoteToken.address, liquidity.usd. Same base-match + deepest-liquidity rule.
 function pickBestPair(pairs, mint) {
   if (!Array.isArray(pairs) || !pairs.length) return null;
+  const wanted = String(mint).toLowerCase();
   const baseMatches = pairs.filter(
     p => p && p.chainId === 'solana' && p.pairAddress &&
-         p.baseToken?.address === mint);
+         p.baseToken?.address?.toLowerCase() === wanted);
   const pool = baseMatches.length
     ? baseMatches
     : pairs.filter(
         p => p && p.chainId === 'solana' && p.pairAddress &&
-             (p.baseToken?.address === mint ||
-              p.quoteToken?.address === mint));
+             (p.baseToken?.address?.toLowerCase() === wanted ||
+              p.quoteToken?.address?.toLowerCase() === wanted));
   if (!pool.length) return null;
   return pool.reduce(
     (best, p) => (Number(p.liquidity?.usd) || 0) > (Number(best.liquidity?.usd) || 0) ? p : best,
@@ -1553,7 +1550,7 @@ function buildEmbedSrc(pool, resKey) {
   const r = CHART_RES.find(x => x.key === resKey) || CHART_RES[0];
   if (pool.provider === 'GECKOTERMINAL') {
     return 'https://www.geckoterminal.com/solana/pools/' + pool.addr +
-      '?embed=1&info=0&swaps=0&grayscale=0&light_chart=1&bg_color=ffffff&resolution=' + r.gecko;
+      '?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&bg_color=ffffff&resolution=' + r.gecko;
   }
   return 'https://dexscreener.com/solana/' + pool.addr +
     '?embed=1&theme=light&info=0&trades=0&interval=' + r.dex;
@@ -1592,6 +1589,21 @@ function TokenChart({ token, solPrice }) {
           const best = pickBestGeckoPool(j?.data, mint);
           const addr = best?.attributes?.address;
           if (addr) { setPool({ provider: 'GECKOTERMINAL', addr }); setStatus('ok'); return; }
+        }
+      } catch (e) {}
+      if (id !== reqRef.current) return;
+
+      // 2) DexScreener — fallback for graduated / older pairs.
+      try {
+        const r = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + mint,
+          { headers: { Accept: 'application/json' } });
+        if (id !== reqRef.current) return;
+        if (r.ok) {
+          networkOk = true;
+          const j = await r.json();
+          if (id !== reqRef.current) return;
+          const best = pickBestPair(j?.pairs, mint);
+          if (best?.pairAddress) { setPool({ provider: 'DEXSCREENER', addr: best.pairAddress }); setStatus('ok'); return; }
         }
       } catch (e) {}
       if (id !== reqRef.current) return;
@@ -2057,7 +2069,7 @@ function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPr
   const isBuy = mode === 'buy';
   const presets = isBuy ? buyPresets : sellPresets;
   const ownedUi = (tokenBalance && tokenBalance.uiAmount) || 0;
-  const availSol = Math.max(0, ((solBalance && solBalance.uiAmount) || 0)); // no reserve
+  const availSol = Math.max(0, ((solBalance && solBalance.uiAmount) || 0) - SOL_RESERVE);
   const swapParams = useMemo(() => {
     if (!amount) return null;
     const n = Number(amount); if (!Number.isFinite(n) || n <= 0) return null;
@@ -2068,11 +2080,12 @@ function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPr
     if (swapParams.mode === 'buy') { const tradeSol = Number(swapParams.tradeLamports)/1e9; const tokens = (tradeSol*solPrice)/token.price; return tokens>0?{tokens}:null; }
     const grossSol = (swapParams.tradeTokensUi * token.price)/solPrice; const netSol = grossSol*(1-FEE_BPS/10000); return netSol>0?{sol:netSol}:null;
   }, [swapParams, token && token.price, solPrice]);
-  const belowBuyMin = false;
+  const BUY_MIN_SOL = 0.03;
+  const belowBuyMin = isBuy && amount && Number(amount) > 0 && Number(amount) < BUY_MIN_SOL;
   const hasFunds = (() => {
     if (!amount || Number(amount) <= 0) return false;
-    if (isBuy) return Number(amount) <= availSol;
-    return ownedUi > 0;
+    if (isBuy) return Number(amount) >= BUY_MIN_SOL && Number(amount) <= availSol;
+    return ownedUi > 0 && ((solBalance && solBalance.uiAmount) || 0) >= 0.003;
   })();
   const disabled = confirming || !swapParams || !hasFunds || !!error;
   const go = async () => {
@@ -2116,7 +2129,7 @@ function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPr
             <div className="ap-rstat"><span className="k">Volume 24h</span><span className="v">{token.volume24h > 0 ? '$' + format(token.volume24h) : '—'}</span></div>
             <div className="ap-rstat"><span className="k">Holders</span><span className="v">{token.holders > 0 ? format(token.holders) : '—'}</span></div>
             <div className="ap-rstat"><span className="k">Age</span><span className="v">{token.pairCreatedAtMs ? fmtAgeShort(Date.now() - token.pairCreatedAtMs) : '—'}</span></div>
-            <div className="ap-rstat"><span className="k">Bonding</span><span className="v">{token.bond != null ? token.bond.toFixed(0) + '%' : (token.dex && token.dex !== 'pump.fun' ? 'graduated' : '—')}</span></div>
+            <div className="ap-rstat"><span className="k">Bonding</span><span className="v">{token.bond != null ? token.bond.toFixed(0) + '%' : (token.dex && !/^pump/i.test(token.dex) ? 'graduated' : '—')}</span></div>
           </div>
           <div className="ap-research-links">
             <a className="ap-rlink" href={'https://dexscreener.com/solana/' + encodeURIComponent(token.mint)} target="_blank" rel="noreferrer">Live transactions on DexScreener ↗</a>
@@ -2138,7 +2151,7 @@ function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPr
             <span className="ap-field-l">{isBuy?'You pay':'You sell'}</span>
             <span className="ap-field-bal">
               {isBuy ? <>Wallet: <b>{formatSol((solBalance&&solBalance.uiAmount)||0)} SOL</b></> : <>You own: <b>{formatTokens(ownedUi)} ${token.sym}</b></>}
-              {isBuy && availSol > 0 ? <button className="ap-field-max" onClick={()=>setAmount(String(Math.floor(Math.max(0, availSol-0.002)*10000)/10000))}>MAX</button> : null}
+              {isBuy && availSol > 0 ? <button className="ap-field-max" onClick={()=>setAmount(String(Math.floor(availSol*10000)/10000))}>MAX</button> : null}
             </span>
           </div>
           <div className="ap-field-row2">
@@ -2165,7 +2178,7 @@ function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPr
         )}
         {error && <div className="ap-banner">{error}</div>}
         <button className={'ap-confirm'+(isBuy?'':' sell')} disabled={disabled} onClick={go}>
-          {confirming ? (isBuy?'Buying…':'Selling…') : !amount||Number(amount)<=0 ? (isBuy?'Enter SOL amount':'Enter percentage') : !hasFunds ? (isBuy?'Not enough SOL':('No '+token.sym+' to sell')) : (isBuy?('Buy '+amount+' SOL → '+token.sym):('Sell '+Math.min(100,Number(amount))+'% of '+token.sym))}
+          {confirming ? (isBuy?'Buying…':'Selling…') : !amount||Number(amount)<=0 ? (isBuy?'Enter SOL amount':'Enter percentage') : belowBuyMin ? ('Minimum 0.03 SOL') : !hasFunds ? (isBuy?'Not enough SOL':(ownedUi<=0?('No '+token.sym+' to sell'):'Need ~0.003 SOL for fees')) : (isBuy?('Buy '+amount+' SOL → '+token.sym):('Sell '+Math.min(100,Number(amount))+'% of '+token.sym))}
         </button>
         <p className="ap-tfoot">{token.dex || 'pump.fun'} · 3% fee · settles in seconds</p>
       </div>
@@ -2422,7 +2435,7 @@ export default function Ape({ mainWalletPubkey }) {
         const d = await r.json();
         if (cancelled) return;
         const list = Array.isArray(d?.tokens) ? d.tokens.map(normalize) : [];
-        setRecent(_uniqMint(list));
+        setRecent(list);
         setTokenIndex(prev => { const next = { ...prev }; for (const t of list) if (t && t.mint) next[t.mint] = t; return next; });
         setFeedError(null);
       } catch (e) { if (!cancelled) setFeedError(String(e.message || 'Network').slice(0, 100)); }
