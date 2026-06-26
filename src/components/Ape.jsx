@@ -1700,53 +1700,182 @@ function TokenChart({ token, solPrice }) {
   );
 }
 
-// Per-mint live price history for the row sparklines. Filled from the price
-// the feed already polls (~every 2.5s) — no extra network. Capped per mint;
-// persists across tab switches and re-sorts so the little charts keep building
-// the longer you watch, like the iOS Stocks list.
-const _sparkHist = new Map(); // mint -> number[]
-function recordSpark(mint, price) {
-  if (!mint || !(price > 0)) return _sparkHist.get(mint) || [];
-  let pts = _sparkHist.get(mint);
-  if (!pts) { pts = []; _sparkHist.set(mint, pts); }
-  if (pts[pts.length - 1] !== price) { pts.push(price); if (pts.length > 32) pts.shift(); }
-  return pts;
+/* ============================================================
+   ROW SPARKLINES — static approximation, NOT live ticking.
+
+   Data comes from the same sources as the detail chart, in the same order:
+   GeckoTerminal first (real OHLCV closes when we already know the pool), then
+   DexScreener as the fallback (reconstruct the real trajectory from its
+   multi-horizon price-change buckets: 24h → 6h → 1h → 5m → now). If neither
+   responds we draw a deterministic curve seeded from the mint so the row is
+   never blank.
+
+   The series is fetched ONCE per mint and cached — it does not tick or redraw
+   as live prices poll in (that looked cheap on a 76px sparkline). Variation is
+   built in two ways so no two lines look identical: real sources are naturally
+   varied, and both the smoothing jitter and the synthetic fallback are seeded
+   from a per-mint hash (stable across renders, different across tokens).
+   ============================================================ */
+const _sparkCache   = new Map(); // mint -> number[]  (final approximated series)
+const _sparkPending = new Map(); // mint -> Promise<number[]>
+
+function _sparkSeed(mint) {
+  let h = 2166136261 >>> 0;
+  const s = mint || '';
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+function _sparkRng(seed) { // mulberry32 — deterministic per seed
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function _downsample(arr, N) {
+  if (arr.length <= N) return arr.slice();
+  const out = [];
+  for (let i = 0; i < N; i++) out.push(arr[Math.round((i / (N - 1)) * (arr.length - 1))]);
+  return out;
+}
+// Interpolate real anchor points into N points with gentle, seeded, static
+// wiggle between anchors (zero wiggle AT each anchor, so real points are kept).
+function _curveFromAnchors(anchors, mint, N) {
+  const rnd = _sparkRng(_sparkSeed(mint));
+  const segs = anchors.length - 1;
+  const out = [];
+  for (let i = 0; i < N; i++) {
+    const t = (i / (N - 1)) * segs;
+    const k = Math.min(segs - 1, Math.floor(t));
+    const f = t - k;
+    const s = f * f * (3 - 2 * f); // smoothstep
+    const v = anchors[k] * (1 - s) + anchors[k + 1] * s;
+    const segRange = Math.abs(anchors[k + 1] - anchors[k]) || (Math.abs(v) * 0.02) || 1;
+    const env = Math.sin(Math.PI * f); // 0 at anchors → endpoints stay exact
+    out.push(v + (rnd() - 0.5) * 2 * segRange * 0.35 * env);
+  }
+  return out;
+}
+// No network — deterministic curve whose overall slope matches the 24h change,
+// with seeded intermediate drift so each token's shape differs.
+function _syntheticSpark(mint, change, N) {
+  const rnd = _sparkRng(_sparkSeed(mint));
+  const end = 100, start = end / (1 + (Number(change) || 0) / 100);
+  const span = Math.abs(end - start) || 1;
+  const anchors = [start];
+  const mids = 3;
+  for (let i = 1; i <= mids; i++) {
+    const base = start + (end - start) * (i / (mids + 1));
+    anchors.push(base + (rnd() - 0.5) * 2 * span * 0.6);
+  }
+  anchors.push(end);
+  return _curveFromAnchors(anchors, mint, N);
 }
 
-function MiniSparkline({ mint, price, change }) {
-  const up = (change || 0) >= 0;
-  const color = up ? '#11b87f' : '#f0425a';
-  const W = 76, H = 32, padY = 3;
-  const hist = recordSpark(mint, Number(price));
-  let line, fill;
-  if (hist.length >= 3) {
-    // Real observed-price trend, auto-scaled to the window (never zero-based).
-    const min = Math.min.apply(null, hist), max = Math.max.apply(null, hist);
-    const rng = (max - min) || (max * 0.0001) || 1;
-    const xOf = (i) => (i / (hist.length - 1)) * W;
-    const yOf = (v) => H - padY - ((v - min) / rng) * (H - 2 * padY);
-    line = hist.map((v, i) => (i === 0 ? 'M' : 'L') + xOf(i).toFixed(1) + ',' + yOf(v).toFixed(1)).join(' ');
-    fill = line + ' L ' + W + ',' + H + ' L 0,' + H + ' Z';
-  } else {
-    // Not enough live points yet — draw a directional placeholder from the 24h
-    // change so the row is never blank in its first seconds, then real data
-    // takes over as prices tick in.
-    const seed = Math.abs(change || 0);
-    const pts = [];
-    for (let i = 0; i <= 10; i++) {
-      const t = i / 10;
-      const trend = up ? (8 + (1 - t) * 18) : (24 - (1 - t) * 18);
-      const wiggle = Math.sin(i * 1.7 + seed) * 2.0 + Math.cos(i * 0.9) * 1.4;
-      pts.push([i * (W / 10), Math.max(2, Math.min(H - 2, trend + wiggle))]);
+async function loadSparkSeries(token) {
+  const mint = token && token.mint;
+  if (!mint) return null;
+  if (_sparkCache.has(mint))   return _sparkCache.get(mint);
+  if (_sparkPending.has(mint)) return _sparkPending.get(mint);
+
+  const N = 26;
+  const p = (async () => {
+    // 1) GeckoTerminal OHLCV — only when the pool is already known (one call,
+    //    no pools-list lookup), so a long list can't melt the rate limit.
+    const poolAddr = (token.pool && typeof token.pool === 'string') ? token.pool : null;
+    if (poolAddr) {
+      try {
+        const r = await fetch(
+          'https://api.geckoterminal.com/api/v2/networks/solana/pools/' + poolAddr +
+          '/ohlcv/minute?aggregate=1&limit=80&currency=usd',
+          { headers: { Accept: 'application/json' } });
+        if (r.ok) {
+          const j = await r.json();
+          const list = j && j.data && j.data.attributes && j.data.attributes.ohlcv_list;
+          if (Array.isArray(list) && list.length >= 4) {
+            // ohlcv rows: [ts, open, high, low, close, volume], newest first.
+            const closes = list.map(row => Number(row[4])).filter(n => n > 0).reverse();
+            if (closes.length >= 4) { const series = _downsample(closes, N); _sparkCache.set(mint, series); return series; }
+          }
+        }
+      } catch (e) {}
     }
-    line = pts.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
-    fill = line + ' L ' + W + ',' + H + ' L 0,' + H + ' Z';
+
+    // 2) DexScreener — rebuild the real trajectory from price-change buckets.
+    try {
+      const r = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + mint,
+        { headers: { Accept: 'application/json' } });
+      if (r.ok) {
+        const j = await r.json();
+        const best = pickBestPair(j && j.pairs, mint);
+        const now = Number(best && best.priceUsd) || 0;
+        const ch = (best && best.priceChange) || {};
+        if (now > 0) {
+          const back = (pct) => { const x = Number(pct); return Number.isFinite(x) ? now / (1 + x / 100) : now; };
+          const anchors = [back(ch.h24), back(ch.h6), back(ch.h1), back(ch.m5), now].filter(n => n > 0);
+          if (anchors.length >= 2) { const series = _curveFromAnchors(anchors, mint, N); _sparkCache.set(mint, series); return series; }
+        }
+      }
+    } catch (e) {}
+
+    // 3) Nothing from the network — deterministic, mint-varied fallback.
+    const series = _syntheticSpark(mint, token.change, N);
+    _sparkCache.set(mint, series);
+    return series;
+  })().finally(() => { _sparkPending.delete(mint); });
+
+  _sparkPending.set(mint, p);
+  return p;
+}
+
+function MiniSparkline({ token, change }) {
+  const mint = token && token.mint;
+  const W = 76, H = 32, padY = 3;
+
+  // Fetch the approximated series ONCE per mint. Dep is [mint] only, so live
+  // price polls never retrigger it — the line is static, not ticking.
+  const [series, setSeries] = useState(() => _sparkCache.get(mint) || null);
+  useEffect(() => {
+    let alive = true;
+    const cached = _sparkCache.get(mint);
+    if (cached) { setSeries(cached); return; }
+    setSeries(null);
+    loadSparkSeries(token).then(s => { if (alive) setSeries(s); }).catch(() => {});
+    return () => { alive = false; };
+  }, [mint]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Brief neutral baseline only while the first fetch is in flight.
+  if (!series || series.length < 2) {
+    const y = (H / 2).toFixed(1);
+    return (
+      <div className="ap-spark" aria-hidden="true">
+        <svg viewBox={'0 0 ' + W + ' ' + H} preserveAspectRatio="none">
+          <path d={'M0,' + y + ' L' + W + ',' + y} fill="none" stroke="#c7c9cf" strokeOpacity="0.5" strokeWidth="1.5" strokeLinecap="round" strokeDasharray="2 3" />
+        </svg>
+      </div>
+    );
   }
-  const gradId = 'spk' + (up ? 'u' : 'd') + (mint ? mint.slice(0, 8) : '');
+
+  // Direction (and colour) from the series itself, falling back to 24h change.
+  const up = series[series.length - 1] !== series[0]
+    ? series[series.length - 1] >= series[0]
+    : (Number(change) || 0) >= 0;
+  const color = up ? '#11b87f' : '#f0425a';
+
+  const min = Math.min.apply(null, series), max = Math.max.apply(null, series);
+  const rng = (max - min) || (Math.abs(max) * 0.0001) || 1;
+  const xOf = (i) => (i / (series.length - 1)) * W;
+  const yOf = (v) => H - padY - ((v - min) / rng) * (H - 2 * padY);
+  const line = series.map((v, i) => (i === 0 ? 'M' : 'L') + xOf(i).toFixed(1) + ',' + yOf(v).toFixed(1)).join(' ');
+  const fill = line + ' L' + W + ',' + H + ' L0,' + H + ' Z';
+  const gradId = 'spk_' + (up ? 'u' : 'd') + '_' + (mint || 'x').slice(0, 12);
+
   return (
-    <div className="ap-spark">
+    <div className="ap-spark" aria-hidden="true">
       <svg viewBox={'0 0 ' + W + ' ' + H} preserveAspectRatio="none">
-        <defs><linearGradient id={gradId} x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity={up ? '.28' : '.22'} /><stop offset="100%" stopColor={color} stopOpacity="0" /></linearGradient></defs>
+        <defs><linearGradient id={gradId} x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity={up ? '0.28' : '0.22'} /><stop offset="100%" stopColor={color} stopOpacity="0" /></linearGradient></defs>
         <path d={fill} fill={'url(#' + gradId + ')'} />
         <path d={line} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
       </svg>
@@ -1889,7 +2018,7 @@ const SpecimenRow = React.memo(function SpecimenRow({ token, ageMsLive, owned, c
           </div>
         </div>
       </div>
-      <MiniSparkline mint={token.mint} price={token.price} change={token.change} />
+      <MiniSparkline token={token} change={token.change} />
       <span className={'ap-pill ' + r.tier}><span className="d" />{r.tier === 'low' ? 'low' : r.tier === 'med' ? 'medium' : 'high risk'}</span>
       {(ownedMode && pnl) ? (
         <div className={'ap-row-pnl' + (pnl.up ? ' up' : pnl.dn ? ' dn' : '')}>
