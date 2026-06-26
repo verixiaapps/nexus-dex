@@ -484,28 +484,40 @@ function SheetChart({ mint, sym }) {
     if (!mint) { setStatus('none'); setPool(null); return; }
     const id = ++reqRef.current;
     setStatus('loading'); setPool(null);
+    let stop = false;
 
-    (async () => {
-      let networkOk = false;
-      // GeckoTerminal only — covers pump.fun bonding-curve pools and graduated pairs.
+    // GeckoTerminal only. It always has the pool for a live token — it just
+    // rate-limits (429) or hasn't indexed a seconds-old mint yet. So we RETRY
+    // with backoff and never fall into a fail/none dead-end for a live mint;
+    // the sheet stays on the loading spinner and flips to the live chart the
+    // moment GeckoTerminal answers.
+    const tryOnce = async () => {
       try {
         const r = await fetch(
           'https://api.geckoterminal.com/api/v2/networks/solana/tokens/' + mint + '/pools',
           { headers: { Accept: 'application/json' } });
-        if (id !== reqRef.current) return;
+        if (id !== reqRef.current || stop) return true;
         if (r.ok) {
-          networkOk = true;
           const j = await r.json();
-          if (id !== reqRef.current) return;
+          if (id !== reqRef.current || stop) return true;
           const best = pickBestGeckoPool(j?.data, mint);
           const addr = best?.attributes?.address;
-          if (addr) { setPool({ provider: 'GECKOTERMINAL', addr }); setStatus('ok'); return; }
+          if (addr) { setPool({ provider: 'GECKOTERMINAL', addr }); setStatus('ok'); return true; }
         }
       } catch (e) {}
-      if (id !== reqRef.current) return;
+      return false; // 429 / not indexed yet → keep retrying
+    };
 
-      setStatus(networkOk ? 'none' : 'fail');
+    (async () => {
+      let delay = 800;
+      while (!stop && id === reqRef.current) {
+        if (await tryOnce()) return;
+        await new Promise(r => setTimeout(r, delay));
+        delay = Math.min(delay * 1.5, 4000);
+      }
     })();
+
+    return () => { stop = true; };
   }, [mint]);
 
   const src = useMemo(() => buildEmbedSrc(pool, res), [pool, res]);
@@ -707,49 +719,131 @@ function useTradeEngine() {
   }, [wallet.publicKey]);
 
   const executePumpSwap = useCallback(async ({ mode, swapParams, token }) => {
-    if (!wallet.publicKey || !wallet.signTransaction) throw new Error('Please connect a wallet (Phantom, Solflare, Backpack).');
+    if (!wallet.publicKey || !wallet.signTransaction) {
+      throw new Error('Please connect a wallet (Phantom, Solflare, Backpack).');
+    }
     if (!swapParams) throw new Error('Nothing to trade.');
-    const isBuy = mode === 'buy';
+
+    const isBuy  = mode === 'buy';
     const userPk = wallet.publicKey;
     const tradeConnection = getTradeConn('confirmed');
+
+    // 1. PumpPortal builds the tx; we decompile it locally. ALT lookup runs
+    //    on the trade connection.
     const route = await getPumpRoute({
-      action: isBuy ? 'buy' : 'sell', mint: token.mint, user: userPk,
+      action: isBuy ? 'buy' : 'sell',
+      mint:   token.mint,
+      user:   userPk,
       amount: isBuy ? swapParams.tradeLamports : swapParams.tradeTokens,
-      decimals: isBuy ? undefined : swapParams.decimals, connection: tradeConnection,
+      decimals: isBuy ? undefined : swapParams.decimals,
+      connection: tradeConnection,
     });
+
+    // 2. Build the 3% SOL fee transfer.
     const feeLamports = BigInt(swapParams.feeLamports || '0');
-    if (feeLamports <= 0n) throw new Error(isBuy ? 'Fee rounds to zero — amount too small.' : 'Could not estimate sell fee — token or SOL price unavailable.');
-    const feeIx = SystemProgram.transfer({ fromPubkey: userPk, toPubkey: FEE_WALLET, lamports: Number(feeLamports) });
+    if (feeLamports <= 0n) {
+      throw new Error(isBuy
+        ? 'Fee rounds to zero — amount too small.'
+        : 'Could not estimate sell fee — token or SOL price unavailable.');
+    }
+    const feeIx = SystemProgram.transfer({
+      fromPubkey: userPk,
+      toPubkey:   FEE_WALLET,
+      lamports:   Number(feeLamports),
+    });
+
+    // 3. Splice. PumpPortal's tx already includes its own ComputeBudget
+    //    instructions at the start — we insert AFTER them so they keep
+    //    setting the priority fee for the whole tx.
     const CB_PROGRAM = 'ComputeBudget111111111111111111111111111111';
     const ixs = route.instructions.slice();
-    if (isBuy) { let at = 0; while (at < ixs.length && ixs[at].programId.toBase58() === CB_PROGRAM) at++; ixs.splice(at, 0, feeIx); }
-    else { ixs.push(feeIx); }
+    if (isBuy) {
+      let insertAt = 0;
+      while (insertAt < ixs.length && ixs[insertAt].programId.toBase58() === CB_PROGRAM) insertAt++;
+      ixs.splice(insertAt, 0, feeIx);
+    } else {
+      ixs.push(feeIx);
+    }
+
+    // 4. Fresh blockhash, recompile with the SAME ALTs PumpPortal used.
     const latest = await tradeConnection.getLatestBlockhash('confirmed');
-    const message = new TransactionMessage({ payerKey: userPk, recentBlockhash: latest.blockhash, instructions: ixs }).compileToV0Message(route.alts);
+    const message = new TransactionMessage({
+      payerKey:        userPk,
+      recentBlockhash: latest.blockhash,
+      instructions:    ixs,
+    }).compileToV0Message(route.alts);
     const tx = new VersionedTransaction(message);
+
+    // 5. Pre-sign simulation against fresh chain state. Catches stale
+    //    bonding-curve state, slippage failures, balance shortfalls —
+    //    without spending a Phantom popup.
     let simLogs = null;
     try {
-      const sim = await tradeConnection.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true, commitment: 'processed' });
+      const sim = await tradeConnection.simulateTransaction(tx, {
+        sigVerify: false,
+        replaceRecentBlockhash: true,
+        commitment: 'processed',
+      });
       simLogs = sim?.value?.logs || null;
-      if (sim?.value?.err) throw new Error(describeSimLogs(simLogs, JSON.stringify(sim.value.err)));
+      if (sim?.value?.err) {
+        console.error('[lr-sim] failed:', JSON.stringify(sim.value.err),
+          simLogs ? '\n' + simLogs.join('\n') : '');
+        throw new Error(describeSimLogs(simLogs, JSON.stringify(sim.value.err)));
+      }
+      try {
+        console.log('[lr-sim] ok | CU:', sim?.value?.unitsConsumed,
+          '| logs:', (simLogs || []).length);
+      } catch {}
     } catch (simErr) {
       if (simErr instanceof Error && /sim failed/i.test(simErr.message)) throw simErr;
+      console.warn('[lr-sim] could not run sim, proceeding:', simErr?.message);
     }
+
+    // 6. User signs.
     const signed = await wallet.signTransaction(tx);
     const raw = signed.serialize();
+
+    // 7. Send.
     let sig;
-    try { sig = await tradeConnection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 5 }); }
-    catch (sendErr) { let logs = sendErr?.logs || null; if (!logs && typeof sendErr?.getLogs === 'function') { try { logs = await sendErr.getLogs(tradeConnection); } catch {} } throw new Error(describeSimLogs(logs, sendErr?.message)); }
-    let confirmed = false, onchainErr = null; const startedAt = Date.now();
-    while (Date.now() - startedAt < 60000) {
-      try { const st = await tradeConnection.getSignatureStatus(sig, { searchTransactionHistory: true }); if (st?.value?.err) { onchainErr = st.value.err; break; } const cs = st?.value?.confirmationStatus; if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; } } catch {}
-      try { const h = await tradeConnection.getBlockHeight('confirmed'); if (h > latest.lastValidBlockHeight) break; } catch {}
+    try {
+      sig = await tradeConnection.sendRawTransaction(raw, {
+        skipPreflight: true,
+        maxRetries:    5,
+      });
+    } catch (sendErr) {
+      let logs = sendErr?.logs || null;
+      if (!logs && typeof sendErr?.getLogs === 'function') {
+        try { logs = await sendErr.getLogs(tradeConnection); } catch {}
+      }
+      console.error('[lr-send] rejected:', sendErr?.message, logs ? '\n' + logs.join('\n') : '');
+      throw new Error(describeSimLogs(logs, sendErr?.message));
+    }
+
+    // 8. Rebroadcast same bytes until confirmed or blockhash expires.
+    let confirmed = false, onchainErr = null;
+    const startedAt = Date.now();
+    const HARD_CAP_MS = 60_000;
+    while (Date.now() - startedAt < HARD_CAP_MS) {
+      try {
+        const st = await tradeConnection.getSignatureStatus(sig, { searchTransactionHistory: true });
+        if (st?.value?.err) { onchainErr = st.value.err; break; }
+        const cs = st?.value?.confirmationStatus;
+        if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
+      } catch {}
+      try {
+        const h = await tradeConnection.getBlockHeight('confirmed');
+        if (h > latest.lastValidBlockHeight) break;
+      } catch {}
       try { await tradeConnection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }); } catch {}
       await new Promise(r => setTimeout(r, 2000));
     }
-    if (onchainErr) throw new Error('Trade failed on-chain — price likely moved past slippage.');
+    if (onchainErr) {
+      console.warn('[lr-confirm] on-chain err:', JSON.stringify(onchainErr));
+      throw new Error('Trade failed on-chain — price likely moved past slippage.');
+    }
+
     setTimeout(() => { refreshSol(); refreshOneToken(token.mint); }, 1500);
-    return { sig, confirmed };
+    return { sig, confirmed, mode, token, route: route.route };
   }, [wallet, refreshSol, refreshOneToken]);
 
   // REGULAR (graduated / non-pump) path — Jupiter swap. Ported VERBATIM from
@@ -787,92 +881,131 @@ function useTradeEngine() {
     }
     const build = await r.json();
 
-    // Full 3% fee → FEE_WALLET
-    const feeAmount = (rawAmount * BigInt(FEE_BPS)) / 10000n;
-    if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero — amount too small.');
+      // Full 3% fee → FEE_WALLET
+      const feeAmount = (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n;
+      if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero — amount too small.');
 
-    const feeIxs = [];
-    if (inputMint === SOL_MINT) {
-      feeIxs.push(SystemProgram.transfer({ fromPubkey: userPk, toPubkey: FEE_WALLET, lamports: Number(feeAmount) }));
-    } else {
-      const mintPk = new PublicKey(inputMint);
-      const mintInfo = await rpcRaceTrade('getMintInfo', c => c.getAccountInfo(mintPk));
-      if (!mintInfo) throw new Error('Input mint not found on-chain.');
-      const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID) ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
-      const sourceAta = getAssociatedTokenAddressSync(mintPk, userPk, true, tokenProgram);
-      const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET, true, tokenProgram);
-      feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(userPk, destAta, FEE_WALLET, mintPk, tokenProgram));
-      feeIxs.push(createTransferCheckedInstruction(sourceAta, mintPk, destAta, userPk, feeAmount, dec, [], tokenProgram));
-    }
+      const feeIxs = [];
+      if (inputMint === SOL_MINT) {
+        feeIxs.push(SystemProgram.transfer({
+          fromPubkey: wallet.publicKey,
+          toPubkey:   FEE_WALLET,
+          lamports:   Number(feeAmount),
+        }));
+      } else {
+        const mintPk = new PublicKey(inputMint);
+        // Buy/sell critical path → trade RPC (Alchemy primary, Ankr fallback).
+        const mintInfo = await rpcRaceTrade('getMintInfo', c => c.getAccountInfo(mintPk));
+        if (!mintInfo) throw new Error('Input mint not found on-chain.');
+        const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
+          ? TOKEN_2022_PROGRAM_ID
+          : TOKEN_PROGRAM_ID;
 
-    const ixs = [];
-    if (Array.isArray(build.computeBudgetInstructions)) for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
-    for (const ix of feeIxs) ixs.push(ix);
-    if (Array.isArray(build.setupInstructions)) for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
-    if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
-    if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
-    if (Array.isArray(build.otherInstructions)) for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
+        const sourceAta = getAssociatedTokenAddressSync(mintPk, wallet.publicKey, true, tokenProgram);
+        const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET,       true, tokenProgram);
 
-    const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
-    let alts = [];
-    if (altKeys.length > 0) {
-      const infos = await rpcRaceTrade('getAlts', c => c.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k))));
-      alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({ key: new PublicKey(k), state: AddressLookupTableAccount.deserialize(infos[i].data) }) : null).filter(Boolean);
-    }
-
-    const latest = await rpcRaceTrade('getLatestBlockhash', c => c.getLatestBlockhash('confirmed'));
-    const message = new TransactionMessage({ payerKey: userPk, recentBlockhash: latest.blockhash, instructions: ixs }).compileToV0Message(alts);
-    const tx = new VersionedTransaction(message);
-
-    const mapSimErr = (logs) => {
-      const j = (logs || []).join('\n').toLowerCase();
-      if (j.includes('insufficient') || j.includes('0x1')) return 'Insufficient balance for this swap.';
-      if (j.includes('slippage') || j.includes('0x1771'))  return 'Price moved — try a higher slippage or smaller amount.';
-      if (j.includes('account not') || j.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
-      if (j.includes('blockhash') || j.includes('expired')) return 'Quote expired. Please refresh and retry.';
-      return null;
-    };
-    try {
-      const sim = await connection.simulateTransaction(tx, { replaceRecentBlockhash: true, sigVerify: false });
-      if (sim.value.err) {
-        throw new Error(mapSimErr(sim.value.logs) || 'Swap simulation failed — the price may have moved.');
+        feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
+          wallet.publicKey, destAta, FEE_WALLET, mintPk, tokenProgram,
+        ));
+        feeIxs.push(createTransferCheckedInstruction(
+          sourceAta, mintPk, destAta, wallet.publicKey,
+          feeAmount, dec, [], tokenProgram,
+        ));
       }
-    } catch (simErr) {
-      if (simErr?.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) throw simErr;
-      console.warn('[swap] sim non-fatal', simErr);
-    }
 
-    const signed = await wallet.signTransaction(tx);
-    const serialized = signed.serialize();
+      const ixs = [];
+      if (Array.isArray(build.computeBudgetInstructions))
+        for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
+      for (const ix of feeIxs) ixs.push(ix);
+      if (Array.isArray(build.setupInstructions))
+        for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
+      if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
+      if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
+      if (Array.isArray(build.otherInstructions))
+        for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
 
-    // Send via trade RPC (Alchemy primary, Ankr fallback).
-    const sig = await rpcRaceTrade('sendTx', c => c.sendRawTransaction(serialized, { skipPreflight: false, maxRetries: 3 }));
+      const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
+      let alts = [];
+      if (altKeys.length > 0) {
+        const infos = await rpcRaceTrade('getAlts',
+          c => c.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k))));
+        alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
+          key:   new PublicKey(k),
+          state: AddressLookupTableAccount.deserialize(infos[i].data),
+        }) : null).filter(Boolean);
+      }
 
-    let confirmed = false;
-    try {
-      const conf = await Promise.race([
-        connection.confirmTransaction({ signature: sig, blockhash: latest.blockhash, lastValidBlockHeight: latest.lastValidBlockHeight }, 'confirmed'),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
-      ]);
-      if (conf?.value?.err) throw new Error('Swap tx failed on-chain: ' + JSON.stringify(conf.value.err));
-      confirmed = true;
-    } catch (cfErr) {
-      const deadline = Date.now() + 20_000;
-      while (Date.now() < deadline) {
-        await new Promise(r => setTimeout(r, 2000));
-        try {
-          const st = await rpcRaceTrade('getSigStatus', c => c.getSignatureStatus(sig, { searchTransactionHistory: true }));
-          const cs = st?.value?.confirmationStatus;
-          if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
-          if (st?.value?.err) throw new Error('Swap tx failed on-chain.');
-        } catch (e) {
-          if (/failed on-chain/i.test(String(e.message))) throw e;
+      const latest = await rpcRaceTrade('getLatestBlockhash',
+        c => c.getLatestBlockhash('confirmed'));
+      const message = new TransactionMessage({
+        payerKey:        wallet.publicKey,
+        recentBlockhash: latest.blockhash,
+        instructions:    ixs,
+      }).compileToV0Message(alts);
+      const tx = new VersionedTransaction(message);
+
+      const mapSimErr = (logs) => {
+        const j = (logs || []).join('\n').toLowerCase();
+        if (j.includes('insufficient') || j.includes('0x1')) return 'Insufficient balance for this swap.';
+        if (j.includes('slippage') || j.includes('0x1771'))  return 'Price moved — try a higher slippage or smaller amount.';
+        if (j.includes('account not') || j.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
+        if (j.includes('blockhash') || j.includes('expired')) return 'Quote expired. Please refresh and retry.';
+        return null;
+      };
+      try {
+        const sim = await connection.simulateTransaction(tx, {
+          replaceRecentBlockhash: true,
+          sigVerify: false,
+        });
+        if (sim.value.err) {
+          throw new Error(mapSimErr(sim.value.logs) || 'Swap simulation failed — the price may have moved.');
+        }
+      } catch (simErr) {
+        if (simErr?.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) {
+          throw simErr;
+        }
+        console.warn('[swap] sim non-fatal', simErr);
+      }
+
+      const signed = await wallet.signTransaction(tx);
+      const serialized = signed.serialize();
+
+      // Send via trade RPC (Alchemy primary, Ankr fallback).
+      const sig = await rpcRaceTrade('sendTx', c => c.sendRawTransaction(serialized, {
+        skipPreflight: false,
+        maxRetries: 3,
+      }));
+
+      let confirmed = false;
+      try {
+        const conf = await Promise.race([
+          connection.confirmTransaction({
+            signature: sig,
+            blockhash: latest.blockhash,
+            lastValidBlockHeight: latest.lastValidBlockHeight,
+          }, 'confirmed'),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
+        ]);
+        if (conf?.value?.err) throw new Error('Swap tx failed on-chain: ' + JSON.stringify(conf.value.err));
+        confirmed = true;
+      } catch (cfErr) {
+        const deadline = Date.now() + 20_000;
+        while (Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 2000));
+          try {
+            const st = await rpcRaceTrade('getSigStatus',
+              c => c.getSignatureStatus(sig, { searchTransactionHistory: true }));
+            const cs = st?.value?.confirmationStatus;
+            if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
+            if (st?.value?.err) throw new Error('Swap tx failed on-chain.');
+          } catch (e) {
+            if (/failed on-chain/i.test(String(e.message))) throw e;
+          }
         }
       }
-    }
 
-    setTimeout(() => { refreshSol(); refreshOneToken(token.mint); }, 1500);
-    return { sig, confirmed };
+      setTimeout(() => { refreshSol(); refreshOneToken(token.mint); }, 1500);
+      return { sig, confirmed };
   }, [wallet, refreshSol, refreshOneToken]);
 
   // Route by token type, identified the same way the rest of the app does:
@@ -1067,7 +1200,16 @@ function lrAgeStr(iso) {
 }
 function _uniqMint(list) {
   const seen = new Set();
-  return list.filter(t => t && t.mint && !seen.has(t.mint) && seen.add(t.mint));
+  return list.filter(t => {
+    if (!t || !t.mint) return false;
+    // pump.fun lets anyone reuse a name + image, so the feed surfaces several
+    // near-identical "clones" (same sym, pic, mcap) under different mints.
+    // Collapse both true mint-dupes AND visual clones to a single row.
+    const clone = (t.sym || '') + '|' + (t.icon || t.emoji || '') + '|' + Math.round(t.mcap || 0);
+    if (seen.has(t.mint) || seen.has(clone)) return false;
+    seen.add(t.mint); seen.add(clone);
+    return true;
+  });
 }
 function normalize(t) {
   const mint = t && t.mint;
