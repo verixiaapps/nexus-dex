@@ -291,11 +291,15 @@ export function shade(hex, p) {
    ============================================================ */
 export function buildBuyParams(n) {
   if (!Number.isFinite(n) || n <= 0) return null;
-  const totalLamports = BigInt(Math.floor(n * 1e9));
-  if (totalLamports <= 0n) return null;
-  const feeLamports = (totalLamports * BigInt(FEE_BPS)) / 10000n;
-  const tradeLamports = ((totalLamports - feeLamports) * 100n) / 110n;
-  if (tradeLamports <= 0n || feeLamports <= 0n) return null;
+  // n = SOL the user wants to spend on tokens. That IS the trade amount.
+  const tradeLamports = BigInt(Math.floor(n * 1e9));
+  if (tradeLamports <= 0n) return null;
+  // 3% platform fee charged ON TOP, transferred from the wallet in addition.
+  const feeLamports = (tradeLamports * BigInt(FEE_BPS)) / 10000n;
+  if (feeLamports <= 0n) return null;
+  // What the wallet pays (excludes network/priority fee). 10% slippage is
+  // applied server-side to the token-out side, not to the SOL spent.
+  const totalLamports = tradeLamports + feeLamports;
   return { mode: 'buy', solAmount: n, totalLamports: totalLamports.toString(), tradeLamports: tradeLamports.toString(), feeLamports: feeLamports.toString() };
 }
 export function buildSellParams(token, pct, tokenBalance, solPrice) {
@@ -399,7 +403,6 @@ export function refLogTrade(payload) {
    every subsequent trade hits memory.
    ============================================================ */
 export const APE_PUMP_ROUTE = '/api/ape/pump-trade';
-export const APE_JUP_ROUTE  = '/api/ape/jup-trade';
 const _altCache = new Map(); // base58 key -> AddressLookupTableAccount
 
 export async function decodeBuiltTx(b64, connection) {
@@ -439,7 +442,6 @@ export async function getPumpRoute(opts) {
   const r = await fetch(APE_PUMP_ROUTE, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) {
-    // 409 'graduated' is the distinct signal to fall back to Jupiter.
     const err = new Error((data && data.error) || ('pump HTTP ' + r.status));
     if (r.status === 409 || (data && data.error === 'graduated')) err.graduated = true;
     throw err;
@@ -447,27 +449,6 @@ export async function getPumpRoute(opts) {
   if (!data.tx) throw new Error('PumpPortal returned no tx.');
   const dec = await decodeBuiltTx(data.tx, connection);
   return { instructions: dec.instructions, alts: dec.alts, pool: data.pool, route: data.route };
-}
-
-// Jupiter route for graduated tokens. Same call shape + return shape as
-// getPumpRoute, so executeSwap can use either interchangeably. The returned
-// tx is a full Jupiter swap (burner = userPublicKey); we decode it to
-// instructions + ALTs so the fee/referral transfer can be appended exactly
-// like the pump path, then recompile + sign once.
-export async function getJupRoute(opts) {
-  const { action, mint, user, amount, decimals, connection } = opts;
-  const body = { action, mint, user: user.toBase58(), amount: String(amount) };
-  if (decimals != null) body.decimals = Number(decimals);
-  const r = await fetch(APE_JUP_ROUTE, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error((data && data.error) || ('jupiter HTTP ' + r.status));
-  if (!data.tx) throw new Error('Jupiter returned no tx.');
-  const dec = await decodeBuiltTx(data.tx, connection);
-  // outAmount = exact units out from the Jupiter quote. For a SELL (mint->SOL)
-  // this is the exact lamports received, which gives an exact P&L basis
-  // instead of a price estimate. For a BUY it's token units (unused — buy
-  // P&L uses SOL in).
-  return { instructions: dec.instructions, alts: dec.alts, route: data.route || 'jupiter', outAmount: data.outAmount != null ? String(data.outAmount) : null };
 }
 
 /* ============================================================
@@ -489,33 +470,16 @@ export async function executeSwap({ mode, swapParams, token, keypair, userPk, tr
   const isBuy = mode === 'buy';
   const feeLamports = BigInt(swapParams.feeLamports || '0');
 
-  // Fire the three independent network calls in parallel.
-  // refLookup is cached after first call; the first call costs ~80–200ms.
-  const routeP = (async () => {
-    try {
-      return await getPumpRoute({
-        action: isBuy ? 'buy' : 'sell',
-        mint: token.mint,
-        user: userPk,
-        amount: isBuy ? swapParams.tradeLamports : swapParams.tradeTokens,
-        decimals: isBuy ? undefined : swapParams.decimals,
-        connection: tradeConnection,
-      });
-    } catch (e) {
-      // Graduated off the bonding curve → route through Jupiter instead.
-      if (e && e.graduated) {
-        return await getJupRoute({
-          action: isBuy ? 'buy' : 'sell',
-          mint: token.mint,
-          user: userPk,
-          amount: isBuy ? swapParams.tradeLamports : swapParams.tradeTokens,
-          decimals: isBuy ? undefined : swapParams.decimals,
-          connection: tradeConnection,
-        });
-      }
-      throw e;
-    }
-  })();
+  // Pump.fun bonding-curve route only. A graduated/unsupported token throws
+  // and surfaces as a clean "not tradable here" message — no DEX fallback.
+  const routeP = getPumpRoute({
+    action: isBuy ? 'buy' : 'sell',
+    mint: token.mint,
+    user: userPk,
+    amount: isBuy ? swapParams.tradeLamports : swapParams.tradeTokens,
+    decimals: isBuy ? undefined : swapParams.decimals,
+    connection: tradeConnection,
+  });
 
   const [route, latest, refData] = await Promise.all([
     routeP,
@@ -529,8 +493,11 @@ export async function executeSwap({ mode, swapParams, token, keypair, userPk, tr
 
   if (feeLamports > 0n) {
     ixs.push(SystemProgram.transfer({ fromPubkey: userPk, toPubkey: FEE_WALLET, lamports: feeLamports }));
-    if (refData.referrer && refData.refSplitBps > 0) {
-      const refLamports = (feeLamports * BigInt(refData.refSplitBps)) / 10000n;
+    if (refData.referrer) {
+      // Referrer gets 50% of the 3% trade fee. Honor an explicit server split
+      // if provided, otherwise default to 50%.
+      const splitBps = (refData.refSplitBps && refData.refSplitBps > 0) ? BigInt(refData.refSplitBps) : 5000n;
+      const refLamports = (feeLamports * splitBps) / 10000n;
       if (refLamports > 0n) ixs.push(SystemProgram.transfer({ fromPubkey: userPk, toPubkey: new PublicKey(refData.referrer), lamports: refLamports }));
     }
   }
@@ -605,13 +572,8 @@ export async function executeSwap({ mode, swapParams, token, keypair, userPk, tr
     let volSol;
     if (isBuy) {
       volSol = Number(swapParams.tradeLamports) / 1e9;
-    } else if (route && route.outAmount != null && Number(route.outAmount) > 0) {
-      // Exact SOL received from the route's quote (Jupiter sell = mint->SOL,
-      // outAmount is lamports). More accurate than the price estimate and
-      // never zero on a confirmed trade.
-      volSol = Number(route.outAmount) / 1e9;
     } else {
-      // Fallback: estimate from current price (pump route has no quote-out).
+      // Pump route has no quote-out, so estimate sell volume from current price.
       volSol = (swapParams.tradeTokensUi * (token.price || 0)) / (solPrice || 1);
     }
     refLogTrade({ wallet: walletStr, mint: token.mint, sym: token.sym, side: mode, sol: volSol, sig, ts: Date.now() });
