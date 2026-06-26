@@ -1303,15 +1303,11 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
     return () => document.removeEventListener('mousedown', onDoc);
   }, []);
 
-  // Same pattern as App.js Rows: % from the chart series (chartChg), falling
-  // back to the feed's value until the series loads — first → last, nothing fancy.
-  const tokensCC = useMemo(
-    () => tokens.map(t => {
-      const cc = chartChg[t.mint];
-      return { ...t, change: Number.isFinite(cc) ? cc : (Number.isFinite(t.change) ? t.change : null) };
-    }),
-    [tokens, chartChg]
-  );
+  // Displayed % is Jupiter's stats24h.priceChange (carried on t.change), shown
+  // as-is. Deriving it from the chart series produced unstable, sometimes absurd
+  // numbers (a blue-chip reading +637820%); Jupiter's 24h figure is the stable,
+  // correct one. The series is still used for the sparkline SHAPE only.
+  const tokensCC = useMemo(() => tokens, [tokens]);
 
   const ticker = useMemo(
     () => tokensCC.slice(0, 10).map(t => [t.sym, formatPct(t.change), t.change >= 0]),
