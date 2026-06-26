@@ -1004,7 +1004,27 @@ function useTradeEngine() {
         }
       }
 
-      setTimeout(() => { refreshSol(); refreshOneToken(token.mint); }, 1500);
+      // onSuccess tail — verbatim from MemeWonderland handleSwap. The page-state
+      // setters it references (onSuccess UI toast, refreshBalances) are created
+      // locally here so this file needs no restructure; the sheet shows the
+      // result via handleConfirm's return handling.
+      const outputDecimals  = isBuy ? (token.decimals || 6) : 9;
+      const inputSymbol     = isBuy ? 'SOL' : (token.sym || 'TKN');
+      const outputSymbol    = isBuy ? (token.sym || 'TKN') : 'SOL';
+      const amtNum          = isBuy ? Number(swapParams.solAmount || 0) : Number(swapParams.tradeTokensUi || 0);
+      const format          = tradeFmtTokens;
+      const onSuccess       = () => {};
+      const refreshBalances = () => { refreshSol(); refreshOneToken(token.mint); };
+
+      const outUi = Number(build.outAmount) / Math.pow(10, outputDecimals);
+      onSuccess({
+        signature: sig,
+        pending: !confirmed,
+        paid: amtNum.toFixed(4) + ' ' + inputSymbol,
+        got:  format(outUi) + ' ' + outputSymbol,
+        price: token.price,
+      });
+      if (confirmed) setTimeout(() => refreshBalances(), 2000);
       return { sig, confirmed };
   }, [wallet, refreshSol, refreshOneToken]);
 
@@ -1077,6 +1097,254 @@ function TokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
     return { mode: 'sell', decimals, percentage: pct, tradeTokens: tradeTokens.toString(), tradeTokensUi, feeLamports };
   }, [amount, isBuy, token, tokenBalance, solPrice]);
 
+  /* ════════════════════════════════════════════════════════════════════
+     JUPITER (graduated / non-pump) PATH — MemeWonderland TradeSheet machinery
+     moved in VERBATIM below (prefetch effect + handleSwap, character-for-
+     character). The page-state setters it references are created locally so
+     the sheet's existing UI shows the result. Pump tokens still use executeSwap.
+     ════════════════════════════════════════════════════════════════════ */
+  const wallet = useWallet();
+  const connection = tradeGetConn('confirmed');
+  const isSell = mode === 'sell';
+  const inputMint  = isSell ? token.mint : SOL_MINT;
+  const outputMint = isSell ? SOL_MINT  : token.mint;
+  const inputDecimals  = isSell ? (token.decimals ?? 6) : 9;
+  const outputDecimals = isSell ? 9 : (token.decimals ?? 6);
+  const inputSymbol  = isSell ? (token.sym || 'TKN') : 'SOL';
+  const outputSymbol = isSell ? 'SOL' : (token.sym || 'TKN');
+  const amtNum = parseFloat(amount) || 0;
+  const rawAmount = useMemo(() => {
+    if (!swapParams) return '';
+    return isSell ? String(swapParams.tradeTokens || '') : String(swapParams.totalLamports || '');
+  }, [swapParams, isSell]);
+  const setSwapError = setError;
+  const setSwapping = setConfirming;
+  const friendlyError = tradeFriendlyError;
+  const format = tradeFmtTokens;
+  const refreshBalances = useCallback(() => { refreshSol(); refreshOneToken(token.mint); }, [refreshSol, refreshOneToken, token.mint]);
+  const onSuccess = useCallback((res) => { setDone({ mode, sig: res.signature }); setAmount(''); }, [mode]);
+  const [build, setBuild] = useState(null);
+  const [quoting, setQuoting] = useState(false);
+  const [quoteError, setQuoteError] = useState(null);
+  const quoteAbortRef = useRef(null);
+
+  useEffect(() => {
+    if (!rawAmount || inputMint === outputMint) {
+      setBuild(null);
+      setQuoteError(null);
+      return;
+    }
+    if (quoteAbortRef.current) quoteAbortRef.current.abort();
+    const ac = new AbortController();
+    quoteAbortRef.current = ac;
+
+    setQuoting(true);
+    setQuoteError(null);
+
+    const t = setTimeout(async () => {
+      try {
+        const net = (BigInt(rawAmount) * BigInt(10000 - FEE_BPS)) / 10000n;
+        if (net <= 0n) {
+          setBuild(null);
+          setQuoting(false);
+          return;
+        }
+        const params = new URLSearchParams({
+          inputMint,
+          outputMint,
+          amount:      net.toString(),
+          slippageBps: String(SLIPPAGE_BPS),
+          taker:       wallet.publicKey
+            ? wallet.publicKey.toBase58()
+            : '11111111111111111111111111111111',
+        });
+        const r = await fetch(`/api/jupiter/build?${params}`, { signal: ac.signal });
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(body.error || `Quote failed (${r.status})`);
+        }
+        const data = await r.json();
+        if (!ac.signal.aborted) {
+          setBuild(data);
+          setQuoteError(null);
+        }
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        if (!ac.signal.aborted) {
+          setBuild(null);
+          setQuoteError(friendlyError(e));
+        }
+      } finally {
+        if (!ac.signal.aborted) setQuoting(false);
+      }
+    }, 350);
+
+    return () => { clearTimeout(t); ac.abort(); };
+  }, [rawAmount, inputMint, outputMint, wallet.publicKey]);
+
+  const handleSwap = useCallback(async () => {
+    if (!wallet.publicKey || !wallet.signTransaction) {
+      setSwapError('Please connect a wallet (Phantom, Solflare, Backpack).');
+      return;
+    }
+    if (!build) {
+      setSwapError('No quote available — try again.');
+      return;
+    }
+
+    setSwapping(true);
+    setSwapError(null);
+
+    try {
+      const dec = inputDecimals;
+
+      // Full 3% fee → FEE_WALLET
+      const feeAmount = (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n;
+      if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero — amount too small.');
+
+      const feeIxs = [];
+      if (inputMint === SOL_MINT) {
+        feeIxs.push(SystemProgram.transfer({
+          fromPubkey: wallet.publicKey,
+          toPubkey:   FEE_WALLET,
+          lamports:   Number(feeAmount),
+        }));
+      } else {
+        const mintPk = new PublicKey(inputMint);
+        // Buy/sell critical path → trade RPC (Alchemy primary, Ankr fallback).
+        const mintInfo = await rpcRaceTrade('getMintInfo', c => c.getAccountInfo(mintPk));
+        if (!mintInfo) throw new Error('Input mint not found on-chain.');
+        const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
+          ? TOKEN_2022_PROGRAM_ID
+          : TOKEN_PROGRAM_ID;
+
+        const sourceAta = getAssociatedTokenAddressSync(mintPk, wallet.publicKey, true, tokenProgram);
+        const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET,       true, tokenProgram);
+
+        feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
+          wallet.publicKey, destAta, FEE_WALLET, mintPk, tokenProgram,
+        ));
+        feeIxs.push(createTransferCheckedInstruction(
+          sourceAta, mintPk, destAta, wallet.publicKey,
+          feeAmount, dec, [], tokenProgram,
+        ));
+      }
+
+      const ixs = [];
+      if (Array.isArray(build.computeBudgetInstructions))
+        for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
+      for (const ix of feeIxs) ixs.push(ix);
+      if (Array.isArray(build.setupInstructions))
+        for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
+      if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
+      if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
+      if (Array.isArray(build.otherInstructions))
+        for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
+
+      const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
+      let alts = [];
+      if (altKeys.length > 0) {
+        const infos = await rpcRaceTrade('getAlts',
+          c => c.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k))));
+        alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
+          key:   new PublicKey(k),
+          state: AddressLookupTableAccount.deserialize(infos[i].data),
+        }) : null).filter(Boolean);
+      }
+
+      const latest = await rpcRaceTrade('getLatestBlockhash',
+        c => c.getLatestBlockhash('confirmed'));
+      const message = new TransactionMessage({
+        payerKey:        wallet.publicKey,
+        recentBlockhash: latest.blockhash,
+        instructions:    ixs,
+      }).compileToV0Message(alts);
+      const tx = new VersionedTransaction(message);
+
+      const mapSimErr = (logs) => {
+        const j = (logs || []).join('\n').toLowerCase();
+        if (j.includes('insufficient') || j.includes('0x1')) return 'Insufficient balance for this swap.';
+        if (j.includes('slippage') || j.includes('0x1771'))  return 'Price moved — try a higher slippage or smaller amount.';
+        if (j.includes('account not') || j.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
+        if (j.includes('blockhash') || j.includes('expired')) return 'Quote expired. Please refresh and retry.';
+        return null;
+      };
+      try {
+        const sim = await connection.simulateTransaction(tx, {
+          replaceRecentBlockhash: true,
+          sigVerify: false,
+        });
+        if (sim.value.err) {
+          throw new Error(mapSimErr(sim.value.logs) || 'Swap simulation failed — the price may have moved.');
+        }
+      } catch (simErr) {
+        if (simErr?.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) {
+          throw simErr;
+        }
+        console.warn('[swap] sim non-fatal', simErr);
+      }
+
+      const signed = await wallet.signTransaction(tx);
+      const serialized = signed.serialize();
+
+      // Send via trade RPC (Alchemy primary, Ankr fallback).
+      const sig = await rpcRaceTrade('sendTx', c => c.sendRawTransaction(serialized, {
+        skipPreflight: false,
+        maxRetries: 3,
+      }));
+
+      let confirmed = false;
+      try {
+        const conf = await Promise.race([
+          connection.confirmTransaction({
+            signature: sig,
+            blockhash: latest.blockhash,
+            lastValidBlockHeight: latest.lastValidBlockHeight,
+          }, 'confirmed'),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
+        ]);
+        if (conf?.value?.err) throw new Error('Swap tx failed on-chain: ' + JSON.stringify(conf.value.err));
+        confirmed = true;
+      } catch (cfErr) {
+        const deadline = Date.now() + 20_000;
+        while (Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 2000));
+          try {
+            const st = await rpcRaceTrade('getSigStatus',
+              c => c.getSignatureStatus(sig, { searchTransactionHistory: true }));
+            const cs = st?.value?.confirmationStatus;
+            if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
+            if (st?.value?.err) throw new Error('Swap tx failed on-chain.');
+          } catch (e) {
+            if (/failed on-chain/i.test(String(e.message))) throw e;
+          }
+        }
+      }
+
+      const outUi = Number(build.outAmount) / Math.pow(10, outputDecimals);
+      onSuccess({
+        signature: sig,
+        pending: !confirmed,
+        paid: amtNum.toFixed(4) + ' ' + inputSymbol,
+        got:  format(outUi) + ' ' + outputSymbol,
+        price: token.price,
+      });
+
+      if (confirmed) setTimeout(() => refreshBalances(), 2000);
+    } catch (e) {
+      console.error('[mw swap]', e);
+      setSwapError(friendlyError(e));
+    } finally {
+      setSwapping(false);
+    }
+  }, [
+    wallet, build, inputMint, inputDecimals, outputDecimals,
+    inputSymbol, outputSymbol, rawAmount, amtNum, token.price,
+    connection, onSuccess, refreshBalances,
+  ]);
+
+  // Funds check: only enforce when we KNOW the balance.
+
   const hasFunds = (() => {
     if (!amount || Number(amount) <= 0) return false;
     if (isBuy) return Number(amount) <= availSol;
@@ -1085,11 +1353,146 @@ function TokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
   const needsWallet = !canSign;
   const confirmDisabled = confirming || !swapParams || (!needsWallet && !hasFunds) || !!error;
 
+
+  /* ════════════════════════════════════════════════════════════════════
+     PUMP.FUN PATH — LaunchRadar executeSwap moved in VERBATIM (body
+     character-for-character; only the wrapper name + local tradeConnection +
+     balance refresh differ). Mirrors the Jupiter handleSwap placement above.
+     ════════════════════════════════════════════════════════════════════ */
+    if (!wallet.publicKey || !wallet.signTransaction) {
+      throw new Error('Please connect a wallet (Phantom, Solflare, Backpack).');
+    }
+    if (!swapParams) throw new Error('Nothing to trade.');
+
+    const isBuy  = mode === 'buy';
+    const userPk = wallet.publicKey;
+    const tradeConnection = getTradeConn('confirmed');
+
+    // 1. PumpPortal builds the tx; we decompile it locally. ALT lookup runs
+    //    on the trade connection.
+    const route = await getPumpRoute({
+      action: isBuy ? 'buy' : 'sell',
+      mint:   token.mint,
+      user:   userPk,
+      amount: isBuy ? swapParams.tradeLamports : swapParams.tradeTokens,
+      decimals: isBuy ? undefined : swapParams.decimals,
+      connection: tradeConnection,
+    });
+
+    // 2. Build the 3% SOL fee transfer.
+    const feeLamports = BigInt(swapParams.feeLamports || '0');
+    if (feeLamports <= 0n) {
+      throw new Error(isBuy
+        ? 'Fee rounds to zero — amount too small.'
+        : 'Could not estimate sell fee — token or SOL price unavailable.');
+    }
+    const feeIx = SystemProgram.transfer({
+      fromPubkey: userPk,
+      toPubkey:   FEE_WALLET,
+      lamports:   Number(feeLamports),
+    });
+
+    // 3. Splice. PumpPortal's tx already includes its own ComputeBudget
+    //    instructions at the start — we insert AFTER them so they keep
+    //    setting the priority fee for the whole tx.
+    const CB_PROGRAM = 'ComputeBudget111111111111111111111111111111';
+    const ixs = route.instructions.slice();
+    if (isBuy) {
+      let insertAt = 0;
+      while (insertAt < ixs.length && ixs[insertAt].programId.toBase58() === CB_PROGRAM) insertAt++;
+      ixs.splice(insertAt, 0, feeIx);
+    } else {
+      ixs.push(feeIx);
+    }
+
+    // 4. Fresh blockhash, recompile with the SAME ALTs PumpPortal used.
+    const latest = await tradeConnection.getLatestBlockhash('confirmed');
+    const message = new TransactionMessage({
+      payerKey:        userPk,
+      recentBlockhash: latest.blockhash,
+      instructions:    ixs,
+    }).compileToV0Message(route.alts);
+    const tx = new VersionedTransaction(message);
+
+    // 5. Pre-sign simulation against fresh chain state. Catches stale
+    //    bonding-curve state, slippage failures, balance shortfalls —
+    //    without spending a Phantom popup.
+    let simLogs = null;
+    try {
+      const sim = await tradeConnection.simulateTransaction(tx, {
+        sigVerify: false,
+        replaceRecentBlockhash: true,
+        commitment: 'processed',
+      });
+      simLogs = sim?.value?.logs || null;
+      if (sim?.value?.err) {
+        console.error('[lr-sim] failed:', JSON.stringify(sim.value.err),
+          simLogs ? '\n' + simLogs.join('\n') : '');
+        throw new Error(describeSimLogs(simLogs, JSON.stringify(sim.value.err)));
+      }
+      try {
+        console.log('[lr-sim] ok | CU:', sim?.value?.unitsConsumed,
+          '| logs:', (simLogs || []).length);
+      } catch {}
+    } catch (simErr) {
+      if (simErr instanceof Error && /sim failed/i.test(simErr.message)) throw simErr;
+      console.warn('[lr-sim] could not run sim, proceeding:', simErr?.message);
+    }
+
+    // 6. User signs.
+    const signed = await wallet.signTransaction(tx);
+    const raw = signed.serialize();
+
+    // 7. Send.
+    let sig;
+    try {
+      sig = await tradeConnection.sendRawTransaction(raw, {
+        skipPreflight: true,
+        maxRetries:    5,
+      });
+    } catch (sendErr) {
+      let logs = sendErr?.logs || null;
+      if (!logs && typeof sendErr?.getLogs === 'function') {
+        try { logs = await sendErr.getLogs(tradeConnection); } catch {}
+      }
+      console.error('[lr-send] rejected:', sendErr?.message, logs ? '\n' + logs.join('\n') : '');
+      throw new Error(describeSimLogs(logs, sendErr?.message));
+    }
+
+    // 8. Rebroadcast same bytes until confirmed or blockhash expires.
+    let confirmed = false, onchainErr = null;
+    const startedAt = Date.now();
+    const HARD_CAP_MS = 60_000;
+    while (Date.now() - startedAt < HARD_CAP_MS) {
+      try {
+        const st = await tradeConnection.getSignatureStatus(sig, { searchTransactionHistory: true });
+        if (st?.value?.err) { onchainErr = st.value.err; break; }
+        const cs = st?.value?.confirmationStatus;
+        if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
+      } catch {}
+      try {
+        const h = await tradeConnection.getBlockHeight('confirmed');
+        if (h > latest.lastValidBlockHeight) break;
+      } catch {}
+      try { await tradeConnection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }); } catch {}
+      await new Promise(r => setTimeout(r, 2000));
+    }
+    if (onchainErr) {
+      console.warn('[lr-confirm] on-chain err:', JSON.stringify(onchainErr));
+      throw new Error('Trade failed on-chain — price likely moved past slippage.');
+    }
+
+    return { sig, confirmed, mode, token, route: route.route };
+
+  const isPumpToken = token.route
+    ? token.route === 'pump'
+    : PUMP_DEX_IDS.has(String(token.dexId || '').toLowerCase());
   const handleConfirm = async () => {
     if (!swapParams || confirming) return;
+    if (!isPumpToken) { handleSwap(); return; } // Jupiter → verbatim MemeWonderland handleSwap (manages its own state)
     setConfirming(true); setError(null);
     try {
-      const res = await executeSwap({ mode, swapParams, token });
+      const res = await executePumpSwap({ mode, swapParams, token }); // pump → verbatim LaunchRadar executeSwap, in-sheet
       setDone({ mode, sig: res.sig });
       setAmount('');
     } catch (e) { setError(tradeFriendlyError(e)); }
