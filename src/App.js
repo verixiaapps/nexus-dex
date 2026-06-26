@@ -10,6 +10,13 @@ import {
   SystemProgram,
   AddressLookupTableAccount,
 } from '@solana/web3.js';
+import {
+  getAssociatedTokenAddressSync,
+  createAssociatedTokenAccountIdempotentInstruction,
+  createTransferCheckedInstruction,
+  TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
+} from '@solana/spl-token';
 import { useNexusWallet } from './WalletContext.js';
 import SwapWidget          from './components/SwapWidget.jsx';
 import Stocks, { BRANDS, fetchBrandPrices, stkFetchSeries, stkBuildPath, stkThrottle } from './components/Stocks.jsx';
@@ -558,6 +565,25 @@ function SheetChart({ mint, sym }) {
 const SOL_MINT    = 'So11111111111111111111111111111111111111112';
 const FEE_WALLET  = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
 const FEE_BPS     = 300;   // 3%
+// Regular (graduated / non-pump) path — Jupiter swap, copied verbatim from
+// MemeWonderland.jsx (the working meme trader). 5% slippage, 3% fee from input.
+const SLIPPAGE_BPS = 500;
+const deserIx = (ix) => ({
+  programId: new PublicKey(ix.programId),
+  keys: ix.accounts.map(a => ({ pubkey: new PublicKey(a.pubkey), isSigner: a.isSigner, isWritable: a.isWritable })),
+  data: Buffer.from(ix.data, 'base64'),
+});
+async function jupBuild({ inputMint, outputMint, amount, taker }) {
+  const params = new URLSearchParams({
+    inputMint, outputMint, amount: String(amount), slippageBps: String(SLIPPAGE_BPS),
+    taker: taker || '11111111111111111111111111111111',
+  });
+  const r = await fetch('/api/jupiter/build?' + params.toString());
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data?.error || ('Quote failed (' + r.status + ')'));
+  if (!data || (!data.swapInstruction && !data.outAmount)) throw new Error('No route available for this token.');
+  return data;
+}
 const SOL_RESERVE = 0.01;
 const TRADE_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
 const TRADE_SELL_PRESETS = [25, 50, 100];
@@ -580,6 +606,15 @@ const getTradeConn = (commitment) => {
   let c = _tradeConnCache.get(commitment);
   if (!c) { c = new Connection(TRADE_RPC_URL, commitment); _tradeConnCache.set(commitment, c); }
   return c;
+};
+// Verbatim from MemeWonderland.jsx — buy/sell critical RPC (send, blockhash,
+// ALT, mint info, sig status) routes through /api/trade-rpc (Alchemy primary,
+// Ankr fallback). Sim + confirm stay on /api/solana-rpc.
+const rpcRaceTrade = (label, op, commitment = 'confirmed') => {
+  return op(getTradeConn(commitment)).catch(e => {
+    console.warn(`[trade-rpc] ${label} failed:`, e?.message);
+    throw new Error(`${label}: trade RPC failed`);
+  });
 };
 const balRpcRace = (op) => op(tradeGetConn(BAL_COMMITMENT));
 
@@ -642,7 +677,7 @@ async function tradeGetPumpRoute({ action, mint, user, amount, decimals, connect
   if (decimals != null) body.decimals = Number(decimals);
   const r = await fetch('/api/pumpfun/trade', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data?.error || ('pump HTTP ' + r.status));
+  if (!r.ok) { const err = new Error(data?.error || ('pump HTTP ' + r.status)); if (r.status === 404) err.notPump = true; throw err; }
   if (!data.tx) throw new Error('PumpPortal returned no tx.');
   const { instructions, alts } = await tradeDecodeBuiltTx(data.tx, connection);
   return { instructions, alts, pool: data.pool, route: data.route };
@@ -680,7 +715,7 @@ function useTradeEngine() {
     } catch {}
   }, [walletObj.publicKey]);
 
-  const executeSwap = useCallback(async ({ mode, swapParams, token }) => {
+  const executePumpSwap = useCallback(async ({ mode, swapParams, token }) => {
     if (!walletObj.publicKey || !walletObj.signTransaction) throw new Error('Please connect a wallet (Phantom, Solflare, Backpack).');
     if (!swapParams) throw new Error('Nothing to trade.');
     const isBuy = mode === 'buy';
@@ -725,6 +760,132 @@ function useTradeEngine() {
     setTimeout(() => { refreshSol(); refreshOneToken(token.mint); }, 1500);
     return { sig, confirmed };
   }, [walletObj, refreshSol, refreshOneToken]);
+
+  // REGULAR (graduated / non-pump) path — Jupiter swap. Ported VERBATIM from
+  // MemeWonderland.jsx handleSwap: /api/jupiter/build, 3% fee from input,
+  // rpcRaceTrade (/api/trade-rpc) for send/blockhash/ALT/mint/sig-status,
+  // `connection` (/api/solana-rpc) for sim + confirm. Build → sim → user signs
+  // THAT tx → send. No refetch between sim and sign.
+  const executeRegularSwap = useCallback(async ({ mode, swapParams, token }) => {
+    if (!walletObj.publicKey || !walletObj.signTransaction) throw new Error('Please connect a wallet (Phantom, Solflare, Backpack).');
+    if (!swapParams) throw new Error('Nothing to trade.');
+    const isBuy = mode === 'buy';
+    const userPk = walletObj.publicKey;
+    const connection = tradeGetConn('confirmed'); // /api/solana-rpc — MemeWonderland's `connection`
+    const inputMint  = isBuy ? SOL_MINT : token.mint;
+    const outputMint = isBuy ? token.mint : SOL_MINT;
+    const dec = isBuy ? 9 : (swapParams.decimals || token.decimals || 6);
+    const rawAmount = BigInt(isBuy ? swapParams.totalLamports : swapParams.tradeTokens);
+    if (rawAmount <= 0n) throw new Error('Amount too small.');
+
+    const net = (rawAmount * BigInt(10000 - FEE_BPS)) / 10000n;
+    if (net <= 0n) throw new Error('Amount too small.');
+    const build = await jupBuild({ inputMint, outputMint, amount: net, taker: userPk.toBase58() });
+
+    // Full 3% fee → FEE_WALLET
+    const feeAmount = (rawAmount * BigInt(FEE_BPS)) / 10000n;
+    if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero — amount too small.');
+
+    const feeIxs = [];
+    if (inputMint === SOL_MINT) {
+      feeIxs.push(SystemProgram.transfer({ fromPubkey: userPk, toPubkey: FEE_WALLET, lamports: Number(feeAmount) }));
+    } else {
+      const mintPk = new PublicKey(inputMint);
+      const mintInfo = await rpcRaceTrade('getMintInfo', c => c.getAccountInfo(mintPk));
+      if (!mintInfo) throw new Error('Input mint not found on-chain.');
+      const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID) ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
+      const sourceAta = getAssociatedTokenAddressSync(mintPk, userPk, true, tokenProgram);
+      const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET, true, tokenProgram);
+      feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(userPk, destAta, FEE_WALLET, mintPk, tokenProgram));
+      feeIxs.push(createTransferCheckedInstruction(sourceAta, mintPk, destAta, userPk, feeAmount, dec, [], tokenProgram));
+    }
+
+    const ixs = [];
+    if (Array.isArray(build.computeBudgetInstructions)) for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
+    for (const ix of feeIxs) ixs.push(ix);
+    if (Array.isArray(build.setupInstructions)) for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
+    if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
+    if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
+    if (Array.isArray(build.otherInstructions)) for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
+
+    const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
+    let alts = [];
+    if (altKeys.length > 0) {
+      const infos = await rpcRaceTrade('getAlts', c => c.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k))));
+      alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({ key: new PublicKey(k), state: AddressLookupTableAccount.deserialize(infos[i].data) }) : null).filter(Boolean);
+    }
+
+    const latest = await rpcRaceTrade('getLatestBlockhash', c => c.getLatestBlockhash('confirmed'));
+    const message = new TransactionMessage({ payerKey: userPk, recentBlockhash: latest.blockhash, instructions: ixs }).compileToV0Message(alts);
+    const tx = new VersionedTransaction(message);
+
+    const mapSimErr = (logs) => {
+      const j = (logs || []).join('\n').toLowerCase();
+      if (j.includes('insufficient') || j.includes('0x1')) return 'Insufficient balance for this swap.';
+      if (j.includes('slippage') || j.includes('0x1771'))  return 'Price moved — try a higher slippage or smaller amount.';
+      if (j.includes('account not') || j.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
+      if (j.includes('blockhash') || j.includes('expired')) return 'Quote expired. Please refresh and retry.';
+      return null;
+    };
+    try {
+      const sim = await connection.simulateTransaction(tx, { replaceRecentBlockhash: true, sigVerify: false });
+      if (sim.value.err) {
+        throw new Error(mapSimErr(sim.value.logs) || 'Swap simulation failed — the price may have moved.');
+      }
+    } catch (simErr) {
+      if (simErr?.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) throw simErr;
+      console.warn('[swap] sim non-fatal', simErr);
+    }
+
+    const signed = await walletObj.signTransaction(tx);
+    const serialized = signed.serialize();
+
+    // Send via trade RPC (Alchemy primary, Ankr fallback).
+    const sig = await rpcRaceTrade('sendTx', c => c.sendRawTransaction(serialized, { skipPreflight: false, maxRetries: 3 }));
+
+    let confirmed = false;
+    try {
+      const conf = await Promise.race([
+        connection.confirmTransaction({ signature: sig, blockhash: latest.blockhash, lastValidBlockHeight: latest.lastValidBlockHeight }, 'confirmed'),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
+      ]);
+      if (conf?.value?.err) throw new Error('Swap tx failed on-chain: ' + JSON.stringify(conf.value.err));
+      confirmed = true;
+    } catch (cfErr) {
+      const deadline = Date.now() + 20_000;
+      while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 2000));
+        try {
+          const st = await rpcRaceTrade('getSigStatus', c => c.getSignatureStatus(sig, { searchTransactionHistory: true }));
+          const cs = st?.value?.confirmationStatus;
+          if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
+          if (st?.value?.err) throw new Error('Swap tx failed on-chain.');
+        } catch (e) {
+          if (/failed on-chain/i.test(String(e.message))) throw e;
+        }
+      }
+    }
+
+    setTimeout(() => { refreshSol(); refreshOneToken(token.mint); }, 1500);
+    return { sig, confirmed };
+  }, [walletObj, refreshSol, refreshOneToken]);
+
+  // Routing: always try pump.fun first. The pump path builds → simulates →
+  // user signs THAT simulated tx → sends (no re-fetch between sim and sign).
+  // Only if the server reports the mint isn't a pump.fun token (404, pre-sign,
+  // no signature spent) do we fall back to the Jupiter path — which itself
+  // builds → simulates → signs that same tx → sends. "Not on pump.fun → Jupiter."
+  const executeSwap = useCallback(async ({ mode, swapParams, token }) => {
+    try {
+      return await executePumpSwap({ mode, swapParams, token });
+    } catch (e) {
+      const m = String(e?.message || '').toLowerCase();
+      if (e?.notPump || /not a pump|does not support this mint|not indexed|graduat|no tx|http 404/.test(m)) {
+        return executeRegularSwap({ mode, swapParams, token });
+      }
+      throw e;
+    }
+  }, [executePumpSwap, executeRegularSwap]);
 
   return { solPrice, balances, refreshSol, refreshOneToken, executeSwap, canSign: !!(walletObj.publicKey && walletObj.signTransaction) };
 }
@@ -1911,6 +2072,11 @@ function AppInner() {
   const navigate = useNavigate();
   const location = useLocation();
   const wallet   = useAppWallet();
+  // Adapter wallet pubkey — the SAME source the working Stocks page (BrandsInner)
+  // feeds into TradeModal. The modal signs with useWallet().signTransaction, so the
+  // owner/balances pubkey must come from the adapter too, not the Nexus context.
+  const { publicKey: adapterPk } = useWallet();
+  const adapterWalletPubkey = useMemo(() => (adapterPk ? adapterPk.toString() : null), [adapterPk]);
   const [tab, setTab] = useState(() => tabFromPathname(location.pathname));
   const [walletModalOpen, setWalletModalOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -1969,9 +2135,14 @@ function AppInner() {
     window.scrollTo({ top: y, behavior: 'smooth' });
   }, []);
 
-  const openToken = useCallback(t => setSheetToken(t), []);
   const [stockTrade, setStockTrade] = useState(null);
   const openStockTrade = useCallback((brand, price, icon) => setStockTrade({ brand, price: price || 0, icon: icon || null }), []);
+  const openToken = useCallback(t => {
+    // xStock clicked → use the working StockTradeModal (USDC pair), not the token sheet.
+    const brand = t && t.mint ? BRANDS.find(b => b.mint === t.mint) : null;
+    if (brand) { openStockTrade(brand, t.price, t.ico); return; }
+    setSheetToken(t);
+  }, [openStockTrade]);
   const buyToken = useCallback(mint => {
     setSwapOutputMint(mint);
     setSheetToken(null);
@@ -2202,7 +2373,7 @@ function AppInner() {
           icon={stockTrade ? stockTrade.icon : null}
           price={stockTrade ? stockTrade.price : 0}
           onClose={() => setStockTrade(null)}
-          walletPubkey={wallet.walletAddress}
+          walletPubkey={adapterWalletPubkey}
           onConnectWallet={openWallet}
         />
       )}
