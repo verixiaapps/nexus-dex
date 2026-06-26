@@ -485,36 +485,50 @@ function SheetChart({ mint, sym }) {
     const id = ++reqRef.current;
     setStatus('loading'); setPool(null);
     let stop = false;
+    const alive = () => !stop && id === reqRef.current;
 
-    // GeckoTerminal only. It always has the pool for a live token — it just
-    // rate-limits (429) or hasn't indexed a seconds-old mint yet. So we RETRY
-    // with backoff and never fall into a fail/none dead-end for a live mint;
-    // the sheet stays on the loading spinner and flips to the live chart the
-    // moment GeckoTerminal answers.
-    const tryOnce = async () => {
+    // GeckoTerminal — live 1s candles, preferred. DexScreener — fallback that
+    // covers pools/chains Gecko hasn't indexed. Both are fired in parallel so
+    // whichever has the pool wins immediately; we only wait on Dex if Gecko is
+    // empty. A few short retries cover seconds-old mints, then we settle to
+    // 'none' instead of spinning forever.
+    const fetchGecko = async () => {
       try {
         const r = await fetch(
           'https://api.geckoterminal.com/api/v2/networks/solana/tokens/' + mint + '/pools',
           { headers: { Accept: 'application/json' } });
-        if (id !== reqRef.current || stop) return true;
-        if (r.ok) {
-          const j = await r.json();
-          if (id !== reqRef.current || stop) return true;
-          const best = pickBestGeckoPool(j?.data, mint);
-          const addr = best?.attributes?.address;
-          if (addr) { setPool({ provider: 'GECKOTERMINAL', addr }); setStatus('ok'); return true; }
-        }
-      } catch (e) {}
-      return false; // 429 / not indexed yet → keep retrying
+        if (!r.ok) return null;
+        const j = await r.json();
+        const addr = pickBestGeckoPool(j?.data, mint)?.attributes?.address;
+        return addr ? { provider: 'GECKOTERMINAL', addr } : null;
+      } catch { return null; }
+    };
+    const fetchDex = async () => {
+      try {
+        const r = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + mint,
+          { headers: { Accept: 'application/json' } });
+        if (!r.ok) return null;
+        const j = await r.json();
+        const addr = pickBestPair(j?.pairs, mint)?.pairAddress;
+        return addr ? { provider: 'DEXSCREENER', addr } : null;
+      } catch { return null; }
     };
 
     (async () => {
-      let delay = 800;
-      while (!stop && id === reqRef.current) {
-        if (await tryOnce()) return;
-        await new Promise(r => setTimeout(r, delay));
-        delay = Math.min(delay * 1.5, 4000);
+      for (let attempt = 0; attempt < 4 && alive(); attempt++) {
+        const geckoP = fetchGecko();
+        const dexP   = attempt === 0 ? fetchDex() : null; // one Dex lookup is enough
+        const g = await geckoP;
+        if (!alive()) return;
+        if (g) { setPool(g); setStatus('ok'); return; }
+        if (dexP) {
+          const d = await dexP;
+          if (!alive()) return;
+          if (d) { setPool(d); setStatus('ok'); return; }
+        }
+        await new Promise(r => setTimeout(r, 700 + attempt * 600)); // fresh mint / 429 → quick retry
       }
+      if (alive()) setStatus('none');
     })();
 
     return () => { stop = true; };
@@ -1482,16 +1496,13 @@ function TokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
     return { sig, confirmed, mode, token, route: route.route };
   }, [wallet, refreshSol, refreshOneToken]);
 
-  // Route by what the token IS, not which feed surfaced it. A `…pump` mint is a
-  // pump.fun token; PumpPortal (pool:'auto') trades both the bonding curve AND
-  // the graduated PumpSwap pool. Top-gainer pump tokens arrive tagged
-  // route:'jupiter' (they came from the Jupiter feed) — but the Jupiter route
-  // for them is what Phantom flags, so force them down the native pump path.
-  const isPumpToken =
-    String(token.mint || '').toLowerCase().endsWith('pump') ||
-    (token.route
-      ? token.route === 'pump'
-      : PUMP_DEX_IDS.has(String(token.dexId || '').toLowerCase()));
+  // Every token reaching the sheet carries a source route tag:
+  //   /api/dex/launches   → route:'pump'    → bonding curve  → PumpPortal (LaunchRadar)
+  //   jupiter top-organic → route:'jupiter' → graduated SPL  → Jupiter   (MemeWonderland)
+  // Route off that tag, nothing else. The `…pump` mint suffix is NOT a routing
+  // signal — graduated pump tokens keep their pump mint forever, and matching on
+  // it forced every Jupiter-fed top-gainer into a dead PumpPortal route.
+  const isPumpToken = token.route === 'pump';
   const handleConfirm = async () => {
     if (!swapParams || confirming) return;
     if (!isPumpToken) { handleSwap(); return; } // Jupiter → verbatim MemeWonderland handleSwap (manages its own state)
@@ -1765,7 +1776,9 @@ function LiveTokenFeeds({ onSwitchTab, onOpenToken, onConnectWallet }) {
           .catch(() => { fetched.current[t.mint] = false; });
       });
     };
-    // Radar/new — exactly what LaunchRadar calls.
+    // Radar/new — exactly what LaunchRadar calls. Sparklines only for the rows
+    // we actually render (top 15) so we don't burn GeckoTerminal's rate limit on
+    // off-screen tokens — that was the source of the slow/empty sparklines.
     const pullLaunches = async () => {
       try {
         const r = await fetch('/api/dex/launches');
@@ -1774,7 +1787,7 @@ function LiveTokenFeeds({ onSwitchTab, onOpenToken, onConnectWallet }) {
         const list = _uniqMint((Array.isArray(d?.tokens) ? d.tokens : []).map(normalize).filter(Boolean)).slice(0, 30);
         if (cancelled) return;
         setToks(list);
-        loadSeries(list);
+        loadSeries(list.slice(0, 15));
       } catch {}
     };
     // Trending+Gainers — exactly what MemeWonderland calls (source + consumption copied).
@@ -1786,7 +1799,10 @@ function LiveTokenFeeds({ onSwitchTab, onOpenToken, onConnectWallet }) {
         const list = _uniqMint(raw.map(normalizeJup).filter(t => t.mint && t.mint !== SOL_MINT && t.sym !== 'WSOL' && t.sym !== 'SOL'));
         if (cancelled) return;
         setTrendToks(list);
-        loadSeries(list);
+        // Only the tokens we render: top 15 by volume (Trending) + top 15 by % (Gainers).
+        const byVol = [...list].sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0)).slice(0, 15);
+        const byChg = [...list].filter(t => Number.isFinite(t.change)).sort((a, b) => b.change - a.change).slice(0, 15);
+        loadSeries(_uniqMint([...byVol, ...byChg]));
       } catch {}
     };
     pullLaunches(); pullTrending();
