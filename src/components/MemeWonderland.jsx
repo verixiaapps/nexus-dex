@@ -759,7 +759,7 @@ function FeaturedSignal({ token, whaleCount, onOpen, onTrade }) {
         <div className="mw-fm"><span className="mw-fm-ico">💰</span><div className="mw-fm-val">${format(token.mcap)}</div><div className="mw-fm-lbl">Mcap</div></div>
       </div>
       <div className="mw-feat-cta">
-        <button type="button" className="mw-btn-grad" onClick={(e) => { e.stopPropagation(); onTrade(token.mint, 'buy'); }}>⚡ TRADE NOW</button>
+        <button type="button" className="mw-btn-grad" onClick={(e) => { e.stopPropagation(); onTrade(token.mint, 'buy'); }}>⚡ BUY NOW</button>
         <button type="button" className="mw-btn-ghost" onClick={(e) => { e.stopPropagation(); onOpen(token.mint); }}>details →</button>
       </div>
     </div>
@@ -818,7 +818,7 @@ function WhaleRadar({ whaleTokens, onOpen, onTrade }) {
             <span className="mw-l">🐋 {w.whaleCount || 1}</span>
             <span className="mw-r">+{format(w.whaleSol)} SOL</span>
           </div>
-          <button type="button" className="mw-trade-pill" onClick={(e) => { e.stopPropagation(); onTrade(w.mint, 'buy'); }}>TRADE</button>
+          <button type="button" className="mw-trade-pill" onClick={(e) => { e.stopPropagation(); onTrade(w.mint, 'buy'); }}>BUY</button>
         </div>
       ))}
     </div>
@@ -858,7 +858,7 @@ function BreakingOut({ tokens, whaleByMint, excludeMint, onOpen, onTrade }) {
               <div className={'mw-bo-pct' + ((p.token.change || 0) < 0 ? ' mw-down' : '')}>{formatPct(p.token.change)}</div>
               <div style={{ margin: '6px 0 2px' }}><MwSparkline mint={p.token.mint} price={p.token.price} change={p.token.change} w={150} h={28} full /></div>
               <div className="mw-bo-meta">{p.meta}</div>
-              <button type="button" className="mw-trade-pill" style={{ marginTop: 10 }} onClick={(e) => { e.stopPropagation(); onTrade(p.token.mint, 'buy'); }}>TRADE</button>
+              <button type="button" className="mw-trade-pill" style={{ marginTop: 10 }} onClick={(e) => { e.stopPropagation(); onTrade(p.token.mint, 'buy'); }}>BUY</button>
             </>
           ) : (
             <div className="mw-bo-empty">No matches yet.</div>
@@ -948,7 +948,7 @@ function NewLaunches({ tokens, onOpen, onTrade }) {
               <div className="mw-launch-row"><span className="mw-launch-l">Holders</span><span className="mw-launch-v">{t.holders ? format(t.holders) : '—'}</span></div>
               <div className="mw-launch-row"><span className="mw-launch-l">Liquidity</span><span className="mw-launch-v">${format(t.liquidity)}</span></div>
               <div className="mw-launch-row"><span className="mw-launch-l">Signal</span><span className="mw-launch-v" style={{ color: 'var(--green)' }}>{signalScore(t)}</span></div>
-              <button type="button" className="mw-trade-pill" style={{ marginTop: 10 }} onClick={(e) => { e.stopPropagation(); onTrade(t.mint, 'buy'); }}>TRADE</button>
+              <button type="button" className="mw-trade-pill" style={{ marginTop: 10 }} onClick={(e) => { e.stopPropagation(); onTrade(t.mint, 'buy'); }}>BUY</button>
             </div>
           ))}
         </div>
