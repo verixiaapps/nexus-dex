@@ -1303,11 +1303,17 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
     return () => document.removeEventListener('mousedown', onDoc);
   }, []);
 
-  // Displayed % is Jupiter's stats24h.priceChange (carried on t.change), shown
-  // as-is. Deriving it from the chart series produced unstable, sometimes absurd
-  // numbers (a blue-chip reading +637820%); Jupiter's 24h figure is the stable,
-  // correct one. The series is still used for the sparkline SHAPE only.
-  const tokensCC = useMemo(() => tokens, [tokens]);
+  // Displayed % is derived from the chart series (chartChg: first→last close
+  // over the 1D window), so the number always matches the sparkline. Jupiter's
+  // stats24h.priceChange is NOT used for display — it spikes on fresh/thin
+  // pools. Fall back to the Jupiter figure only until that mint's series loads.
+  const tokensCC = useMemo(
+    () => tokens.map(t => {
+      const cc = chartChg[t.mint];
+      return Number.isFinite(cc) ? { ...t, change: cc } : t;
+    }),
+    [tokens, chartChg]
+  );
 
   const ticker = useMemo(
     () => tokensCC.slice(0, 10).map(t => [t.sym, formatPct(t.change), t.change >= 0]),
@@ -1532,8 +1538,8 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
 // Resolves a mint → its best pool and embeds a candlestick chart.
 // Provider order: GeckoTerminal first (indexes pump.fun BONDING-CURVE pools
 // that DexScreener has no pair for until graduation), DexScreener fallback.
-// Both enforce: pool's BASE token must equal this mint (contract match;
-// quote-side-only is a last resort), and pick the highest-USD-liquidity pool.
+// Both enforce: pool's BASE token MUST equal this mint (exact contract match,
+// no quote-side fallback), and pick the highest-USD-liquidity matching pool.
 // The reduce is seeded with the first candidate so a single pool with 0 /
 // unknown liquidity (brand-new tokens) still charts.
 function pickBestGeckoPool(pools, mint) {
@@ -1541,24 +1547,24 @@ function pickBestGeckoPool(pools, mint) {
   const wanted  = 'solana_' + mint;                       // EXACT match — Solana base58 is case-sensitive
   const hasAddr = p => !!p?.attributes?.address;
   const baseId  = p => String(p?.relationships?.base_token?.data?.id || '');
-  const quoteId = p => String(p?.relationships?.quote_token?.data?.id || '');
   const liq     = p => Number(p?.attributes?.reserve_in_usd) || 0;
-  const base = pools.filter(p => hasAddr(p) && baseId(p) === wanted);                 // token is BASE → chart IS this token
-  const any  = pools.filter(p => hasAddr(p) && (baseId(p) === wanted || quoteId(p) === wanted));
-  const set  = base.length ? base : any;
-  if (!set.length) return null;
-  return set.reduce((best, p) => liq(p) > liq(best) ? p : best, set[0]);              // highest-liquidity pool
+  // Contract MUST match: only pools where this mint is the BASE token. No
+  // quote-side fallback — charting a pool where the mint is the quote shows the
+  // WRONG token. If nothing matches, return null (no chart) rather than wrong data.
+  const base = pools.filter(p => hasAddr(p) && baseId(p) === wanted);
+  if (!base.length) return null;
+  return base.reduce((best, p) => liq(p) > liq(best) ? p : best, base[0]);            // highest-liquidity matching pool
 }
 
 function pickBestPair(pairs, mint) {
   if (!Array.isArray(pairs) || !pairs.length) return null;
   const ok  = p => p && p.chainId === 'solana' && p.pairAddress;
   const liq = p => Number(p.liquidity?.usd) || 0;
+  // Contract MUST match: only pairs where this mint is the BASE token. No
+  // quote-side fallback. If nothing matches, return null (no chart).
   const base = pairs.filter(p => ok(p) && p.baseToken?.address === mint);             // EXACT, case-sensitive
-  const any  = pairs.filter(p => ok(p) && (p.baseToken?.address === mint || p.quoteToken?.address === mint));
-  const set  = base.length ? base : any;
-  if (!set.length) return null;
-  return set.reduce((best, p) => liq(p) > liq(best) ? p : best, set[0]);              // highest-liquidity pair
+  if (!base.length) return null;
+  return base.reduce((best, p) => liq(p) > liq(best) ? p : best, base[0]);            // highest-liquidity matching pair
 }
 
 /* ════════════════════════════════════════════════════════════════════
