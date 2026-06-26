@@ -55,7 +55,7 @@ import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
 const SOL_MINT   = 'So11111111111111111111111111111111111111112';
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
 const FEE_BPS    = 300;
-const SOL_RESERVE = 0.01;
+const SOL_RESERVE = 0.003;
 
 const DEFAULT_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
 const DEFAULT_SELL_PRESETS = [25, 50, 100];
@@ -2119,14 +2119,12 @@ function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPr
     if (swapParams.mode === 'buy') { const tradeSol = Number(swapParams.tradeLamports)/1e9; const tokens = (tradeSol*solPrice)/token.price; return tokens>0?{tokens}:null; }
     const grossSol = (swapParams.tradeTokensUi * token.price)/solPrice; const netSol = grossSol*(1-FEE_BPS/10000); return netSol>0?{sol:netSol}:null;
   }, [swapParams, token && token.price, solPrice]);
-  const BUY_MIN_SOL = 0;
-  const belowBuyMin = isBuy && amount && Number(amount) > 0 && Number(amount) < BUY_MIN_SOL;
-  const hasFunds = (() => {
-    if (!amount || Number(amount) <= 0) return false;
-    if (isBuy) return Number(amount) >= BUY_MIN_SOL && Number(amount) <= availSol;
-    return ownedUi > 0 && ((solBalance && solBalance.uiAmount) || 0) >= 0.003;
-  })();
-  const disabled = confirming || !swapParams || !hasFunds || !!error;
+  // No client-side buy/sell limits: any positive amount is allowed to fire.
+  // The chain validates funds — we don't block the trade here.
+  const hasAmount = isBuy
+    ? (!!amount && Number(amount) > 0)
+    : (!!amount && Number(amount) > 0 && ownedUi > 0);
+  const disabled = confirming || !swapParams || !hasAmount || !!error;
   const go = async () => {
     if (!swapParams || confirming) return;
     setConfirming(true); setError(null);
@@ -2217,7 +2215,7 @@ function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPr
         )}
         {error && <div className="ap-banner">{error}</div>}
         <button className={'ap-confirm'+(isBuy?'':' sell')} disabled={disabled} onClick={go}>
-          {confirming ? (isBuy?'Buying…':'Selling…') : !amount||Number(amount)<=0 ? (isBuy?'Enter SOL amount':'Enter percentage') : belowBuyMin ? ('Minimum 0.03 SOL') : !hasFunds ? (isBuy?'Not enough SOL':(ownedUi<=0?('No '+token.sym+' to sell'):'Need ~0.003 SOL for fees')) : (isBuy?('Buy '+amount+' SOL → '+token.sym):('Sell '+Math.min(100,Number(amount))+'% of '+token.sym))}
+          {confirming ? (isBuy?'Buying…':'Selling…') : !amount||Number(amount)<=0 ? (isBuy?'Enter SOL amount':'Enter percentage') : (!isBuy && ownedUi<=0) ? ('No '+token.sym+' to sell') : (isBuy?('Buy '+amount+' SOL → '+token.sym):('Sell '+Math.min(100,Number(amount))+'% of '+token.sym))}
         </button>
         <p className="ap-tfoot">{token.dex || 'pump.fun'} · 3% fee · settles in seconds</p>
       </div>
