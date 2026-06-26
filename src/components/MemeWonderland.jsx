@@ -600,7 +600,7 @@ function formatPrice(p) {
   return '$' + p.toExponential(2);
 }
 function formatPct(p) {
-  if (!Number.isFinite(p)) return '0%';
+  if (!Number.isFinite(p)) return '—';
   return (p >= 0 ? '+' : '') + p.toFixed(p < 10 && p > -10 ? 2 : 1) + '%';
 }
 // Format a USD value sensibly across the full range we'll see. Big balances
@@ -810,7 +810,7 @@ function WhaleRadar({ whaleTokens, onOpen, onTrade }) {
             <div className="mw-mini-avatar"><div className="mw-inner"><TokenIcon token={w} /></div></div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div className="mw-whale-sym">${w.sym}</div>
-              <div className={'mw-whale-pct' + (w.change < 0 ? ' mw-down' : '')}>{formatPct(w.change || 0)}</div>
+              <div className={'mw-whale-pct' + (w.change < 0 ? ' mw-down' : '')}>{formatPct(w.change)}</div>
             </div>
           </div>
           <div style={{ margin: '8px 0 2px' }}><MwSparkline mint={w.mint} price={w.price} change={w.change} w={140} h={26} full /></div>
@@ -855,7 +855,7 @@ function BreakingOut({ tokens, whaleByMint, excludeMint, onOpen, onTrade }) {
                 </div>
                 <div className="mw-bo-sym">${p.token.sym}</div>
               </div>
-              <div className={'mw-bo-pct' + ((p.token.change || 0) < 0 ? ' mw-down' : '')}>{formatPct(p.token.change || 0)}</div>
+              <div className={'mw-bo-pct' + ((p.token.change || 0) < 0 ? ' mw-down' : '')}>{formatPct(p.token.change)}</div>
               <div style={{ margin: '6px 0 2px' }}><MwSparkline mint={p.token.mint} price={p.token.price} change={p.token.change} w={150} h={28} full /></div>
               <div className="mw-bo-meta">{p.meta}</div>
               <button type="button" className="mw-trade-pill" style={{ marginTop: 10 }} onClick={(e) => { e.stopPropagation(); onTrade(p.token.mint, 'buy'); }}>TRADE</button>
@@ -984,7 +984,7 @@ function TrendingNow({ tokens, onOpen }) {
             </div>
             <MwSparkline mint={t.mint} price={t.price} change={t.change} w={50} h={22} />
             <div className="mw-trend-right">
-              <div className={'mw-trend-pct' + ((t.change || 0) < 0 ? ' mw-down' : '')}>{formatPct(t.change || 0)}</div>
+              <div className={'mw-trend-pct' + ((t.change || 0) < 0 ? ' mw-down' : '')}>{formatPct(t.change)}</div>
               <div className="mw-trend-meta">${format(t.mcap)} mcap</div>
             </div>
           </div>
@@ -1204,14 +1204,10 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
       stkThrottle(() => stkFetchSeries(mint, '1D'))
         .then(s => {
           if (cancelled || !Array.isArray(s) || s.length < 2) return;
-          // Anchor to a RECENT window, not s[0] (the launch print, often a
-          // near-zero microprice that makes fresh tokens read +9000%). Use the
-          // last ~6 candles of momentum so the % tracks the visible chart.
-          const lookback = Math.min(6, s.length - 1);
-          const ref = Number(s[s.length - 1 - lookback]?.c);
-          const lastC = Number(s[s.length - 1]?.c);
-          if (!(ref > 0) || !Number.isFinite(lastC)) return;
-          const pct = ((lastC - ref) / ref) * 100;
+          // Same as App.js pctFromSeries: % across the chart series, first → last.
+          const a = Number(s[0]?.c), b = Number(s[s.length - 1]?.c);
+          if (!(a > 0) || !Number.isFinite(b)) return;
+          const pct = ((b - a) / a) * 100;
           setChartChg(prev => (Math.abs((prev[mint] ?? NaN) - pct) < 0.01 ? prev : { ...prev, [mint]: pct }));
         })
         .catch(() => {});
@@ -1307,14 +1303,12 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
     return () => document.removeEventListener('mousedown', onDoc);
   }, []);
 
-  // Displayed % is derived from the SAME chart series the sparkline/chart draw
-  // (chartChg = change across the fetched candles), so the number, the line, and
-  // the chart always agree. Falls back to the feed's value only until the series
-  // for that mint has loaded.
+  // Same pattern as App.js Rows: % from the chart series (chartChg), falling
+  // back to the feed's value until the series loads — first → last, nothing fancy.
   const tokensCC = useMemo(
     () => tokens.map(t => {
       const cc = chartChg[t.mint];
-      return Number.isFinite(cc) ? { ...t, change: cc } : t;
+      return { ...t, change: Number.isFinite(cc) ? cc : (Number.isFinite(t.change) ? t.change : null) };
     }),
     [tokens, chartChg]
   );
