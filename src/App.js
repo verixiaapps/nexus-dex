@@ -1211,8 +1211,7 @@ function TokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
         }));
       } else {
         const mintPk = new PublicKey(inputMint);
-        // Buy/sell critical path → trade RPC (Alchemy primary, Ankr fallback).
-        const mintInfo = await rpcRaceTrade('getMintInfo', c => c.getAccountInfo(mintPk));
+        const mintInfo = await connection.getAccountInfo(mintPk);
         if (!mintInfo) throw new Error('Input mint not found on-chain.');
         const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
           ? TOKEN_2022_PROGRAM_ID
@@ -1244,16 +1243,14 @@ function TokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
       const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
       let alts = [];
       if (altKeys.length > 0) {
-        const infos = await rpcRaceTrade('getAlts',
-          c => c.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k))));
+        const infos = await connection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
         alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
           key:   new PublicKey(k),
           state: AddressLookupTableAccount.deserialize(infos[i].data),
         }) : null).filter(Boolean);
       }
 
-      const latest = await rpcRaceTrade('getLatestBlockhash',
-        c => c.getLatestBlockhash('confirmed'));
+      const latest = await connection.getLatestBlockhash('confirmed');
       const message = new TransactionMessage({
         payerKey:        wallet.publicKey,
         recentBlockhash: latest.blockhash,
@@ -1287,11 +1284,10 @@ function TokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
       const signed = await wallet.signTransaction(tx);
       const serialized = signed.serialize();
 
-      // Send via trade RPC (Alchemy primary, Ankr fallback).
-      const sig = await rpcRaceTrade('sendTx', c => c.sendRawTransaction(serialized, {
+      const sig = await connection.sendRawTransaction(serialized, {
         skipPreflight: false,
         maxRetries: 3,
-      }));
+      });
 
       let confirmed = false;
       try {
@@ -1310,8 +1306,7 @@ function TokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
         while (Date.now() < deadline) {
           await new Promise(r => setTimeout(r, 2000));
           try {
-            const st = await rpcRaceTrade('getSigStatus',
-              c => c.getSignatureStatus(sig, { searchTransactionHistory: true }));
+            const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
             const cs = st?.value?.confirmationStatus;
             if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
             if (st?.value?.err) throw new Error('Swap tx failed on-chain.');
@@ -1487,9 +1482,16 @@ function TokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
     return { sig, confirmed, mode, token, route: route.route };
   }, [wallet, refreshSol, refreshOneToken]);
 
-  const isPumpToken = token.route
-    ? token.route === 'pump'
-    : PUMP_DEX_IDS.has(String(token.dexId || '').toLowerCase());
+  // Route by what the token IS, not which feed surfaced it. A `…pump` mint is a
+  // pump.fun token; PumpPortal (pool:'auto') trades both the bonding curve AND
+  // the graduated PumpSwap pool. Top-gainer pump tokens arrive tagged
+  // route:'jupiter' (they came from the Jupiter feed) — but the Jupiter route
+  // for them is what Phantom flags, so force them down the native pump path.
+  const isPumpToken =
+    String(token.mint || '').toLowerCase().endsWith('pump') ||
+    (token.route
+      ? token.route === 'pump'
+      : PUMP_DEX_IDS.has(String(token.dexId || '').toLowerCase()));
   const handleConfirm = async () => {
     if (!swapParams || confirming) return;
     if (!isPumpToken) { handleSwap(); return; } // Jupiter → verbatim MemeWonderland handleSwap (manages its own state)
