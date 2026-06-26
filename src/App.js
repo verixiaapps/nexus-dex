@@ -880,7 +880,13 @@ function useTradeEngine() {
   // token has graduated / is a normal SPL token → Jupiter. (xStocks never reach
   // here — they open the Stocks TradeModal directly.)
   const executeSwap = useCallback(async ({ mode, swapParams, token }) => {
-    const isPump = PUMP_DEX_IDS.has(String(token.dexId || '').toLowerCase());
+    // Decided by what the token IS (set from its source: launches = non-graduated
+    // pump.fun → pump path like LaunchRadar; jupiter top-organic = graduated →
+    // Jupiter path like MemeWonderland). dexId is only a fallback for tokens with
+    // no route tag. xStocks never reach here — they open the Stocks TradeModal.
+    const isPump = token.route
+      ? token.route === 'pump'
+      : PUMP_DEX_IDS.has(String(token.dexId || '').toLowerCase());
     return isPump
       ? executePumpSwap({ mode, swapParams, token })
       : executeRegularSwap({ mode, swapParams, token });
@@ -1080,6 +1086,7 @@ function normalize(t) {
     liquidity: Number(t.liquidity || 0),
     decimals:  Number(t.decimals == null ? 6 : t.decimals),
     dexId:     t.dexId || null,
+    route:     'pump',   // /api/dex/launches is pump.fun-only → pump path, like LaunchRadar
   };
 }
 
@@ -1127,7 +1134,8 @@ export function LaunchRadarStrip({ onSwitchTab, onOpenToken }) {
               key={t.mint}
               last={i === toks.length - 1}
               onClick={() => onOpenToken({
-                mint: t.mint, sym: t.sym, name: t.name, ico: t.icon || t.emoji,
+                ...t,
+                ico: t.icon || t.emoji,
                 grad: 'linear-gradient(135deg,#f5921b,#d4760a)',
                 price: t.price, pct, tf: '1D',
                 stats: `MC ${fmtUsd(t.mcap)} · Liq ${fmtUsd(t.liquidity)}`, tab: 'launchradar',
@@ -1150,12 +1158,50 @@ export function LaunchRadarStrip({ onSwitchTab, onOpenToken }) {
   );
 }
 
-// ── Live token feeds — ONE /api/dex/launches poll powers Radar + Trending
-// + Gainers + the stats strip (so we don't triple-poll the same endpoint).
+// ── Jupiter top-organic normalizer — COPIED VERBATIM from MemeWonderland.jsx
+// (normalize + ageMs/ageStr, lines 547-597) so the homepage's Trending +
+// Gainers use the SAME source, mapping, and (by carrying no pump dexId) the
+// SAME Jupiter trade path MemeWonderland uses. emojiFor → existing lrEmojiFor.
+function _jupAgeMs(iso) { return iso ? Date.now() - new Date(iso).getTime() : Infinity; }
+function _jupAgeStr(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const h = ms / 3_600_000;
+  if (h < 1)  return Math.max(1, Math.round(ms / 60_000)) + 'm';
+  if (h < 24) return Math.round(h) + 'h';
+  return Math.round(h / 24) + 'd';
+}
+function normalizeJup(t) {
+  const change = Number(t?.stats24h?.priceChange ?? t?.priceChange24h ?? 0);
+  const created = t.firstPool?.createdAt || t.createdAt;
+  const am = _jupAgeMs(created);
+  return {
+    mint:      t.id || t.address || t.mint,
+    sym:       t.symbol || '???',
+    name:      t.name || t.symbol || 'Unknown',
+    emoji:     lrEmojiFor(t.symbol || ''),
+    icon:      t.icon || t.logoURI || null,
+    price:     Number(t.usdPrice ?? t.priceUsd ?? 0),
+    change,
+    age:       _jupAgeStr(am),
+    ageMs:     am,
+    mcap:      Number(t.mcap ?? t.fdv ?? 0),
+    volume24h: Number(t?.stats24h?.buyVolume ?? 0) + Number(t?.stats24h?.sellVolume ?? 0),
+    holders:   Number(t.holderCount || 0),
+    liquidity: Number(t.liquidity || 0),
+    decimals:  Number(t.decimals ?? 6),
+    fresh:     am < 24 * 3600 * 1000,
+    route:     'jupiter',   // jupiter top-organic = graduated → Jupiter path, like MemeWonderland
+  };
+}
+
+// ── Live token feeds — sources matched to the working pages:
+//   Radar/new        = /api/dex/launches                        (LaunchRadar → pump path)
+//   Trending+Gainers = /api/jupiter/tokens/v2/toporganicscore/24h (MemeWonderland → Jupiter path)
 // Radar = freshest (feed order), Trending = highest 24h volume, Gainers =
 // biggest 24h % move. Each row reuses the shared Row (real OHLCV only).
 function LiveTokenFeeds({ onSwitchTab, onOpenToken, onConnectWallet }) {
-  const [toks, setToks] = useState([]);
+  const [toks, setToks] = useState([]);          // /api/dex/launches  → Radar (pump.fun, like LaunchRadar)
+  const [trendToks, setTrendToks] = useState([]); // jupiter top-organic → Trending+Gainers (like MemeWonderland)
   const [series, setSeries] = useState({});
   const fetched = useRef({});
   useEffect(() => {
@@ -1169,7 +1215,8 @@ function LiveTokenFeeds({ onSwitchTab, onOpenToken, onConnectWallet }) {
           .catch(() => { fetched.current[t.mint] = false; });
       });
     };
-    const pull = async () => {
+    // Radar/new — exactly what LaunchRadar calls.
+    const pullLaunches = async () => {
       try {
         const r = await fetch('/api/dex/launches');
         if (!r.ok) return;
@@ -1180,33 +1227,46 @@ function LiveTokenFeeds({ onSwitchTab, onOpenToken, onConnectWallet }) {
         loadSeries(list);
       } catch {}
     };
-    pull();
-    const id = setInterval(pull, 5000);
+    // Trending+Gainers — exactly what MemeWonderland calls (source + consumption copied).
+    const pullTrending = async () => {
+      try {
+        const r = await fetch('/api/jupiter/tokens/v2/toporganicscore/24h?limit=40');
+        const d = await r.json();
+        const raw = Array.isArray(d) ? d : (d?.data || d?.tokens || []);
+        const list = _uniqMint(raw.map(normalizeJup).filter(t => t.mint && t.mint !== SOL_MINT && t.sym !== 'WSOL' && t.sym !== 'SOL'));
+        if (cancelled) return;
+        setTrendToks(list);
+        loadSeries(list);
+      } catch {}
+    };
+    pullLaunches(); pullTrending();
+    const id = setInterval(() => { pullLaunches(); pullTrending(); }, 5000);
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  if (!toks.length) return null;
+  if (!toks.length && !trendToks.length) return null;
 
   const radar    = toks.slice(0, 15);
-  const trending = [...toks].sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0)).slice(0, 15);
-  const gainers  = [...toks].filter(t => Number.isFinite(t.change)).sort((a, b) => b.change - a.change).slice(0, 15);
+  const trending = [...trendToks].sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0)).slice(0, 15);
+  const gainers  = [...trendToks].filter(t => Number.isFinite(t.change)).sort((a, b) => b.change - a.change).slice(0, 15);
 
   // live stats
-  const totalVol = toks.reduce((s, t) => s + (t.volume24h || 0), 0);
+  const totalVol = trendToks.reduce((s, t) => s + (t.volume24h || 0), 0);
   const newCount = toks.filter(t => /^\d+(s|m)$/.test(t.age || '')).length;
-  const gainCount = toks.filter(t => Number.isFinite(t.change) && t.change > 0).length;
+  const gainCount = trendToks.filter(t => Number.isFinite(t.change) && t.change > 0).length;
 
-  const mkRow = (t, i, n, sub) => {
+  const mkRow = (t, i, n, sub, tab = 'launchradar') => {
     const _cs = pctFromSeries(series[t.mint]); const pct = Number.isFinite(_cs) ? _cs : (Number.isFinite(t.change) ? t.change : null);
     return (
       <Row
         key={t.mint}
         last={i === n - 1}
         onClick={() => onOpenToken({
-          mint: t.mint, sym: t.sym, name: t.name, ico: t.icon || t.emoji,
+          ...t,
+          ico: t.icon || t.emoji,
           grad: 'linear-gradient(135deg,#f5921b,#d4760a)',
           price: t.price, pct, tf: '1D',
-          stats: `MC ${fmtUsd(t.mcap)} · Liq ${fmtUsd(t.liquidity)}`, tab: 'launchradar',
+          stats: `MC ${fmtUsd(t.mcap)} · Liq ${fmtUsd(t.liquidity)}`, tab,
         })}
         ico={t.icon || t.emoji}
         grad="linear-gradient(135deg,#f5921b,#d4760a)"
@@ -1238,16 +1298,22 @@ function LiveTokenFeeds({ onSwitchTab, onOpenToken, onConnectWallet }) {
         <Orb v={gainCount} l="Gainers" c={C.green} />
       </div>
 
-      <SectionHead title="Launch" italic="Radar" meta="LIVE" onAll={() => onSwitchTab('launchradar')} />
-      <ListShell>{radar.map((t, i) => mkRow(t, i, radar.length, x => `MC ${fmtUsd(x.mcap)} · Liq ${fmtUsd(x.liquidity)}`))}</ListShell>
+      {radar.length > 0 && <>
+        <SectionHead title="Launch" italic="Radar" meta="LIVE" onAll={() => onSwitchTab('launchradar')} />
+        <ListShell>{radar.map((t, i) => mkRow(t, i, radar.length, x => `MC ${fmtUsd(x.mcap)} · Liq ${fmtUsd(x.liquidity)}`, 'launchradar'))}</ListShell>
+      </>}
 
       <WhaleFeed onOpenToken={onOpenToken} />
 
-      <SectionHead title="Trending" italic="now" meta="LIVE" onAll={() => onSwitchTab('wonderland')} />
-      <ListShell>{trending.map((t, i) => mkRow(t, i, trending.length, x => `Vol ${fmtUsd(x.volume24h)} · MC ${fmtUsd(x.mcap)}`))}</ListShell>
+      {trending.length > 0 && <>
+        <SectionHead title="Trending" italic="now" meta="LIVE" onAll={() => onSwitchTab('wonderland')} />
+        <ListShell>{trending.map((t, i) => mkRow(t, i, trending.length, x => `Vol ${fmtUsd(x.volume24h)} · MC ${fmtUsd(x.mcap)}`, 'wonderland'))}</ListShell>
+      </>}
 
-      <SectionHead title="Top" italic="gainers" meta="LIVE" onAll={() => onSwitchTab('launchradar')} />
-      <ListShell>{gainers.map((t, i) => mkRow(t, i, gainers.length, x => `MC ${fmtUsd(x.mcap)} · Liq ${fmtUsd(x.liquidity)}`))}</ListShell>
+      {gainers.length > 0 && <>
+        <SectionHead title="Top" italic="gainers" meta="LIVE" onAll={() => onSwitchTab('wonderland')} />
+        <ListShell>{gainers.map((t, i) => mkRow(t, i, gainers.length, x => `MC ${fmtUsd(x.mcap)} · Liq ${fmtUsd(x.liquidity)}`, 'wonderland'))}</ListShell>
+      </>}
     </>
   );
 }
