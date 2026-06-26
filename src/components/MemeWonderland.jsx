@@ -425,6 +425,78 @@ const MW_CSS = `
   .mw-bo-grid,.mw-trend-list,.mw-activity{padding:0 14px}
   .mw-sub-tabs{margin:0 14px 12px}
 }
+
+/* ════════════════════════════════════════════════════════════════════
+   DARK TERMINAL THEME — appended override (wins the cascade)
+   Flip back to light by restoring the original :root vars below.
+   ════════════════════════════════════════════════════════════════════ */
+.mw-root{
+  --ink:#eceef2; --ink-2:#8b919b; --ink-3:#565c66;
+  --green:#2fd67b; --mint:#2fd67b; --red:#ff5a6a; --down:#ff5a6a; --pink:#ff5a6a;
+  --sky:#9b6bff; --vio:#9b6bff; --vio-soft:rgba(155,107,255,.14);
+  --border:#23262e; --hairline:#1d2027; --fill:#181b20;
+  --glass:#131519; --glass-strong:#15181d;
+  --surf:#131519; --surf2:#1c2128; --bg:#0a0b0d;
+  background:#0a0b0d;
+}
+
+/* surfaces that hard-code white → dark */
+.mw-orb,
+.mw-narr,
+.mw-whale-card,
+.mw-bo-card,
+.mw-bo-card.mw-momentum,.mw-bo-card.mw-volume,.mw-bo-card.mw-smart,.mw-bo-card.mw-early,
+.mw-launch-card,
+.mw-trend-row,
+.mw-act,
+.mw-stat,
+.mw-chart,
+.mw-chart-frame-wrap,
+.mw-share-btn,
+.mw-currency{ background:#131519; }
+.mw-chart-state{ background:#101216; }
+
+/* full-screen layers */
+.mw-detail,.mw-success-overlay{ background:#0a0b0d; }
+.mw-sheet{ background:#101216; }
+.mw-detail-top{ background:rgba(10,11,13,.92); }
+
+/* near-black chips → lifted so they read on a dark surface */
+.mw-mini-avatar,.mw-mini-avatar .mw-inner,
+.mw-detail-emoji,.mw-sheet-emoji,.mw-currency-icon{ background:#1c2128; }
+.mw-flex-card,.mw-whale-banner{ border-color:#23262e; }
+
+/* light-on-dark action chips (were #0a0a0a/#fff) */
+.mw-copy-btn,.mw-chart-ca-copy{ background:var(--fill); color:var(--ink); border:1px solid var(--border); }
+.mw-done-btn{ background:var(--ink); color:var(--bg); }
+.mw-preset.mw-selected{ background:var(--ink); border-color:var(--ink); color:var(--bg); }
+.mw-sub-tab.mw-active{ background:var(--vio); color:#0a0b0d; }
+
+/* ── signature: violet eyebrow tick instead of emoji ── */
+.mw-section-title .mw-ico{ display:none; }
+.mw-section-title::before{
+  content:""; width:5px; height:5px; background:var(--vio);
+  border-radius:1px; transform:rotate(45deg); flex-shrink:0;
+}
+
+/* ── signature: stat orbs lose emoji, gain a violet tick ── */
+.mw-orb-ico{ display:none; }
+.mw-orb{ text-align:left; }
+.mw-orb::before{
+  content:""; display:block; width:14px; height:2px;
+  background:var(--vio); border-radius:2px; margin:0 0 9px;
+}
+.mw-orb-label{ font-family:ui-monospace,Menlo,monospace; }
+
+/* ── signature: ticker reads like an exchange tape ── */
+.mw-ticker-strip{ position:relative; }
+.mw-ticker-strip::before,.mw-ticker-strip::after{
+  content:""; position:absolute; top:0; bottom:0; width:34px; z-index:3; pointer-events:none;
+}
+.mw-ticker-strip::before{ left:0; background:linear-gradient(90deg,var(--glass-strong),transparent); }
+.mw-ticker-strip::after{ right:0; background:linear-gradient(270deg,var(--glass-strong),transparent); }
+.mw-ticker-item .mw-sym{ font-family:ui-monospace,Menlo,monospace; }
+.mw-ticker-item{ font-family:ui-monospace,Menlo,monospace; }
 `;
 
 function useMwCSS() {
@@ -1222,9 +1294,18 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
     return () => document.removeEventListener('mousedown', onDoc);
   }, []);
 
-  // Tokens with chart-window % merged over the (unreliable) feed %.
+  // Tokens shown with the feed's real 24h % (stats24h.priceChange).
+  // NOTE: we deliberately do NOT override `change` with chartChg here.
+  // chartChg is (lastClose - firstClose)/firstClose over the entire fetched
+  // series, anchored to s[0] — the oldest/launch candle — so for fresh meme
+  // pools it yields an all-time change (e.g. +1010%, +7302%) mislabeled as
+  // "24h". Use it only as a fallback when the feed has no 24h value at all.
   const tokensCC = useMemo(
-    () => tokens.map(t => (chartChg[t.mint] != null ? { ...t, change: chartChg[t.mint] } : t)),
+    () => tokens.map(t => {
+      const hasFeed = Number.isFinite(t.change) && t.change !== 0;
+      const cc = chartChg[t.mint];
+      return (!hasFeed && Number.isFinite(cc)) ? { ...t, change: cc } : t;
+    }),
     [tokens, chartChg]
   );
 
@@ -1366,16 +1447,6 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
               ))}
             </div>
           </div>
-        )}
-
-        {topToken && (
-          <>
-            <div className="mw-section-head">
-              <div className="mw-section-title"><span className="mw-ico">⚡</span>top signal</div>
-              <div className="mw-section-meta"><span className="mw-live-dot" /> LIVE</div>
-            </div>
-            <FeaturedSignal token={topToken} whaleCount={whaleCountByMint.get(topToken.mint) || 0} onOpen={openDetail} onTrade={openSheet} />
-          </>
         )}
 
         <div className="mw-section-head">
