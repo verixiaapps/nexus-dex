@@ -834,9 +834,6 @@ async function stkDexSeries(mint) {
   return pts.length >= 2 ? pts : null;
 }
 
-// How long we'll wait on GeckoTerminal before dropping to DexScreener pricing.
-const STK_GECKO_GRACE_MS = 1400;
-
 const stkSeriesInflight = new Map(); // key -> Promise (dedup concurrent fetches of same series)
 export async function stkFetchSeries(mint, tf) {
   const key = mint + '|' + tf;
@@ -848,28 +845,13 @@ export async function stkFetchSeries(mint, tf) {
   const inflightP = (async () => {
     const save = (out) => { stkSeriesCache.set(key, out); stkLsSet(STK_SERIES_LS + key, out); return out; };
 
-    // Fire both providers at once.
-    const geckoP = stkGeckoSeries(mint, tf).catch(() => null);
-    const dexP   = stkDexSeries(mint).catch(() => null);
+    // GeckoTerminal first (real OHLCV). Only if it returns nothing do we fall
+    // back to DexScreener pricing. No racing.
+    const gecko = await stkGeckoSeries(mint, tf).catch(() => null);
+    if (gecko) return save(gecko);
 
-    // Prefer GeckoTerminal, but only if it answers within the grace window —
-    // otherwise fall straight back to DexScreener pricing so the sparkline paints fast.
-    const raced = await Promise.race([
-      geckoP.then(p => (p ? { p } : null)),               // resolves null if gecko had no data
-      new Promise(res => setTimeout(() => res('SLOW'), STK_GECKO_GRACE_MS)),
-    ]);
-    if (raced && raced !== 'SLOW' && raced.p) return save(raced.p);
-
-    // Gecko slow or empty → use DexScreener now.
-    const dex = await dexP;
-    if (dex) {
-      // Let a successful Gecko result quietly upgrade the cache afterwards.
-      geckoP.then(p => { if (p) save(p); });
-      return save(dex);
-    }
-
-    // DexScreener empty too → wait out Gecko as last resort.
-    return save(await geckoP);
+    const dex = await stkDexSeries(mint).catch(() => null);
+    return save(dex);
   })();
 
   stkSeriesInflight.set(key, inflightP);
@@ -925,11 +907,18 @@ async function stkResolveEmbedPool(mint) {
   if (stkEmbedPoolCache.has(mint)) return stkEmbedPoolCache.get(mint);
   const cached = stkLsGet(STK_EMBED_LS + mint, STK_POOL_TTL);
   if (cached !== undefined) { stkEmbedPoolCache.set(mint, cached); return cached; }
-  // GeckoTerminal only — no DexScreener fallback for the embedded chart.
+  // GeckoTerminal first (live candles); DexScreener fallback for pools GT hasn't
+  // indexed — xStocks (TSLAx, METAx, …) frequently aren't on GT but are on DS.
   let res = null;
-  const gj = await stkFetchJson(`${STK_GT}/networks/solana/tokens/${encodeURIComponent(mint)}/pools`);
+  const gj = await stkFetchJson(`${STK_GT}/networks/solana/tokens/${encodeURIComponent(mint)}/pools`, 6000);
   const gp = stkPickGeckoPool(gj?.data, mint);
-  if (gp?.attributes?.address) res = { provider: 'GECKOTERMINAL', addr: gp.attributes.address };
+  if (gp?.attributes?.address) {
+    res = { provider: 'GECKOTERMINAL', addr: gp.attributes.address };
+  } else {
+    const dj = await stkFetchJson(`${STK_DS}/tokens/${encodeURIComponent(mint)}`, 5000);
+    const dp = stkPickPair(dj?.pairs, mint);
+    if (dp?.pairAddress) res = { provider: 'DEXSCREENER', addr: dp.pairAddress };
+  }
   stkEmbedPoolCache.set(mint, res);
   stkLsSet(STK_EMBED_LS + mint, res);
   return res;
@@ -938,7 +927,9 @@ async function stkResolveEmbedPool(mint) {
 function stkBuildEmbedSrc(pool, tfKey) {
   if (!pool) return null;
   const r = STK_EMBED_RES.find(x => x.key === tfKey) || STK_EMBED_RES[1];
-  // GeckoTerminal only.
+  if (pool.provider === 'DEXSCREENER') {
+    return `https://dexscreener.com/solana/${pool.addr}?embed=1&theme=light&info=0&trades=0&interval=${r.dex}`;
+  }
   return `https://www.geckoterminal.com/solana/pools/${pool.addr}?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&bg_color=ffffff&resolution=${r.gecko}`;
 }
 
