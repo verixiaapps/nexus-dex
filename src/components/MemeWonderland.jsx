@@ -2,7 +2,7 @@
 // Sections: Hero · Top Signal · Narratives · Whale Radar · Breaking Out · New Launches · Trending · Live Feed.
    
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { stkFetchSeries, stkBuildPath, stkSmoothPath, stkThrottle } from './Stocks.jsx';
+import { stkFetchSeries, stkBuildPath, stkSmoothPath, stkSeed, stkThrottle } from './Stocks.jsx';
 import { Buffer } from 'buffer';
 import {
   Connection,
@@ -562,6 +562,10 @@ function signalScore(t) {
   const whalePts = t.whaleSol ? 10 : 0;
   return Math.round(Math.min(100, changePts + volPts + liqPts + holdPts + whalePts));
 }
+function _uniqMint(list) {
+  const seen = new Set();
+  return list.filter(t => t && t.mint && !seen.has(t.mint) && seen.add(t.mint));
+}
 function normalize(t) {
   const change = Number(t?.stats24h?.priceChange ?? t?.priceChange24h ?? 0);
   const created = t.firstPool?.createdAt || t.createdAt;
@@ -815,7 +819,7 @@ function MwSparkline({ mint, price, change, w = 50, h = 22, full = false }) {
   const pts = (series && series.length >= 2) ? series : obs;
   if (!pts) return null;                       // real data only — nothing until it exists
 
-  const path = stkSmoothPath(pts, w, h, 2);
+  const path = stkSmoothPath(pts, w, h, 2, stkSeed(mint));
   const up = path.up;
   const col = up ? 'var(--green)' : 'var(--down)';
   const id = 'mws' + (up ? 'u' : 'd') + (mint ? String(mint).slice(0, 8) : '');
@@ -969,6 +973,11 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
   const connection = useMemo(() => getConn('confirmed'), []);
 
   const [tokens, setTokens] = useState([]);
+  // Chart-window % change, derived from the SAME 1D series the sparkline draws,
+  // so the displayed % always matches the chart (Jupiter's stats24h.priceChange
+  // is unreliable for fresh/thin pools — e.g. +350% off an early near-zero print).
+  const [chartChg, setChartChg] = useState({});   // mint -> %
+  const chgTsRef = useRef(new Map());              // mint -> last fetch ts
   const [, setLoading] = useState(true);
   const [solPrice, setSolPrice] = useState(0);
   const [whaleEvents, setWhaleEvents] = useState([]);
@@ -1083,7 +1092,7 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
         const d = await r.json();
         const list = Array.isArray(d) ? d : (d?.data || d?.tokens || []);
         if (!cancelled) {
-          setTokens(list.map(normalize).filter(t => t.mint && t.mint !== SOL_MINT && t.sym !== 'WSOL' && t.sym !== 'SOL'));
+          setTokens(_uniqMint(list.map(normalize).filter(t => t.mint && t.mint !== SOL_MINT && t.sym !== 'WSOL' && t.sym !== 'SOL')));
           setLoading(false);
         }
       } catch { if (!cancelled) setLoading(false); }
@@ -1092,6 +1101,31 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
     const id = setInterval(load, POLL_TOKENS);
     return () => { cancelled = true; clearInterval(id); };
   }, []);
+
+  // Compute chart-window % from the same 1D OHLCV the sparkline uses. Throttled
+  // and de-duped (≤ once / 45s per mint); stkFetchSeries caches, so the sparkline
+  // and this share the fetch rather than doubling it.
+  useEffect(() => {
+    let cancelled = false;
+    const now = Date.now();
+    tokens.forEach(t => {
+      const mint = t.mint;
+      if (!mint) return;
+      const last = chgTsRef.current.get(mint) || 0;
+      if (now - last < 45000) return;
+      chgTsRef.current.set(mint, now);
+      stkThrottle(() => stkFetchSeries(mint, '1D'))
+        .then(s => {
+          if (cancelled || !Array.isArray(s) || s.length < 2) return;
+          const first = Number(s[0]?.c), lastC = Number(s[s.length - 1]?.c);
+          if (!(first > 0) || !Number.isFinite(lastC)) return;
+          const pct = ((lastC - first) / first) * 100;
+          setChartChg(prev => (Math.abs((prev[mint] ?? NaN) - pct) < 0.01 ? prev : { ...prev, [mint]: pct }));
+        })
+        .catch(() => {});
+    });
+    return () => { cancelled = true; };
+  }, [tokens]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1167,7 +1201,7 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
         const d = await r.json();
         const list = Array.isArray(d) ? d : (d?.data || d?.tokens || []);
         if (!cancelled) {
-          setSearchResults(list.map(normalize).filter(x => x.mint).slice(0, 12));
+          setSearchResults(_uniqMint(list.map(normalize).filter(x => x.mint)).slice(0, 12));
           setSearching(false);
         }
       } catch { if (!cancelled) { setSearchResults([]); setSearching(false); } }
@@ -1181,9 +1215,15 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
     return () => document.removeEventListener('mousedown', onDoc);
   }, []);
 
+  // Tokens with chart-window % merged over the (unreliable) feed %.
+  const tokensCC = useMemo(
+    () => tokens.map(t => (chartChg[t.mint] != null ? { ...t, change: chartChg[t.mint] } : t)),
+    [tokens, chartChg]
+  );
+
   const ticker = useMemo(
-    () => tokens.slice(0, 10).map(t => [t.sym, formatPct(t.change), t.change >= 0]),
-    [tokens]
+    () => tokensCC.slice(0, 10).map(t => [t.sym, formatPct(t.change), t.change >= 0]),
+    [tokensCC]
   );
 
   const whaleMints = useMemo(() => new Set(whaleEvents.map(w => w.mint)), [whaleEvents]);
@@ -1207,8 +1247,8 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
   }, [whaleEvents]);
 
   const tokensWithWhale = useMemo(() => {
-    if (whaleMints.size === 0) return tokens;
-    return tokens.map(t => {
+    if (whaleMints.size === 0) return tokensCC;
+    return tokensCC.map(t => {
       if (!whaleMints.has(t.mint)) return t;
       return {
         ...t,
@@ -1217,7 +1257,7 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
         whaleAt: whaleLastAtByMint.get(t.mint) || 0,
       };
     });
-  }, [tokens, whaleMints, whaleByMint, whaleCountByMint, whaleLastAtByMint]);
+  }, [tokensCC, whaleMints, whaleByMint, whaleCountByMint, whaleLastAtByMint]);
 
   const tokenByMint = useCallback(
     m => tokensWithWhale.find(t => t.mint === m)
@@ -1462,7 +1502,7 @@ function mwBuildEmbedSrc(pool, resKey) {
   const r = MW_CHART_RES.find(x => x.key === resKey) || MW_CHART_RES[0];
   if (pool.provider === 'GECKOTERMINAL') {
     return 'https://www.geckoterminal.com/solana/pools/' + pool.addr +
-      '?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&bg_color=ffffff&resolution=' + r.gecko;
+      '?embed=1&info=0&swaps=0&grayscale=0&light_chart=1&bg_color=ffffff&resolution=' + r.gecko;
   }
   return 'https://dexscreener.com/solana/' + pool.addr +
     '?embed=1&theme=light&info=0&trades=0&interval=' + r.dex;
@@ -1486,7 +1526,7 @@ function MwTokenChart({ mint, symbol = '' }) {
     (async () => {
       let networkOk = false;
 
-      // 1) GeckoTerminal — covers pump.fun bonding-curve pools.
+      // GeckoTerminal only — covers pump.fun bonding-curve pools and graduated pairs.
       try {
         const r = await fetch(
           `https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}/pools`,
@@ -1503,24 +1543,8 @@ function MwTokenChart({ mint, symbol = '' }) {
       } catch {}
       if (id !== reqRef.current) return;
 
-      // 2) DexScreener — fallback for graduated / older pairs.
-      try {
-        const r = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mint}`,
-          { headers: { Accept: 'application/json' } });
-        if (id !== reqRef.current) return;
-        if (r.ok) {
-          networkOk = true;
-          const j = await r.json();
-          if (id !== reqRef.current) return;
-          const best = pickBestPair(j?.pairs, mint);
-          if (best?.pairAddress) { setPool({ provider: 'DEXSCREENER', addr: best.pairAddress }); setStatus('ok'); return; }
-        }
-      } catch {}
-      if (id !== reqRef.current) return;
-
-      // Neither provider had a pool. If at least one responded, the token
-      // just isn't indexed yet (typical for a seconds-old bonding curve);
-      // otherwise it's a network failure.
+      // No pool. If GeckoTerminal responded, the token just isn't indexed yet
+      // (typical for a seconds-old bonding curve); otherwise it's a network failure.
       setStatus(networkOk ? 'none' : 'fail');
     })();
   }, [mint]);
@@ -1941,7 +1965,7 @@ function TradeSheet({
   const setMax = () => {
     if (!inputBalance) return;
     let maxAmt = inputBalance.uiAmount;
-    if (inputMint === SOL_MINT) maxAmt = Math.max(0, maxAmt - 0.01);
+    if (inputMint === SOL_MINT) maxAmt = Math.max(0, maxAmt - 0.002); // leave gas
     setAmount(String(maxAmt));
   };
 
