@@ -3,7 +3,7 @@ import { BrowserRouter, useNavigate, useLocation } from 'react-router-dom';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { Buffer } from 'buffer';
 import { 
-  Connection,
+  Connection, 
   PublicKey,
   VersionedTransaction,
   TransactionMessage,
