@@ -21,7 +21,14 @@
 //          no unwrap step.
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { stkFetchSeries, stkBuildPath, stkSmoothPath, stkSeed, stkThrottle } from './Stocks.jsx';
+import { stkFetchSeries, stkBuildPath, stkSmoothPath, stkThrottle } from './Stocks.jsx';
+// Local copy of stkSeed so this file builds regardless of the Stocks.jsx version
+// shipped alongside it (older Stocks.jsx builds may not export stkSeed).
+function stkSeed(str) {
+  let h = 0; const s = String(str || '');
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return (Math.abs(h) || 1) >>> 0;
+}
 import { Buffer } from 'buffer';
 import {
   Connection,
