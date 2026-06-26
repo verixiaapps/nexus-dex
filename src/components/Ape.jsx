@@ -55,7 +55,7 @@ import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
 const SOL_MINT   = 'So11111111111111111111111111111111111111112';
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
 const FEE_BPS    = 300;
-const SOL_RESERVE = 0.003;
+const SOL_RESERVE = 0; // no reserve — MAX buy uses the full balance, nothing held back for ATA rent / fees
 
 const DEFAULT_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
 const DEFAULT_SELL_PRESETS = [25, 50, 100];
@@ -2919,7 +2919,7 @@ export default function Ape({ mainWalletPubkey }) {
   const ownedCount = useMemo(() => Object.keys(balances).filter(m => m !== SOL_MINT && balances[m].uiAmount > 0).length, [balances]);
   const activeFiltersCount = (wildOnly ? 1 : 0) + (minLiq > 0 ? 1 : 0);
   const discActiveCount = (discMinLiq > 0 ? 1 : 0) + (discMinMcap > 0 ? 1 : 0) + (discMaxMcap > 0 ? 1 : 0) + (discMinHolders > 0 ? 1 : 0) + (discMinScore > 0 ? 1 : 0) + (discAge !== 'any' ? 1 : 0);
-  const burnerHasNoSol = !solBalance || solBalance.uiAmount < 0.01;
+  const burnerHasNoSol = !solBalance || solBalance.uiAmount <= 0;
 
   return (
     <div className="ap-root">
@@ -3480,13 +3480,14 @@ function useAutoTrade(deps) {
     });
   }, []);
 
-  // Single mode (Custom only). Hard-cap per-trade buy at 1 SOL regardless of
-  // any stored value, as the last guardrail on auto-buy blast radius.
+  // Single mode (Custom only). No per-trade size cap — whatever the user sets
+  // is what fires. Only guard against a non-positive / NaN value by falling
+  // back to the 0.2 default.
   // Memoized so `effective` (and the exit-loop interval that depends on it)
   // stays referentially stable across renders — otherwise the interval would
   // tear down and rebuild on every render, re-polling prices needlessly.
   const settings = useMemo(
-    () => ({ ...custom, perTradeSol: Math.min(1, Math.max(0.03, Number(custom.perTradeSol) || 0.2)) }),
+    () => ({ ...custom, perTradeSol: Number(custom.perTradeSol) > 0 ? Number(custom.perTradeSol) : 0.2 }),
     [custom]
   );
   const effective = useMemo(() => ({ ...settings, minAgeMin: Math.max(SAFETY_FLOOR.ageMinAbsolute, settings.minAgeMin) }), [settings]);
@@ -3521,7 +3522,7 @@ function useAutoTrade(deps) {
     // Not enough SOL for even one trade → stop the engine and tell the user
     // once, rather than scanning the whole feed and failing every token.
     const availSol = (solBalance && solBalance.uiAmount) || 0;
-    if (availSol < effective.perTradeSol + 0.01) {
+    if (availSol < effective.perTradeSol) {
       setEnabled(false);
       pushLog('error', 'Auto-trade stopped — burner out of SOL');
       pushToast && pushToast({ type: 'error', em: '◎', body: <>Out of SOL — auto-trade stopped. <b>Add funds to your burner</b> to keep going.</>, duration: 9000 });
@@ -3547,7 +3548,7 @@ function useAutoTrade(deps) {
       const r = riskRead(tk);
       if (r.score < effective.minVibe) continue;
       if (!(tk.price > 0)) continue;
-      if (((solBalance && solBalance.uiAmount) || 0) < effective.perTradeSol + 0.01) continue;
+      if (((solBalance && solBalance.uiAmount) || 0) < effective.perTradeSol) continue;
 
       seenMintsRef.current.add(tk.mint);
       inflightRef.current.add(tk.mint);
@@ -3729,7 +3730,7 @@ function AutoPanel({ open, onClose, auto, solBalance, solPrice }) {
         </div>
 
         <div className="wa-sliders">
-          <Slider label="Per-trade SOL" hint="Each auto-buy uses this much SOL. Max 1 SOL." value={s.perTradeSol} min={0.03} max={1} step={0.01} suffix="SOL" onChange={v => updateCustom({ perTradeSol: v })} />
+          <Slider label="Per-trade SOL" hint="Each auto-buy uses this much SOL." value={s.perTradeSol} min={0.01} max={50} step={0.01} suffix="SOL" onChange={v => updateCustom({ perTradeSol: v })} />
           <Slider label="Take profit at" value={s.takeProfitPct} min={20} max={500} step={10} suffix="%" onChange={v => updateCustom({ takeProfitPct: v })} hint="Sell when up this much." />
           <Slider label="Stop loss at" value={s.stopLossPct} min={10} max={70} step={5} suffix="%" onChange={v => updateCustom({ stopLossPct: v })} hint="Sell if down this much." />
           <Slider label="Min age" value={s.minAgeMin} min={0} max={20} step={1} suffix="min" onChange={v => updateCustom({ minAgeMin: v })} hint="Skip launches younger than this. 0 = buy immediately." />
