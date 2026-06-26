@@ -24,7 +24,7 @@ const STOCKS_CSS = `
 .st-page,.st-region-block,.st-sheet,.st-modal-backdrop{
   --ink:#0b0b0c; --ink-2:#86868b; --ink-3:#aeaeb2;
   --pink:#f0425a; --mint:#16c08a; --lav:#7c5cff; --peach:#f5921b;
-  --sky:#2f6bff; --gold:#a67200; --green:#16c08a; --greent:#11b87f; --red:#f0425a; --down:#fb7185;
+  --sky:#2f6bff; --gold:#a67200; --green:#16c08a; --greent:#11b87f; --red:#f0425a; --down:#9d8cff;
   --fill:#f4f4f5; --fill-2:#fafafa;
   --glass:#ffffff; --glass-strong:#ffffff;
   --border:#e9e9eb; --hairline:#f1f1f2;
@@ -796,11 +796,6 @@ async function stkResolvePool(mint) {
   const gj = await stkFetchJson(`${STK_GT}/networks/solana/tokens/${encodeURIComponent(mint)}/pools`);
   const gp = stkPickGeckoPool(gj?.data, mint);
   if (gp) pool = gp.attributes.address;
-  if (!pool) {
-    const dj = await stkFetchJson(`${STK_DS}/tokens/${encodeURIComponent(mint)}`);
-    const dp = stkPickPair(dj?.pairs, mint);
-    if (dp) pool = dp.pairAddress;
-  }
   stkPoolCache.set(mint, pool);
   stkLsSet(STK_POOL_LS + mint, pool);
   return pool;
@@ -863,13 +858,31 @@ export function stkBuildPath(pts, w, h, pad = 2) {
 // flat 2-point diagonal; richer series keep their real shape. Curve is
 // Catmull-Rom → cubic bezier. Same {c} input shape as stkBuildPath; returns
 // { line, area, lastX, lastY } plus the up flag.
-export function stkSmoothPath(pts, w, h, pad = 2) {
+export function stkSeed(str) {
+  let h = 0; const s = String(str || '');
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return (Math.abs(h) || 1) >>> 0;
+}
+export function stkSmoothPath(pts, w, h, pad = 2, seed = 0) {
   let cs = pts.map(p => p.c).filter(v => Number.isFinite(v));
   if (cs.length < 2) cs = [cs[0] || 1, cs[0] || 1];
   const up = cs[cs.length - 1] >= cs[0];
   if (cs.length < 6) {                       // thin → ease into 6 points
-    const a = cs[0], b = cs[cs.length - 1], out = [];
-    for (let i = 0; i < 6; i++) { const t = i / 5; const e = t * t * (3 - 2 * t); out.push(a + (b - a) * e); }
+    const a = cs[0], b = cs[cs.length - 1];
+    // Seeded wobble so two thin tokens don't render the identical S-curve.
+    // Endpoints stay exact (true start/end), wobble tapers to 0 at both ends.
+    const span = Math.abs(b - a) || Math.abs(a) * 0.04 || 1;
+    const amp  = span * 0.55;
+    let s = (seed >>> 0) || 1;
+    const rnd = () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    const out = [];
+    for (let i = 0; i < 6; i++) {
+      const t = i / 5, e = t * t * (3 - 2 * t);
+      let v = a + (b - a) * e;
+      if (i > 0 && i < 5) v += (rnd() - 0.5) * amp * Math.sin(t * Math.PI);
+      out.push(v);
+    }
+    out[0] = a; out[5] = b;
     cs = out;
   }
   const n = cs.length;
@@ -915,11 +928,6 @@ async function stkResolveEmbedPool(mint) {
   const gj = await stkFetchJson(`${STK_GT}/networks/solana/tokens/${encodeURIComponent(mint)}/pools`);
   const gp = stkPickGeckoPool(gj?.data, mint);
   if (gp?.attributes?.address) res = { provider: 'GECKOTERMINAL', addr: gp.attributes.address };
-  if (!res) {
-    const dj = await stkFetchJson(`${STK_DS}/tokens/${encodeURIComponent(mint)}`);
-    const dp = stkPickPair(dj?.pairs, mint);
-    if (dp?.pairAddress) res = { provider: 'DEXSCREENER', addr: dp.pairAddress };
-  }
   stkEmbedPoolCache.set(mint, res);
   stkLsSet(STK_EMBED_LS + mint, res);
   return res;
@@ -929,7 +937,7 @@ function stkBuildEmbedSrc(pool, tfKey) {
   if (!pool) return null;
   const r = STK_EMBED_RES.find(x => x.key === tfKey) || STK_EMBED_RES[1];
   if (pool.provider === 'GECKOTERMINAL') {
-    return `https://www.geckoterminal.com/solana/pools/${pool.addr}?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&bg_color=ffffff&resolution=${r.gecko}`;
+    return `https://www.geckoterminal.com/solana/pools/${pool.addr}?embed=1&info=0&swaps=0&grayscale=0&light_chart=1&bg_color=ffffff&resolution=${r.gecko}`;
   }
   return `https://dexscreener.com/solana/${pool.addr}?embed=1&theme=light&info=0&trades=0&interval=${r.dex}`;
 }
@@ -1018,7 +1026,7 @@ function StockSparkline({ mint }) {
         if (e.isIntersecting && !doneRef.current) {
           doneRef.current = true;
           io.disconnect();
-          stkThrottle(() => stkFetchSeries(mint, '1W')).then(s => setPts(s || []));
+          stkThrottle(() => stkFetchSeries(mint, '1M')).then(s => setPts(s || []));
         }
       });
     }, { rootMargin: '140px' });
@@ -1028,10 +1036,10 @@ function StockSparkline({ mint }) {
 
   const series = (pts && pts.length >= 2) ? pts : null;
   const W = 54, H = 28;
-  const built = series ? stkSmoothPath(series, W, H, 2) : null;
+  const built = series ? stkSmoothPath(series, W, H, 2, stkSeed(mint)) : null;
   const chg = series ? ((series[series.length - 1].c - series[0].c) / series[0].c) * 100 : null;
   const up = chg == null ? true : chg >= 0;
-  const col = up ? '#11b87f' : '#fb7185';
+  const col = up ? '#11b87f' : '#9d8cff';   // friendlier down: soft violet, not harsh red
   const gid = gidRef.current;
 
   return (
@@ -1219,7 +1227,7 @@ export function TradeModal({ open, brand, icon, price, onClose, walletPubkey, on
     try { return BigInt(Math.round((usd / price) * 10 ** brand.decimals)); } catch { return 0n; }
   })();
   const validStake = isBuy
-    ? (usd >= MIN_USDC && usd <= MAX_USDC)
+    ? (usd > 0 && usd <= MAX_USDC)
     : (brandAtomicNeeded > 0n && brandAtomicNeeded <= brandBal.atomic);
   const insufficientBrand = !isBuy && brandBal.loaded && brandAtomicNeeded > brandBal.atomic;
   const sellBrandEquiv = !isBuy && usd > 0 && price > 0 ? usd / price : 0;
@@ -1566,7 +1574,7 @@ function BrandsInner({ onConnectWallet }) {
   // to scroll into view. stkFetchSeries dedups + caches, so the per-tile observer
   // fetch then resolves instantly from cache.
   useEffect(() => {
-    BRANDS.forEach(b => { stkThrottle(() => stkFetchSeries(b.mint, '1W')).catch(() => {}); });
+    BRANDS.forEach(b => { stkThrottle(() => stkFetchSeries(b.mint, '1M')).catch(() => {}); });
   }, []);
 
   const filtered = useMemo(() => {
