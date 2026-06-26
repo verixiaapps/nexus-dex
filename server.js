@@ -2116,6 +2116,131 @@ app.use((err, req, res, next) => {
 });
 
 /* ========================================================================
+ * APE ENRICH — added section (self-contained; nothing above is modified).
+ *
+ *   GET  /api/ape/curve/:mint   -> { found, mcap, price, volume24h, liquidity, pool }
+ *   POST /api/ape/enrich        -> body { mints:[...] }
+ *                                  => { tokens: { <mint>: { mcap, price, volume24h, liquidity, pool } } }
+ *
+ * Source: GeckoTerminal's free public API (api.geckoterminal.com/api/v2),
+ * the same charts the token sheet embeds. Verified token fields:
+ *   market_cap_usd, fdv_usd, price_usd, volume_usd.h24, total_reserve_in_usd,
+ *   and relationships.top_pools (used to resolve the pool for the chart embed).
+ * No pump.fun curve math, no estimated constants — every number is a field
+ * GeckoTerminal returns. `pool` lets the client embed the GeckoTerminal chart.
+ *
+ * Own cache + own helpers. Reuses only fetchWithTimeout (defined far above).
+ * Fails soft: returns { found:false } / {} rather than an error status, so the
+ * client simply keeps whatever it already has. No existing route is touched.
+ * ===================================================================== */
+const GT_BASE        = 'https://api.geckoterminal.com/api/v2';
+const APE_BASE58_RE  = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const APE_TTL_MS     = 20_000;
+const GT_MULTI_MAX   = 30; // GeckoTerminal's per-call address limit
+const _apeCache = new Map(); // mint -> { at, v }
+
+function _apeShapeGt(d) {
+  if (!d || !d.attributes) return null;
+  const a = d.attributes;
+  const num = (...vals) => { for (const v of vals) { const n = Number(v); if (Number.isFinite(n) && n > 0) return n; } return 0; };
+  let pool = null;
+  const tp = d.relationships && d.relationships.top_pools && d.relationships.top_pools.data;
+  if (Array.isArray(tp) && tp[0] && typeof tp[0].id === 'string') pool = tp[0].id.replace(/^solana_/, '');
+  return {
+    mcap:      num(a.market_cap_usd, a.fdv_usd),
+    price:     num(a.price_usd),
+    volume24h: num(a.volume_usd && a.volume_usd.h24),
+    liquidity: num(a.total_reserve_in_usd),
+    pool:      pool,
+  };
+}
+
+function _apeGetCached(mint) { const h = _apeCache.get(mint); return (h && (Date.now() - h.at) < APE_TTL_MS) ? h.v : null; }
+function _apeSet(mint, v) { _apeCache.set(mint, { at: Date.now(), v }); }
+
+async function _apeFetchToken(mint) {
+  try {
+    const r = await fetchWithTimeout(
+      GT_BASE + '/networks/solana/tokens/' + encodeURIComponent(mint),
+      { headers: { Accept: 'application/json' } },
+      7_000,
+    );
+    if (!r.ok) return null;
+    const j = await r.json().catch(() => null);
+    return _apeShapeGt(j && j.data);
+  } catch (e) { return null; }
+}
+
+async function _apeFetchMulti(mints) {
+  const out = {};
+  for (let i = 0; i < mints.length; i += GT_MULTI_MAX) {
+    const chunk = mints.slice(i, i + GT_MULTI_MAX);
+    try {
+      const r = await fetchWithTimeout(
+        GT_BASE + '/networks/solana/tokens/multi/' + chunk.map(encodeURIComponent).join(','),
+        { headers: { Accept: 'application/json' } },
+        9_000,
+      );
+      if (!r.ok) continue;
+      const j = await r.json().catch(() => null);
+      const arr = (j && Array.isArray(j.data)) ? j.data : [];
+      for (const d of arr) {
+        const addr = d && d.attributes && d.attributes.address;
+        const shaped = _apeShapeGt(d);
+        if (addr && shaped) out[addr] = shaped;
+      }
+    } catch (e) { /* skip this chunk */ }
+  }
+  return out;
+}
+
+async function _apeCurve(mint) {
+  const c = _apeGetCached(mint);
+  if (c) return c;
+  const shaped = await _apeFetchToken(mint);
+  const v = shaped ? { found: true, ...shaped } : { found: false };
+  _apeSet(mint, v);
+  return v;
+}
+
+app.get('/api/ape/curve/:mint', async (req, res) => {
+  try {
+    const mint = String(req.params.mint || '');
+    if (!APE_BASE58_RE.test(mint)) return res.status(400).json({ error: 'Invalid mint' });
+    return res.json({ mint, ...(await _apeCurve(mint)) });
+  } catch (e) {
+    return res.json({ mint: String(req.params.mint || ''), found: false });
+  }
+});
+
+app.post('/api/ape/enrich', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const list = Array.isArray(body.mints) ? body.mints : [];
+    const mints = [...new Set(list.map(String).filter(m => APE_BASE58_RE.test(m)))].slice(0, 90);
+    const tokens = {};
+    const misses = [];
+    for (const m of mints) {
+      const c = _apeGetCached(m);
+      if (c) { if (c.found) tokens[m] = { mcap: c.mcap, price: c.price, volume24h: c.volume24h, liquidity: c.liquidity, pool: c.pool }; }
+      else misses.push(m);
+    }
+    if (misses.length) {
+      const fetched = await _apeFetchMulti(misses);
+      for (const m of misses) {
+        const shaped = fetched[m] || null;
+        const v = shaped ? { found: true, ...shaped } : { found: false };
+        _apeSet(m, v);
+        if (v.found) tokens[m] = { mcap: v.mcap, price: v.price, volume24h: v.volume24h, liquidity: v.liquidity, pool: v.pool };
+      }
+    }
+    return res.json({ tokens });
+  } catch (e) {
+    return res.json({ tokens: {} });
+  }
+});
+
+/* ========================================================================
  * Boot
  * ===================================================================== */
 process.on('uncaughtException',  err => logError('uncaughtException',  err));
