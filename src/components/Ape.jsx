@@ -1361,6 +1361,40 @@ const AP_CSS = `
 .wa-pause-banner button{flex-shrink:0;min-height:36px;padding:0 16px;border-radius:9px;background:#0b0b0c;color:#fff;border:none;cursor:pointer;font-family:inherit;font-weight:800;font-size:10.5px;letter-spacing:.06em}
 
 @media(prefers-reduced-motion:reduce){.wa-root *,.wp-root *,.ap-root *{animation-duration:.01ms!important;animation-iteration-count:1!important}}
+
+/* ============================================================
+   DARK TERMINAL THEME — overrides the pastel-light palette.
+   Same class names; appended last so it wins on equal specificity.
+   Re-skins via tokens + the few hardcoded light surfaces.
+   ============================================================ */
+.ap-root{
+  --ink:#f4f5f7; --ink2:#9aa0ab; --ink3:#646a76;
+  --hairline:#242830; --hairline2:#2e333c;
+  --cyan:#1ad98a; --sky:#1ad98a; --pink:#ff4d61; --lav:#8b7bff; --mint:#1ad98a;
+  --peach:#f5b545; --gold:#f5b545; --green:#1ad98a; --greent:#1ad98a; --red:#ff4d61; --amber:#f5b545;
+  --orange:#f5b545; --purple:#8b7bff; --blue:#4d8bff;
+  --cream:#16181d; --dep:#1ad98a; --buyblk:#1ad98a;
+  --glass:#16181d; --glass-strong:#16181d;
+  --fill:#1b1e23; --fill2:#16181d;
+  --border:#242830; --border-hi:#30343d;
+  background:#0a0b0e;
+}
+/* full-page overlays */
+.wp-root,.wa-root{background:#0a0b0e}
+/* translucent sticky bars */
+.ap-nav,.ap-qbar,.wp-head,.wp-tabs,.wa-head,.wa-kill{background:rgba(10,11,14,.82)}
+/* solid card surfaces */
+.ap-hero-ref,.ap-positions,.ap-trend-card,.ap-list-frame,.ap-sheet,.ap-chart-embed,
+.ap-research,.ap-watch,.ap-watch-row,.ap-field-chip,.ap-toast,.ap-toast.info,
+.wp-card,.wp-card.feature,.wp-stat,.wp-pnl-hero,.wp-pnl-hero.neg,.wp-pos-frame,
+.wp-lb-frame,.wp-toast,.wa-master,.wa-master.on,.wa-master.paused,.wa-locked-card,
+.wa-sliders,.wa-statc,.wa-pos-frame,.wa-log-frame{background:#16181d}
+.ap-disc-f select{background:#1b1e23;color:var(--ink)}
+.ap-btn-sell:hover{background:#22262d}
+/* primary actions: green button with dark, high-contrast label */
+.ap-btn-buy{background:var(--green);color:#04130d}
+.ap-btn-buy .arrow{color:#04130d}
+.ap-confirm{color:#04130d}
 `;
 
 function useApCSS() {
@@ -1550,10 +1584,10 @@ function buildEmbedSrc(pool, resKey) {
   const r = CHART_RES.find(x => x.key === resKey) || CHART_RES[0];
   if (pool.provider === 'GECKOTERMINAL') {
     return 'https://www.geckoterminal.com/solana/pools/' + pool.addr +
-      '?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&bg_color=ffffff&resolution=' + r.gecko;
+      '?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&bg_color=0a0b0e&resolution=' + r.gecko;
   }
   return 'https://dexscreener.com/solana/' + pool.addr +
-    '?embed=1&theme=light&info=0&trades=0&interval=' + r.dex;
+    '?embed=1&theme=dark&info=0&trades=0&interval=' + r.dex;
 }
 
 function TokenChart({ token, solPrice }) {
@@ -1571,6 +1605,14 @@ function TokenChart({ token, solPrice }) {
   useEffect(() => {
     if (!mint) { setStatus('none'); setPool(null); return; }
     const id = ++reqRef.current;
+
+    // 0) Server-resolved pool (from /api/ape/curve · /api/ape/enrich → GeckoTerminal).
+    //    Skips the browser's cross-origin GeckoTerminal call when we already have it.
+    const poolHint = token && token.pool;
+    if (poolHint && typeof poolHint === 'string') {
+      setPool({ provider: 'GECKOTERMINAL', addr: poolHint }); setStatus('ok'); return;
+    }
+
     setStatus('loading'); setPool(null);
 
     (async () => {
@@ -1608,12 +1650,9 @@ function TokenChart({ token, solPrice }) {
       } catch (e) {}
       if (id !== reqRef.current) return;
 
-      // Neither provider had a pool. If at least one responded, the token just
-      // isn't indexed yet (typical for a seconds-old bonding curve); otherwise
-      // it's a network failure.
       setStatus(networkOk ? 'none' : 'fail');
     })();
-  }, [mint]);
+  }, [mint, token && token.pool]);
 
   const src = useMemo(() => buildEmbedSrc(pool, res), [pool, res]);
   const shortCa = mint ? mint.slice(0, 4) + '…' + mint.slice(-4) : '';
@@ -1845,7 +1884,7 @@ const SpecimenRow = React.memo(function SpecimenRow({ token, ageMsLive, owned, c
           <div className="ap-name-line">
             <span className="price">{formatPrice(token.price)}</span><span className="dot">·</span>
             <span className="mcap">{formatMoney(token.mcap)} mcap</span><span className="dot">·</span>
-            <span className="ghost">{formatMoney(token.liquidity)} liq · {format(token.holders)} holders</span>
+            <span className="ghost">{formatMoney(token.liquidity)} liq · {token.holders > 0 ? Math.round(token.holders).toLocaleString() : 0} holders</span>
             {ownedMode ? <><span className="dot">·</span><span className="ownedusd">{formatTokens(ownedUi)} · {formatUsdAbs(ownedUsd)}</span></> : null}
           </div>
         </div>
@@ -2127,7 +2166,7 @@ function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPr
             <div className="ap-rstat"><span className="k">Market cap</span><span className="v">{token.mcap > 0 ? '$' + format(token.mcap) : '—'}</span></div>
             <div className="ap-rstat"><span className="k">Liquidity</span><span className="v">{token.liquidity > 0 ? '$' + format(token.liquidity) : '—'}</span></div>
             <div className="ap-rstat"><span className="k">Volume 24h</span><span className="v">{token.volume24h > 0 ? '$' + format(token.volume24h) : '—'}</span></div>
-            <div className="ap-rstat"><span className="k">Holders</span><span className="v">{token.holders > 0 ? format(token.holders) : '—'}</span></div>
+            <div className="ap-rstat"><span className="k">Holders</span><span className="v">{token.holders > 0 ? Math.round(token.holders).toLocaleString() : '—'}</span></div>
             <div className="ap-rstat"><span className="k">Age</span><span className="v">{token.pairCreatedAtMs ? fmtAgeShort(Date.now() - token.pairCreatedAtMs) : '—'}</span></div>
             <div className="ap-rstat"><span className="k">Bonding</span><span className="v">{token.bond != null ? token.bond.toFixed(0) + '%' : (token.dex && !/^pump/i.test(token.dex) ? 'graduated' : '—')}</span></div>
           </div>
@@ -2438,6 +2477,32 @@ export default function Ape({ mainWalletPubkey }) {
         setRecent(list);
         setTokenIndex(prev => { const next = { ...prev }; for (const t of list) if (t && t.mint) next[t.mint] = t; return next; });
         setFeedError(null);
+
+        // Enrich rows with market cap + bonding % from pump.fun's curve, which
+        // the launches feed doesn't carry. Fire-and-forget; fills gaps only.
+        const mints = list.filter(t => t && t.mint).map(t => t.mint).slice(0, 60);
+        if (mints.length) {
+          fetch('/api/ape/enrich', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mints }) })
+            .then(er => (er.ok ? er.json() : null))
+            .then(ed => {
+              if (cancelled || !ed || !ed.tokens) return;
+              const map = ed.tokens;
+              const fill = (t) => {
+                const x = t && t.mint && map[t.mint];
+                if (!x) return t;
+                const nt = { ...t };
+                if (!(nt.mcap > 0) && Number(x.mcap) > 0) nt.mcap = Number(x.mcap);
+                if (!(nt.price > 0) && Number(x.price) > 0) nt.price = Number(x.price);
+                if (!(nt.volume24h > 0) && Number(x.volume24h) > 0) nt.volume24h = Number(x.volume24h);
+                if (!(nt.liquidity > 0) && Number(x.liquidity) > 0) nt.liquidity = Number(x.liquidity);
+                if (!nt.pool && x.pool) nt.pool = x.pool;
+                return nt;
+              };
+              setRecent(prev => prev.map(fill));
+              setTokenIndex(prev => { const next = { ...prev }; for (const m in map) if (next[m]) next[m] = fill(next[m]); return next; });
+            })
+            .catch(() => {});
+        }
       } catch (e) { if (!cancelled) setFeedError(String(e.message || 'Network').slice(0, 100)); }
     };
     load();
@@ -2555,6 +2620,9 @@ export default function Ape({ mainWalletPubkey }) {
         let liquidity = t ? Number(t.liquidity || 0) : 0;
         let holders = t ? Number(t.holders || 0) : 0;
         let sym = t && t.sym, name = t && t.name, icon = t && t.icon;
+        let volume24h = t ? Number(t.volume24h || 0) : 0;
+        let pool = null;
+        let bond = null;
         // DexScreener thin/missing → pull pump.fun bonding-curve data and merge.
         if (!t || !(liquidity > 0) || !(holders > 0)) {
           try {
@@ -2571,7 +2639,22 @@ export default function Ape({ mainWalletPubkey }) {
             }
           } catch (e) {}
         }
-        if (!t && !(price > 0) && !(liquidity > 0)) return; // nothing usable
+        // GeckoTerminal (via /api/ape/curve) — market cap, volume, price, and
+        // the pool address for the chart embed. Available before DexScreener indexes.
+        try {
+          const cr = await fetch('/api/ape/curve/' + encodeURIComponent(mint));
+          if (cr.ok) {
+            const cv = await cr.json();
+            if (cv && cv.found) {
+              if (!(mcap > 0)      && Number(cv.mcap) > 0)      mcap      = Number(cv.mcap);
+              if (!(price > 0)     && Number(cv.price) > 0)     price     = Number(cv.price);
+              if (!(volume24h > 0) && Number(cv.volume24h) > 0) volume24h = Number(cv.volume24h);
+              if (!(liquidity > 0) && Number(cv.liquidity) > 0) liquidity = Number(cv.liquidity);
+              if (!pool && cv.pool)                             pool      = cv.pool;
+            }
+          }
+        } catch (e) {}
+        if (!t && !(price > 0) && !(liquidity > 0) && !(mcap > 0) && !pool) return; // nothing usable
         setTokenMeta(prev => ({
           ...prev,
           [mint]: {
@@ -2583,6 +2666,9 @@ export default function Ape({ mainWalletPubkey }) {
             mcap,
             liquidity,
             holders,
+            volume24h,
+            pool,
+            bond,
           },
         }));
       })
@@ -2608,6 +2694,36 @@ export default function Ape({ mainWalletPubkey }) {
     const id = setInterval(refreshOwned, 5000);
     return () => clearInterval(id);
   }, [balances, fetchTokenMeta]);
+
+  // Backfill the OPEN token sheet from /api/dex/token + /api/pump/info so
+  // holders + liquidity fill in immediately, and mcap/volume/price appear the
+  // moment DexScreener indexes the pair — no dependence on the launches feed.
+  useEffect(() => {
+    if (!tradeToken || !tradeToken.mint) return;
+    fetchTokenMeta(tradeToken.mint);
+    const id = setInterval(() => fetchTokenMeta(tradeToken.mint), 4000);
+    return () => clearInterval(id);
+  }, [tradeToken, fetchTokenMeta]);
+
+  // Merge feed data with on-demand metadata. A real value always wins over a
+  // missing/zero one, so backfilled fields never blank out good feed numbers.
+  const mergeTokenData = useCallback((base) => {
+    if (!base || !base.mint) return base;
+    const idx = tokenIndex[base.mint] || {};
+    const meta = tokenMeta[base.mint] || {};
+    const out = { ...base, ...idx };
+    if (Number(meta.price) > 0) out.price = Number(meta.price);
+    for (const k of ['mcap', 'liquidity', 'volume24h', 'holders']) {
+      const v = Number(meta[k]);
+      if (Number.isFinite(v) && v > 0) out[k] = Math.max(Number(out[k]) || 0, v);
+    }
+    if (meta.bond != null && Number.isFinite(Number(meta.bond))) out.bond = Number(meta.bond);
+    if (!out.pool && meta.pool) out.pool = meta.pool;
+    if (!out.icon && meta.icon) out.icon = meta.icon;
+    if ((!out.sym || out.sym === '???') && meta.sym) out.sym = meta.sym;
+    if ((!out.name || out.name === 'Unknown') && meta.name) out.name = meta.name;
+    return out;
+  }, [tokenIndex, tokenMeta]);
 
   // solPrice held in a ref so executeSwap's identity stays stable across the
   // 30s price refresh — otherwise the auto-trade exit-loop effect (which
@@ -2970,7 +3086,7 @@ export default function Ape({ mainWalletPubkey }) {
 
       {tradeToken && (
         <TradeSheet
-          token={tokenIndex[tradeToken.mint] ? { ...tradeToken, ...tokenIndex[tradeToken.mint] } : tradeToken}
+          token={mergeTokenData(tradeToken)}
           initialMode={tradeMode}
           onClose={() => setTradeToken(null)}
           onConfirm={onTradeConfirm}
