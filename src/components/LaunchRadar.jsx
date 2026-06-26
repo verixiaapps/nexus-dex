@@ -21,7 +21,7 @@
 //          no unwrap step.
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { stkFetchSeries, stkBuildPath, stkSmoothPath, stkThrottle } from './Stocks.jsx';
+import { stkFetchSeries, stkBuildPath, stkSmoothPath, stkSeed, stkThrottle } from './Stocks.jsx';
 import { Buffer } from 'buffer';
 import {
   Connection,
@@ -498,7 +498,11 @@ function signalScore(t) {
   return Math.round(Math.min(100, changePts + volPts + liqPts + holdPts + freshPts));
 }
 
-export function normalize(t) {
+export function _uniqMint(list) {
+  const seen = new Set();
+  return list.filter(t => t && t.mint && !seen.has(t.mint) && seen.add(t.mint));
+}
+function normalize(t) {
   const rawMint = t?.mint;
   if (!rawMint || typeof rawMint !== 'string' || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(rawMint)) {
     return null;
@@ -716,17 +720,15 @@ function useTokenIcon(token) {
 // the form "solana_<mint>" and attributes.{address, reserve_in_usd}.
 function pickBestGeckoPool(pools, mint) {
   if (!Array.isArray(pools) || !pools.length) return null;
-  const wanted = ('solana_' + mint).toLowerCase();
-  const baseId  = p => p?.relationships?.base_token?.data?.id;
-  const quoteId = p => p?.relationships?.quote_token?.data?.id;
+  const wanted = 'solana_' + mint;                        // EXACT — Solana base58 is case-sensitive
+  const baseId  = p => String(p?.relationships?.base_token?.data?.id || '');
+  const quoteId = p => String(p?.relationships?.quote_token?.data?.id || '');
   const hasAddr = p => !!p?.attributes?.address;
 
-  const baseMatches = pools.filter(p => hasAddr(p) && String(baseId(p) || '').toLowerCase() === wanted);
+  const baseMatches = pools.filter(p => hasAddr(p) && baseId(p) === wanted);
   const pool = baseMatches.length
     ? baseMatches
-    : pools.filter(p => hasAddr(p) && (
-        String(baseId(p) || '').toLowerCase() === wanted ||
-        String(quoteId(p) || '').toLowerCase() === wanted));
+    : pools.filter(p => hasAddr(p) && (baseId(p) === wanted || quoteId(p) === wanted));
   if (!pool.length) return null;
   return pool.reduce(
     (best, p) =>
@@ -739,17 +741,16 @@ function pickBestGeckoPool(pools, mint) {
 // quoteToken.address, liquidity.usd.
 function pickBestPair(pairs, mint) {
   if (!Array.isArray(pairs) || !pairs.length) return null;
-  const wanted = String(mint).toLowerCase();
   const baseMatches = pairs.filter(
     p => p && p.chainId === 'solana' && p.pairAddress &&
-         p.baseToken?.address?.toLowerCase() === wanted,
+         p.baseToken?.address === mint,                    // EXACT, case-sensitive
   );
   const pool = baseMatches.length
     ? baseMatches
     : pairs.filter(
         p => p && p.chainId === 'solana' && p.pairAddress &&
-             (p.baseToken?.address?.toLowerCase() === wanted ||
-              p.quoteToken?.address?.toLowerCase() === wanted),
+             (p.baseToken?.address === mint ||
+              p.quoteToken?.address === mint),
       );
   if (!pool.length) return null;
   return pool.reduce(
@@ -777,7 +778,7 @@ function lrBuildEmbedSrc(pool, resKey) {
   const r = LR_CHART_RES.find(x => x.key === resKey) || LR_CHART_RES[0];
   if (pool.provider === 'GECKOTERMINAL') {
     return 'https://www.geckoterminal.com/solana/pools/' + pool.addr +
-      '?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&bg_color=ffffff&resolution=' + r.gecko;
+      '?embed=1&info=0&swaps=0&grayscale=0&light_chart=1&bg_color=ffffff&resolution=' + r.gecko;
   }
   return 'https://dexscreener.com/solana/' + pool.addr +
     '?embed=1&theme=light&info=0&trades=0&interval=' + r.dex;
@@ -801,7 +802,7 @@ function LrTokenChart({ mint, symbol = '' }) {
     (async () => {
       let networkOk = false;
 
-      // 1) GeckoTerminal — covers pump.fun bonding-curve pools.
+      // GeckoTerminal only — covers pump.fun bonding-curve pools and graduated pairs.
       try {
         const r = await fetch(
           `https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}/pools`,
@@ -818,24 +819,8 @@ function LrTokenChart({ mint, symbol = '' }) {
       } catch {}
       if (id !== reqRef.current) return;
 
-      // 2) DexScreener — fallback for graduated / older pairs.
-      try {
-        const r = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mint}`,
-          { headers: { Accept: 'application/json' } });
-        if (id !== reqRef.current) return;
-        if (r.ok) {
-          networkOk = true;
-          const j = await r.json();
-          if (id !== reqRef.current) return;
-          const best = pickBestPair(j?.pairs, mint);
-          if (best?.pairAddress) { setPool({ provider: 'DEXSCREENER', addr: best.pairAddress }); setStatus('ok'); return; }
-        }
-      } catch {}
-      if (id !== reqRef.current) return;
-
-      // Neither provider had a pool. If at least one responded, the token
-      // just isn't indexed yet (typical for a seconds-old bonding curve);
-      // otherwise it's a network failure.
+      // No pool. If GeckoTerminal responded, the token just isn't indexed yet
+      // (typical for a seconds-old bonding curve); otherwise it's a network failure.
       setStatus(networkOk ? 'none' : 'fail');
     })();
   }, [mint]);
@@ -1109,12 +1094,12 @@ function TradeModal({
   }, [swapParams, token?.price, solPrice]);
 
   const ownedUiAmount = tokenBalance?.uiAmount || 0;
-  const availSol = Math.max(0, (solBalance?.uiAmount || 0) - SOL_RESERVE);
+  const availSol = Math.max(0, (solBalance?.uiAmount || 0)); // no reserve
 
   const hasFunds = (() => {
     if (!amount || Number(amount) <= 0) return false;
     if (isBuy) return Number(amount) <= availSol;
-    return ownedUiAmount > 0 && (solBalance?.uiAmount || 0) >= 0.003; // tx + priority
+    return ownedUiAmount > 0;
   })();
 
   const handleConfirm = async () => {
@@ -1131,7 +1116,7 @@ function TradeModal({
 
   const setMaxBuy = () => {
     if (!isBuy || availSol <= 0) return;
-    setAmount(String(Math.floor(availSol * 10000) / 10000));
+    setAmount(String(Math.floor(Math.max(0, availSol - 0.002) * 10000) / 10000));
   };
 
   const confirmDisabled = confirming || !swapParams || !hasFunds || !!error;
@@ -1302,7 +1287,7 @@ function TradeModal({
                 : !hasFunds
                   ? (isBuy
                       ? 'Insufficient SOL'
-                      : (ownedUiAmount <= 0 ? ('No ' + token.sym + ' to sell') : 'Need ~0.003 SOL for fees'))
+                      : ('No ' + token.sym + ' to sell'))
                   : (isBuy ? ('🍭 Buy ' + amount + ' SOL of $' + token.sym)
                            : ('💸 Sell ' + Math.min(100, Number(amount)) + '% of $' + token.sym))}
           </button>
@@ -1345,7 +1330,7 @@ function LrSparkline({ mint, price, w = 280, h = 40, full = true }) {
   const obs = hist.length >= 2 ? hist.map(c => ({ c })) : null;
   const pts = (series && series.length >= 2) ? series : obs;
   if (!pts) return null;
-  const path = stkSmoothPath(pts, w, h, 2);
+  const path = stkSmoothPath(pts, w, h, 2, stkSeed(mint));
   const up = path.up;
   const col = up ? 'var(--green)' : 'var(--red)';
   const id = 'lrs' + (up ? 'u' : 'd') + (mint ? String(mint).slice(0, 8) : '');
@@ -1461,6 +1446,10 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
   const [recentTokens, setRecentTokens] = useState([]);
   const [recentLoading, setRecentLoading] = useState(true);
   const [recentError, setRecentError] = useState(null);
+  // Chart-window % from the same 1D series the sparkline draws, so the displayed
+  // % matches the chart (DexScreener priceChange24h is unreliable for thin/fresh pools).
+  const [chartChg, setChartChg] = useState({});   // mint -> %
+  const chgTsRef = useRef(new Map());              // mint -> last fetch ts
   useEffect(() => {
     let cancelled = false;
     async function load() {
@@ -1476,7 +1465,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
         const d = await r.json();
         const list = Array.isArray(d?.tokens) ? d.tokens : [];
         if (!cancelled) {
-          setRecentTokens(list.map(normalize).filter(Boolean));
+          setRecentTokens(_uniqMint(list.map(normalize).filter(Boolean)));
           setRecentLoading(false);
           setRecentError(null);
         }
@@ -1491,6 +1480,29 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     const id = setInterval(load, POLL_RECENT);
     return () => { cancelled = true; clearInterval(id); };
   }, []);
+
+  // Chart-window % from the same 1D OHLCV the sparkline uses (throttled, ≤ once/45s per mint).
+  useEffect(() => {
+    let cancelled = false;
+    const now = Date.now();
+    recentTokens.forEach(t => {
+      const mint = t.mint;
+      if (!mint) return;
+      const last = chgTsRef.current.get(mint) || 0;
+      if (now - last < 45000) return;
+      chgTsRef.current.set(mint, now);
+      stkThrottle(() => stkFetchSeries(mint, '1D'))
+        .then(s => {
+          if (cancelled || !Array.isArray(s) || s.length < 2) return;
+          const first = Number(s[0]?.c), lastC = Number(s[s.length - 1]?.c);
+          if (!(first > 0) || !Number.isFinite(lastC)) return;
+          const pct = ((lastC - first) / first) * 100;
+          setChartChg(prev => (Math.abs((prev[mint] ?? NaN) - pct) < 0.01 ? prev : { ...prev, [mint]: pct }));
+        })
+        .catch(() => {});
+    });
+    return () => { cancelled = true; };
+  }, [recentTokens]);
 
   const [solPrice, setSolPrice] = useState(0);
   useEffect(() => {
@@ -1852,7 +1864,10 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
   }, [executeSwap, fireConfetti, pushToast, aggressiveRefresh, refreshSol, refreshOneToken, solPrice]);
 
   /* ──── derived display ──── */
-  const deriveDisplayValues = useCallback((t) => t, []);
+  const deriveDisplayValues = useCallback(
+    (t) => (chartChg[t.mint] != null ? { ...t, change: chartChg[t.mint] } : t),
+    [chartChg],
+  );
 
   const freshTokens = useMemo(
     () => recentTokens.filter(t => Number.isFinite(t.ageMs) && t.ageMs < freshThresholdMs),
@@ -1885,10 +1900,10 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
   }, [activeList, timeFilter, sortBy, deriveDisplayValues, featured]);
 
   const topGainer = useMemo(() => {
-    const pool = recentTokens.filter(t => Number.isFinite(t.change) && t.change > 0);
+    const pool = recentTokens.map(deriveDisplayValues).filter(t => Number.isFinite(t.change) && t.change > 0);
     if (!pool.length) return null;
     return pool.reduce((a, b) => (b.change > a.change ? b : a));
-  }, [recentTokens]);
+  }, [recentTokens, deriveDisplayValues]);
   const totalVol24h = useMemo(
     () => recentTokens.reduce((s, t) => s + (t.volume24h || 0), 0),
     [recentTokens],
