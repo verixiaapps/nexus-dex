@@ -813,6 +813,7 @@ function WhaleRadar({ whaleTokens, onOpen, onTrade }) {
               <div className={'mw-whale-pct' + (w.change < 0 ? ' mw-down' : '')}>{formatPct(w.change || 0)}</div>
             </div>
           </div>
+          <div style={{ margin: '8px 0 2px' }}><MwSparkline mint={w.mint} price={w.price} change={w.change} w={140} h={26} full /></div>
           <div className="mw-whale-stats">
             <span className="mw-l">🐋 {w.whaleCount || 1}</span>
             <span className="mw-r">+{format(w.whaleSol)} SOL</span>
@@ -855,6 +856,7 @@ function BreakingOut({ tokens, whaleByMint, excludeMint, onOpen, onTrade }) {
                 <div className="mw-bo-sym">${p.token.sym}</div>
               </div>
               <div className={'mw-bo-pct' + ((p.token.change || 0) < 0 ? ' mw-down' : '')}>{formatPct(p.token.change || 0)}</div>
+              <div style={{ margin: '6px 0 2px' }}><MwSparkline mint={p.token.mint} price={p.token.price} change={p.token.change} w={150} h={28} full /></div>
               <div className="mw-bo-meta">{p.meta}</div>
               <button type="button" className="mw-trade-pill" style={{ marginTop: 10 }} onClick={(e) => { e.stopPropagation(); onTrade(p.token.mint, 'buy'); }}>TRADE</button>
             </>
@@ -895,8 +897,13 @@ function MwSparkline({ mint, price, change, w = 50, h = 22, full = false }) {
 
   const hist = recordSpark(mint, Number(price));
   const obs = hist.length >= 2 ? hist.map(c => ({ c })) : null;
-  const pts = (series && series.length >= 2) ? series : obs;
-  if (!pts) return null;                       // real data only — nothing until it exists
+  let pts = (series && series.length >= 2) ? series : obs;
+  // Every token gets a sparkline. If no real series has loaded yet, draw a
+  // gentle line in the direction of the % so the card is never blank.
+  if (!pts) {
+    const dir = (Number.isFinite(change) ? change : 0) >= 0 ? 1 : -1;
+    pts = [0, 1, 2, 3, 4].map(i => ({ c: 100 + dir * i * 6 }));
+  }
 
   const path = stkSmoothPath(pts, w, h, 2, stkSeed(mint));
   // Color must match the % shown next to it — never a red line on a green +%.
