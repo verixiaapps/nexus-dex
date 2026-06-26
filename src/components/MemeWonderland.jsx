@@ -867,6 +867,56 @@ function BreakingOut({ tokens, whaleByMint, excludeMint, onOpen, onTrade }) {
 // card from being blank. Path is built locally (mwSparkPath) — nothing here
 // reaches into Stocks.
 const _sparkHist = new Map(); // mint -> number[] (observed prices)
+const _spark24h  = new Map(); // mint -> number[] (24h price path from DexScreener change points)
+const _poolAddr  = new Map(); // mint -> on-chain pool/pair address (for OHLCV)
+const _ohlcv     = new Map(); // mint -> { ts, closes }  real hourly series cache
+const _ohlcvWait = new Map(); // mint -> Promise          in-flight de-dupe
+let _ohN = 0; const _ohQ = [];
+function _ohPump() { while (_ohN < 3 && _ohQ.length) { const job = _ohQ.shift(); _ohN++; job().finally(() => { _ohN--; _ohPump(); }); } }
+async function _resolvePoolAddr(mint) {
+  const known = _poolAddr.get(mint);
+  if (known) return known;
+  try {
+    const r = await fetchTO('https://api.dexscreener.com/latest/dex/tokens/' + mint, 5000);
+    if (!r.ok) return null;
+    const j = await r.json();
+    const addr = pickBestPair(j?.pairs, mint)?.pairAddress || null; // contract-matched
+    if (addr) _poolAddr.set(mint, addr);
+    return addr;
+  } catch { return null; }
+}
+// Real ~24h hourly closes for a row sparkline — contract-matched, NO Stocks.
+// Throttled (≤3 concurrent) + cached 2 min. Returns null on any failure, so the
+// caller falls back to the smooth 24h anchor curve.
+function mwFetchSpark(mint) {
+  if (!mint) return Promise.resolve(null);
+  const c = _ohlcv.get(mint);
+  if (c && Date.now() - c.ts < 120000) return Promise.resolve(c.closes);
+  if (_ohlcvWait.has(mint)) return _ohlcvWait.get(mint);
+  const p = new Promise(resolve => {
+    _ohQ.push(async () => {
+      let out = null;
+      try {
+        const addr = await _resolvePoolAddr(mint);
+        if (addr) {
+          const r = await fetchTO(`https://api.geckoterminal.com/api/v2/networks/solana/pools/${addr}/ohlcv/hour?aggregate=1&limit=24`, 5000);
+          if (r.ok) {
+            const j = await r.json();
+            const list = j?.data?.attributes?.ohlcv_list || []; // [ts,o,h,l,c,v], newest first
+            const closes = list.map(row => Number(row?.[4])).filter(v => Number.isFinite(v) && v > 0).reverse();
+            if (closes.length >= 2) out = closes;
+          }
+        }
+      } catch { out = null; }
+      _ohlcv.set(mint, { ts: Date.now(), closes: out });
+      _ohlcvWait.delete(mint);
+      resolve(out);
+    });
+    _ohPump();
+  });
+  _ohlcvWait.set(mint, p);
+  return p;
+}
 function recordSpark(mint, price) {
   if (!mint || !(price > 0)) return _sparkHist.get(mint) || [];
   let pts = _sparkHist.get(mint);
@@ -874,25 +924,44 @@ function recordSpark(mint, price) {
   if (pts[pts.length - 1] !== price) { pts.push(price); if (pts.length > 32) pts.shift(); }
   return pts;
 }
-// Local SVG sparkline path builder (replaces the Stocks helper). pts: [{c}, …].
+// Local SVG sparkline path builder (no Stocks). Smooth Catmull-Rom → Bézier so
+// the line flows with character instead of straight zig-zag segments. pts: [{c}, …].
 function mwSparkPath(pts, w, h) {
   const vals = pts.map(p => Number(p?.c)).filter(Number.isFinite);
   if (vals.length < 2) {
     const midY = h / 2;
     return { line: `M 0 ${midY} L ${w} ${midY}`, area: `M 0 ${midY} L ${w} ${midY} L ${w} ${h} L 0 ${h} Z`, lastX: w, lastY: midY, up: true };
   }
-  const min = Math.min(...vals), max = Math.max(...vals), span = (max - min) || 1, pad = 2, ih = h - pad * 2;
-  const xy = vals.map((v, i) => [ (i / (vals.length - 1)) * w, pad + (1 - (v - min) / span) * ih ]);
-  const line = 'M ' + xy.map(([x, y]) => `${x.toFixed(2)} ${y.toFixed(2)}`).join(' L ');
+  const min = Math.min(...vals), max = Math.max(...vals), span = (max - min) || 1, pad = 2.5, ih = h - pad * 2;
+  const P = vals.map((v, i) => [ (i / (vals.length - 1)) * w, pad + (1 - (v - min) / span) * ih ]);
+  let line = `M ${P[0][0].toFixed(2)} ${P[0][1].toFixed(2)}`;
+  for (let i = 0; i < P.length - 1; i++) {
+    const p0 = P[i - 1] || P[i], p1 = P[i], p2 = P[i + 1], p3 = P[i + 2] || p2;
+    const c1x = p1[0] + (p2[0] - p0[0]) / 6, c1y = p1[1] + (p2[1] - p0[1]) / 6;
+    const c2x = p2[0] - (p3[0] - p1[0]) / 6, c2y = p2[1] - (p3[1] - p1[1]) / 6;
+    line += ` C ${c1x.toFixed(2)} ${c1y.toFixed(2)} ${c2x.toFixed(2)} ${c2y.toFixed(2)} ${p2[0].toFixed(2)} ${p2[1].toFixed(2)}`;
+  }
   const area = `${line} L ${w.toFixed(2)} ${h.toFixed(2)} L 0 ${h.toFixed(2)} Z`;
-  const [lastX, lastY] = xy[xy.length - 1];
+  const [lastX, lastY] = P[P.length - 1];
   return { line, area, lastX, lastY, up: vals[vals.length - 1] >= vals[0] };
 }
 function MwSparkline({ mint, price, change, w = 50, h = 22, full = false }) {
   const hist = recordSpark(mint, Number(price));
-  let pts = hist.length >= 2 ? hist.map(c => ({ c })) : null;
-  // No observed history yet → gentle line in the direction of the % so the card
-  // is never blank.
+  // Real hourly OHLCV (contract-matched) gives the line genuine character.
+  const [real, setReal] = useState(() => (mint ? _ohlcv.get(mint)?.closes : null) || null);
+  useEffect(() => {
+    if (!mint) return;
+    let cancelled = false;
+    mwFetchSpark(mint).then(cs => { if (!cancelled && cs && cs.length >= 2) setReal(cs); });
+    return () => { cancelled = true; };
+  }, [mint]);
+
+  // Priority: real OHLCV → 24h anchor curve (matches the %) → observed prices →
+  // gentle directional line, so the card always has the best shape available.
+  const s24 = mint ? _spark24h.get(mint) : null;
+  let pts = (real && real.length >= 2) ? real.map(c => ({ c }))
+          : (s24 && s24.length >= 2) ? s24.map(c => ({ c }))
+          : (hist.length >= 2 ? hist.map(c => ({ c })) : null);
   if (!pts) {
     const dir = (Number.isFinite(change) ? change : 0) >= 0 ? 1 : -1;
     pts = [0, 1, 2, 3, 4].map(i => ({ c: 100 + dir * i * 6 }));
@@ -1206,15 +1275,29 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
           const j = await r.json();
           if (cancelled) return;
           const pairs = Array.isArray(j?.pairs) ? j.pairs : [];
-          setChartChg(prev => {
-            const next = { ...prev };
-            for (const m of group) {
-              const best = pickBestPair(pairs, m);           // exact base-token contract match + highest liquidity
-              const h24  = Number(best?.priceChange?.h24);
-              next[m] = Number.isFinite(h24) ? h24 : null;   // null ⇒ shows "—", never Jupiter
+          // Compute % and a 24h sparkline shape from the SAME contract-matched
+          // pair, so the line and the % always agree (last vs first ≈ h24).
+          const changes = {};
+          for (const m of group) {
+            const best = pickBestPair(pairs, m);             // exact base-token contract match + highest liquidity
+            if (best?.pairAddress) _poolAddr.set(m, best.pairAddress); // reused by the sparkline OHLCV fetch
+            const pc   = best?.priceChange || {};
+            const h24  = Number(pc.h24);
+            changes[m] = Number.isFinite(h24) ? h24 : null;  // null ⇒ shows "—", never Jupiter
+
+            // Reconstruct the 24h price path from the pair's change points:
+            // price(t ago) = priceNow / (1 + pct/100). Oldest → newest.
+            const P = Number(best?.priceUsd);
+            if (P > 0) {
+              const ago = (chg) => { const c = Number(chg); return Number.isFinite(c) ? P / (1 + c / 100) : null; };
+              const series = [ago(pc.h24), ago(pc.h6), ago(pc.h1), ago(pc.m5), P].filter(v => Number.isFinite(v) && v > 0);
+              if (series.length >= 2) _spark24h.set(m, series); else _spark24h.delete(m);
+            } else {
+              _spark24h.delete(m);
             }
-            return next;
-          });
+          }
+          if (cancelled) return;
+          setChartChg(prev => ({ ...prev, ...changes }));
         } catch { /* skip this group, retry next cycle */ }
       }
     })();
@@ -1633,44 +1716,39 @@ function MwTokenChart({ mint, symbol = '' }) {
     setStatus('loading'); setPool(null);
 
     (async () => {
-      const url = `https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}/pools`;
-
-      // GeckoTerminal first (covers pump.fun curves + graduated pairs). Keep
-      // retries tight so a rate-limited GT doesn't park the user on a spinner —
-      // fall through to DexScreener quickly. Contract match stays strict.
-      for (let attempt = 0; attempt < 2; attempt++) {
+      // Fire BOTH providers at once and take whichever returns a valid
+      // contract-matched pool first — detail no longer waits on GeckoTerminal's
+      // rate-limited round-trip before trying DexScreener. Both enforce base-token
+      // match, so whichever wins is the right contract.
+      const gt = (async () => {
         try {
-          const r = await fetchTO(url, 4500);
-          if (id !== reqRef.current) return;
-          if (r.ok) {
-            const j = await r.json();
-            if (id !== reqRef.current) return;
-            const addr = pickBestGeckoPool(j?.data, mint)?.attributes?.address;
-            if (addr) { setPool({ provider: 'GECKOTERMINAL', addr }); setStatus('ok'); return; }
-            break; // clean response, just not on GT → try DexScreener
-          }
-          if (r.status !== 429 && r.status < 500) break; // permanent 4xx → try DexScreener
-        } catch { /* network error → retry */ }
-        if (id !== reqRef.current) return;
-        await new Promise(res => setTimeout(res, 350 * (attempt + 1)));
-        if (id !== reqRef.current) return;
-      }
-      if (id !== reqRef.current) return;
-
-      // GeckoTerminal had nothing → DexScreener fallback.
-      try {
-        const r = await fetchTO('https://api.dexscreener.com/latest/dex/tokens/' + mint, 6000);
-        if (id !== reqRef.current) return;
-        if (r.ok) {
+          const r = await fetchTO(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}/pools`, 4500);
+          if (!r.ok) return null;
           const j = await r.json();
-          if (id !== reqRef.current) return;
+          const addr = pickBestGeckoPool(j?.data, mint)?.attributes?.address;
+          return addr ? { provider: 'GECKOTERMINAL', addr } : null;
+        } catch { return null; }
+      })();
+      const ds = (async () => {
+        try {
+          const r = await fetchTO('https://api.dexscreener.com/latest/dex/tokens/' + mint, 5000);
+          if (!r.ok) return null;
+          const j = await r.json();
           const addr = pickBestPair(j?.pairs, mint)?.pairAddress;
-          if (addr) { setPool({ provider: 'DEXSCREENER', addr }); setStatus('ok'); return; }
-        }
-      } catch { /* fall through */ }
-      if (id !== reqRef.current) return;
+          return addr ? { provider: 'DEXSCREENER', addr } : null;
+        } catch { return null; }
+      })();
 
-      // Neither provider has a pool yet (typical for a seconds-old bonding curve).
+      // First truthy result wins early; bothDone guarantees resolution (→ null)
+      // even if both providers come back empty, so we never hang on the spinner.
+      const firstHit = Promise.race([gt, ds].map(p => p.then(v => v || new Promise(() => {}))));
+      const bothDone = Promise.all([gt, ds]).then(([g, d]) => g || d || null);
+      const chosen = await Promise.race([firstHit, bothDone]);
+      if (id !== reqRef.current) return;
+      if (chosen) { setPool(chosen); setStatus('ok'); return; }
+
+      // Neither provider has a contract-matched pool yet (typical for a
+      // seconds-old bonding curve).
       setStatus('none');
     })();
   }, [mint]);
