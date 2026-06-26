@@ -1605,27 +1605,23 @@ function MwTokenChart({ mint, symbol = '' }) {
     setStatus('loading'); setPool(null);
 
     (async () => {
-      let networkOk = false;
       const url = `https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}/pools`;
 
-      // GeckoTerminal only — covers pump.fun bonding-curve pools and graduated pairs.
-      // Retry transient failures (429 rate-limit / 5xx / network blips) before giving up,
-      // otherwise a single hiccup shows "Couldn't load the chart".
+      // GeckoTerminal first (covers pump.fun curves + graduated pairs), retrying
+      // transient 429/5xx/blips. If GT has no pool, fall back to DexScreener so
+      // every token still gets a chart when clicked.
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           const r = await fetch(url, { headers: { Accept: 'application/json' } });
           if (id !== reqRef.current) return;
           if (r.ok) {
-            networkOk = true;
             const j = await r.json();
             if (id !== reqRef.current) return;
-            const best = pickBestGeckoPool(j?.data, mint);
-            const addr = best?.attributes?.address;
+            const addr = pickBestGeckoPool(j?.data, mint)?.attributes?.address;
             if (addr) { setPool({ provider: 'GECKOTERMINAL', addr }); setStatus('ok'); return; }
-            break; // clean response, just not indexed yet → don't retry
+            break; // clean response, just not on GT → try DexScreener
           }
-          // 429 or 5xx → retryable; other 4xx → permanent, stop
-          if (r.status !== 429 && r.status < 500) break;
+          if (r.status !== 429 && r.status < 500) break; // permanent 4xx → try DexScreener
         } catch { /* network error → retry */ }
         if (id !== reqRef.current) return;
         await new Promise(res => setTimeout(res, 700 * (attempt + 1)));
@@ -1633,9 +1629,22 @@ function MwTokenChart({ mint, symbol = '' }) {
       }
       if (id !== reqRef.current) return;
 
-      // No pool. If GeckoTerminal responded, the token just isn't indexed yet
-      // (typical for a seconds-old bonding curve); otherwise it's a network failure.
-      setStatus(networkOk ? 'none' : 'fail');
+      // GeckoTerminal had nothing → DexScreener fallback.
+      try {
+        const r = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + mint,
+          { headers: { Accept: 'application/json' } });
+        if (id !== reqRef.current) return;
+        if (r.ok) {
+          const j = await r.json();
+          if (id !== reqRef.current) return;
+          const addr = pickBestPair(j?.pairs, mint)?.pairAddress;
+          if (addr) { setPool({ provider: 'DEXSCREENER', addr }); setStatus('ok'); return; }
+        }
+      } catch { /* fall through */ }
+      if (id !== reqRef.current) return;
+
+      // Neither provider has a pool yet (typical for a seconds-old bonding curve).
+      setStatus('none');
     })();
   }, [mint]);
 
@@ -2102,6 +2111,8 @@ function TradeSheet({
           <button type="button" className="mw-icon-btn" onClick={onClose} disabled={swapping}>×</button>
         </div>
 
+        <MwTokenChart mint={token.mint} symbol={token.sym} />
+
         <div className={'mw-tab-switch' + (isSell ? ' mw-sell-mode' : '')}>
           <div className="mw-tab-indicator"></div>
           {['buy', 'sell'].map(m => (
@@ -2308,4 +2319,3 @@ function SuccessView({ data, token, onClose }) {
     </div>
   );
 }
- 
