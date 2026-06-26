@@ -1,5 +1,5 @@
 // ape-pump-trade.js — dedicated Pump.fun trade route for the Ape (burner) page.
-//  
+//
 // WHY A SEPARATE FILE
 //   The Ape page signs locally with a burner keypair: it fetches a fully-built
 //   PumpPortal transaction, decodes it, appends the 3% platform-fee (+ optional
@@ -220,4 +220,3 @@ function mountRoutes(app) {
 }
 
 module.exports = { mountRoutes, ROUTE, JUP_ROUTE };
- 
