@@ -1,5 +1,5 @@
 // Ape.jsx — Nexus DEX · Ape (early-launch trading terminal)
-//
+// 
 // Fully self-contained single-file build. The React surface, the CSS, the
 // heavy auxiliary panels (StatsPanel + AutoPanel + useAutoTrade), AND the
 // former ./ape-helpers logic (executeSwap, formatters, riskRead, vibe-check,
