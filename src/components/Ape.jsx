@@ -2926,10 +2926,11 @@ export default function Ape({ mainWalletPubkey }) {
         const fromFeed = recent.find(t => t.mint === mint);
         const tok = fromFeed || resolveToken(mint);
         if (!tok) continue;
-        // Hide dust: positions worth under DUST_MIN_USD by amount owned × price.
-        // Unpriced tokens (price 0) count as $0 and are hidden as dust.
-        const value = (bal.uiAmount || 0) * (tok.price || 0);
-        if (value < DUST_MIN_USD) continue;
+        // Show a position only if it has a real price AND is worth at least
+        // DUST_MIN_USD. Zero/unknown price → hidden. Priced but tiny → hidden.
+        const px = Number(tok.price) || 0;
+        if (px <= 0) continue;
+        if ((bal.uiAmount || 0) * px < DUST_MIN_USD) continue;
         held.push(tok);
       }
       held.sort((a, b) => {
