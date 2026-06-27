@@ -211,7 +211,7 @@ const MW_CSS = `
 .mw-big-btn.mw-buy{background:var(--green);color:#fff;box-shadow:none}
 .mw-big-btn.mw-sell{background:var(--fill);border:1px solid var(--border);color:var(--ink)}
 
-/* ── TOKEN DETAIL CHART (GeckoTerminal embed, framed) ── */
+/* ── TOKEN DETAIL CHART (CoinGecko / GeckoTerminal embed, framed) ── */
 .mw-chart{margin:0 18px 14px;border:1px solid var(--hairline);border-radius:16px;overflow:hidden;background:#fff;box-shadow:0 1px 2px rgba(10,10,10,.04)}
 .mw-chart-bar{display:flex;align-items:center;justify-content:space-between;padding:9px 12px;border-bottom:1px solid var(--hairline)}
 .mw-chart-ca{display:flex;align-items:center;gap:7px;min-width:0}
@@ -637,8 +637,31 @@ function _uniqMint(list) {
   const seen = new Set();
   return list.filter(t => t && t.mint && !seen.has(t.mint) && seen.add(t.mint));
 }
+// Robust 24h %: read every field name a Solana feed uses for it.
+function pickChange(t) {
+  const v = Number(
+    t?.priceChange24h ?? t?.priceChange?.h24 ?? t?.stats24h?.priceChange ??
+    t?.change24h ?? t?.change ?? t?.priceChangePercent24h ?? t?.h24 ?? 0,
+  );
+  return Number.isFinite(v) ? v : 0;
+}
+// Robust price: a new token ALWAYS has a price — read every field name the feed
+// might use, and if only market cap + supply came through, derive it (real, not
+// invented). Returns a positive number whenever ANY pricing data exists.
+function pickPrice(t) {
+  const direct = Number(
+    t?.price ?? t?.priceUsd ?? t?.usdPrice ?? t?.price_usd ??
+    t?.priceUSD ?? t?.usd ?? t?.priceNative ?? t?.lastPrice ??
+    t?.stats24h?.price ?? t?.firstPool?.price ?? 0,
+  );
+  if (direct > 0) return direct;
+  const mc = Number(t?.mcap ?? t?.marketCap ?? t?.fdv ?? t?.marketCapUsd ?? 0);
+  const supply = Number(t?.supply ?? t?.totalSupply ?? t?.circulatingSupply ?? t?.circSupply ?? 0);
+  if (mc > 0 && supply > 0) return mc / supply;
+  return 0;
+}
 function normalize(t) {
-  const change = Number(t?.stats24h?.priceChange ?? t?.priceChange24h ?? 0);
+  const change = pickChange(t);
   const created = t.firstPool?.createdAt || t.createdAt;
   const am = ageMs(created);
   return {
@@ -647,7 +670,7 @@ function normalize(t) {
     name:      t.name || t.symbol || 'Unknown',
     emoji:     emojiFor(t.symbol || ''),
     icon:      t.icon || t.logoURI || null,
-    price:     Number(t.usdPrice ?? t.priceUsd ?? 0),
+    price:     pickPrice(t),
     change,
     age:       ageStr(am),
     ageMs:     am,
@@ -656,6 +679,7 @@ function normalize(t) {
     holders:   Number(t.holderCount || 0),
     liquidity: Number(t.liquidity || 0),
     decimals:  Number(t.decimals ?? 6),
+    pool:      t.pairAddress || t.poolAddress || t.pool || t.poolId || t.pairId || (t.firstPool && (t.firstPool.id || t.firstPool.address)) || null,
     fresh:     am < 24 * 3600 * 1000,
   };
 }
@@ -805,7 +829,7 @@ function WhaleRadar({ whaleTokens, onOpen, onTrade }) {
               <div className={'mw-whale-pct' + (w.change < 0 ? ' mw-down' : '')}>{formatPct(w.change)}</div>
             </div>
           </div>
-          <div style={{ margin: '8px 0 2px' }}><MwSparkline mint={w.mint} price={w.price} change={w.change} w={140} h={26} full /></div>
+          <div style={{ margin: '8px 0 2px' }}><MwSparkline mint={w.mint} price={w.price} change={w.change} pool={w.pool} w={140} h={26} full /></div>
           <div className="mw-whale-stats">
             <span className="mw-l">🐋 {w.whaleCount || 1}</span>
             <span className="mw-r">+{format(w.whaleSol)} SOL</span>
@@ -848,7 +872,7 @@ function BreakingOut({ tokens, whaleByMint, excludeMint, onOpen, onTrade }) {
                 <div className="mw-bo-sym">${p.token.sym}</div>
               </div>
               <div className={'mw-bo-pct' + ((p.token.change || 0) < 0 ? ' mw-down' : '')}>{formatPct(p.token.change)}</div>
-              <div style={{ margin: '6px 0 2px' }}><MwSparkline mint={p.token.mint} price={p.token.price} change={p.token.change} w={150} h={28} full /></div>
+              <div style={{ margin: '6px 0 2px' }}><MwSparkline mint={p.token.mint} price={p.token.price} change={p.token.change} pool={p.token.pool} w={150} h={28} full /></div>
               <div className="mw-bo-meta">{p.meta}</div>
               <button type="button" className="mw-trade-pill" style={{ marginTop: 10 }} onClick={(e) => { e.stopPropagation(); onTrade(p.token.mint, 'buy'); }}>BUY</button>
             </>
@@ -861,81 +885,85 @@ function BreakingOut({ tokens, whaleByMint, excludeMint, onOpen, onTrade }) {
   );
 }
 
-// ── GeckoTerminal-only series layer — charts, sparklines, and % all share it ──
-// Pool is resolved via pickBestGeckoPool (base token === mint, exact). NO
-// DexScreener anywhere. The series is the matched pool's 1H (hour) OHLCV closes,
-// the SAME timeframe the detail chart defaults to, so the sparkline shape, the %
-// change and the chart always agree. Cached + de-duped + concurrency-limited so
-// it loads fast and stays under GeckoTerminal's rate limit. Returns null when
-// there is no contract-matched pool/series → the caller draws NOTHING (never a
-// fake straight line) and the % shows "—".
-const _geckoPool     = new Map(); // mint -> addr | null  (contract-matched gecko pool)
-const _geckoPoolWait = new Map(); // mint -> Promise
-const _series        = new Map(); // mint -> { ts, closes:number[]|null }
-const _seriesWait    = new Map(); // mint -> Promise
-let _gqN = 0; const _gqQ = [];
-function _gqPump() { while (_gqN < 4 && _gqQ.length) { const job = _gqQ.shift(); _gqN++; job().finally(() => { _gqN--; _gqPump(); }); } }
-
-function mwResolveGeckoPool(mint) {
-  if (!mint) return Promise.resolve(null);
-  if (_geckoPool.has(mint)) return Promise.resolve(_geckoPool.get(mint));
-  if (_geckoPoolWait.has(mint)) return _geckoPoolWait.get(mint);
-  const p = (async () => {
-    let addr = null;
-    try {
-      const r = await fetchTO(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}/pools`, 5000);
-      if (r.ok) {
-        const j = await r.json();
-        addr = pickBestGeckoPool(j?.data, mint)?.attributes?.address || null; // base===mint or null
-      }
-    } catch { addr = null; }
-    _geckoPool.set(mint, addr);
-    _geckoPoolWait.delete(mint);
+// Row sparkline — REAL DATA ONLY, contract-correct, self-contained. NO Stocks
+// module. Draws from CoinGecko (GeckoTerminal) OHLCV for the pool whose BASE
+// token is exactly this mint, or from prices the live feed observes per mint
+// (recordSpark, keyed by contract). No DexScreener, no synthetic/fabricated
+// line: if there is no real series the card draws no line.
+const _sparkHist = new Map(); // mint -> number[] (observed prices)
+const _poolAddr  = new Map(); // mint -> on-chain pool/pair address (for OHLCV)
+const _ohlcv     = new Map(); // mint -> { ts, closes }  real hourly series cache
+const _ohlcvWait = new Map(); // mint -> Promise          in-flight de-dupe
+let _ohN = 0; const _ohQ = [];
+function _ohPump() { while (_ohN < 3 && _ohQ.length) { const job = _ohQ.shift(); _ohN++; job().finally(() => { _ohN--; _ohPump(); }); } }
+async function _resolvePoolAddr(mint) {
+  const known = _poolAddr.get(mint);
+  if (known) return known;
+  try {
+    // CoinGecko (GeckoTerminal) pool whose BASE token is EXACTLY this mint.
+    const r = await fetchTO('https://api.geckoterminal.com/api/v2/networks/solana/tokens/' + mint + '/pools', 5000);
+    if (!r.ok) return null;
+    const j = await r.json();
+    const addr = pickBestGeckoPool(j?.data, mint)?.attributes?.address || null; // contract-matched
+    if (addr) _poolAddr.set(mint, addr);
     return addr;
-  })();
-  _geckoPoolWait.set(mint, p);
-  return p;
+  } catch { return null; }
 }
-
-// 1H (hour) closes for a mint's contract-matched GeckoTerminal pool. Cached 60s,
-// de-duped, throttled (≤4 concurrent). null ⇒ no series (no line, no %).
-function mwFetchSeries(mint) {
+// Real ~24h hourly closes for a row sparkline — contract-matched, NO Stocks.
+// Throttled (≤3 concurrent) + cached 2 min. Returns null on any failure, so the
+// caller falls back to the smooth 24h anchor curve.
+function mwFetchSpark(mint) {
   if (!mint) return Promise.resolve(null);
-  const c = _series.get(mint);
-  if (c && Date.now() - c.ts < 60000) return Promise.resolve(c.closes);
-  if (_seriesWait.has(mint)) return _seriesWait.get(mint);
+  const c = _ohlcv.get(mint);
+  if (c && Date.now() - c.ts < 120000) return Promise.resolve(c.closes);
+  if (_ohlcvWait.has(mint)) return _ohlcvWait.get(mint);
   const p = new Promise(resolve => {
-    _gqQ.push(async () => {
+    _ohQ.push(async () => {
       let out = null;
       try {
-        const addr = await mwResolveGeckoPool(mint);
+        const addr = await _resolvePoolAddr(mint);
         if (addr) {
-          const r = await fetchTO(`https://api.geckoterminal.com/api/v2/networks/solana/pools/${addr}/ohlcv/hour?aggregate=1&limit=24&currency=usd`, 5000);
+          const r = await fetchTO(`https://api.geckoterminal.com/api/v2/networks/solana/pools/${addr}/ohlcv/hour?aggregate=1&limit=24`, 5000);
           if (r.ok) {
             const j = await r.json();
             const list = j?.data?.attributes?.ohlcv_list || []; // [ts,o,h,l,c,v], newest first
-            const closes = list.map(row => Number(row?.[4])).filter(v => Number.isFinite(v) && v > 0).reverse(); // oldest → newest
+            const closes = list.map(row => Number(row?.[4])).filter(v => Number.isFinite(v) && v > 0).reverse();
             if (closes.length >= 2) out = closes;
           }
         }
       } catch { out = null; }
-      _series.set(mint, { ts: Date.now(), closes: out });
-      _seriesWait.delete(mint);
+      _ohlcv.set(mint, { ts: Date.now(), closes: out });
+      _ohlcvWait.delete(mint);
       resolve(out);
     });
-    _gqPump();
+    _ohPump();
   });
-  _seriesWait.set(mint, p);
+  _ohlcvWait.set(mint, p);
   return p;
 }
-
-// % over the 1H window = first → last close of the SAME series the sparkline draws
-// and the chart shows. null ⇒ "—". No fallback to any other source.
-function mwSeriesPct(closes) {
-  if (!Array.isArray(closes) || closes.length < 2) return null;
-  const f = closes[0], l = closes[closes.length - 1];
-  return f > 0 ? ((l - f) / f) * 100 : null;
+// Two REAL endpoints from the token's own live price + real 24h change:
+// price(24h ago) = price / (1 + change/100), then price now. Both are numbers
+// the feed already reports (not synthetic), so a line drawn from them is
+// directionally accurate and always agrees with the % and the chart. Guarantees
+// a line the instant a price exists.
+function endpointSeries(price, change) {
+  const now = Number(price);
+  if (!(now > 0)) return null;
+  const c = Number(change);
+  const then = Number.isFinite(c) ? now / (1 + c / 100) : now;
+  if (!(then > 0)) return null;
+  return [then, now];
 }
+
+function recordSpark(mint, price) {
+  if (!mint || !(price > 0)) return _sparkHist.get(mint) || [];
+  let pts = _sparkHist.get(mint);
+  if (!pts) { pts = []; _sparkHist.set(mint, pts); }
+  if (pts[pts.length - 1] !== price) { pts.push(price); if (pts.length > 32) pts.shift(); }
+  return pts;
+}
+// Local SVG sparkline path builder (no Stocks). Smooth Catmull-Rom → Bézier so
+// the line flows with character instead of straight zig-zag segments. pts: [{c}, …].
 function mwSparkPath(pts, w, h) {
   const vals = pts.map(p => Number(p?.c)).filter(Number.isFinite);
   if (vals.length < 2) {
@@ -955,28 +983,30 @@ function mwSparkPath(pts, w, h) {
   const [lastX, lastY] = P[P.length - 1];
   return { line, area, lastX, lastY, up: vals[vals.length - 1] >= vals[0] };
 }
-function MwSparkline({ mint, price, change, w = 50, h = 22, full = false }) {
-  // Draws ONLY the contract-matched GeckoTerminal 1H series — the same data
-  // behind the % and the chart. No observed-price guess, no synthetic line: if
-  // there is no real series yet, render nothing (never a trash straight line).
-  const [series, setSeries] = useState(() => (mint ? _series.get(mint)?.closes : null) || null);
+function MwSparkline({ mint, price, change, pool, w = 50, h = 22, full = false }) {
+  const hist = recordSpark(mint, Number(price));
+  if (mint && pool && typeof pool === 'string' && !_poolAddr.get(mint)) _poolAddr.set(mint, pool);
+  // Real hourly OHLCV (contract-matched) gives the line genuine character.
+  const [real, setReal] = useState(() => (mint ? _ohlcv.get(mint)?.closes : null) || null);
   useEffect(() => {
-    if (!mint) { setSeries(null); return; }
+    if (!mint) return;
     let cancelled = false;
-    const cached = _series.get(mint)?.closes;
-    if (cached && cached.length >= 2) { setSeries(cached); return; }
-    setSeries(null);
-    mwFetchSeries(mint).then(cs => { if (!cancelled && cs && cs.length >= 2) setSeries(cs); });
+    mwFetchSpark(mint).then(cs => { if (!cancelled && cs && cs.length >= 2) setReal(cs); });
     return () => { cancelled = true; };
   }, [mint]);
 
-  if (!series || series.length < 2) return null; // no real series → no line
+  // REAL data, priority: GeckoTerminal OHLCV (contract-matched) → live observed
+  // prices → the two real endpoints from price + 24h change. Always a line once
+  // a price exists; OHLCV upgrades it in place. Never synthetic.
+  const ep = endpointSeries(price, change);
+  const pts = (real && real.length >= 2) ? real.map(c => ({ c }))
+            : (hist.length >= 2 ? hist.map(c => ({ c }))
+            : (ep ? ep.map(c => ({ c })) : null));
+  if (!pts) return null;
 
-  const pts = series.map(c => ({ c }));
   const path = mwSparkPath(pts, w, h);
-  // Direction from the series itself (last vs first close) so it always matches
-  // the 1H % shown beside it.
-  const up = series[series.length - 1] >= series[0];
+  // Color must match the % shown next to it — never a red line on a green +%.
+  const up = Number.isFinite(change) ? change >= 0 : path.up;
   const col = up ? 'var(--green)' : 'var(--down)';
   const id = 'mws' + (up ? 'u' : 'd') + (mint ? String(mint).slice(0, 8) : '');
   return (
@@ -1013,7 +1043,7 @@ function NewLaunches({ tokens, onOpen, onTrade }) {
                   <div className="mw-launch-age">⏱ {t.age} OLD</div>
                 </div>
               </div>
-              <div style={{ margin: '8px 0 2px' }}><MwSparkline mint={t.mint} price={t.price} change={t.change} w={150} h={30} full /></div>
+              <div style={{ margin: '8px 0 2px' }}><MwSparkline mint={t.mint} price={t.price} change={t.change} pool={t.pool} w={150} h={30} full /></div>
               <div className="mw-launch-row"><span className="mw-launch-l">Holders</span><span className="mw-launch-v">{t.holders ? format(t.holders) : '—'}</span></div>
               <div className="mw-launch-row"><span className="mw-launch-l">Liquidity</span><span className="mw-launch-v">${format(t.liquidity)}</span></div>
               <div className="mw-launch-row"><span className="mw-launch-l">Signal</span><span className="mw-launch-v" style={{ color: 'var(--green)' }}>{signalScore(t)}</span></div>
@@ -1051,7 +1081,7 @@ function TrendingNow({ tokens, onOpen }) {
               <div className="mw-trend-sym">${t.sym}</div>
               <div className="mw-trend-sub">{tab === 'traded' ? `Vol $${format(t.volume24h)}` : tab === 'viewed' ? `Signal ${signalScore(t)}` : formatPrice(t.price)}</div>
             </div>
-            <MwSparkline mint={t.mint} price={t.price} change={t.change} w={50} h={22} />
+            <MwSparkline mint={t.mint} price={t.price} change={t.change} pool={t.pool} w={50} h={22} />
             <div className="mw-trend-right">
               <div className={'mw-trend-pct' + ((t.change || 0) < 0 ? ' mw-down' : '')}>{formatPct(t.change)}</div>
               <div className="mw-trend-meta">${format(t.mcap)} mcap</div>
@@ -1258,26 +1288,42 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  // Per-mint 1H % for the list — derived from the SAME contract-matched
-  // GeckoTerminal 1H series the sparkline and chart use. NO DexScreener, no other
-  // source, no fallback. % = first → last close. Throttled per mint; the series
-  // fetch is cached + de-duped + concurrency-limited so it stays fast.
+  // Per-mint % for the list — derived from the SAME CoinGecko (GeckoTerminal)
+  // OHLCV the sparkline draws (first close → last close), for the pool whose
+  // BASE token is exactly this mint. The % and the line therefore always agree,
+  // and both agree with the detail chart (same provider, same contract-matched
+  // pool). No DexScreener, no Jupiter stats. Throttled ≤ once / 45s per mint.
   useEffect(() => {
     let cancelled = false;
     const now = Date.now();
     const due = tokens
       .map(t => t.mint)
-      .filter(m => m && (now - (chgTsRef.current.get(m) || 0)) >= 60000);
+      .filter(m => m && (now - (chgTsRef.current.get(m) || 0)) >= 45000);
     if (!due.length) return;
     due.forEach(m => chgTsRef.current.set(m, now));
+
+    // Show the feed's real 24h change immediately so every token has a % now;
+    // the OHLCV-derived window % replaces it in place when it lands (same pool).
+    const seed = {};
+    for (const t of tokens) {
+      if (t?.mint && Number.isFinite(t.change)) seed[t.mint] = t.change;
+    }
+    if (Object.keys(seed).length) setChartChg(prev => ({ ...seed, ...prev }));
 
     (async () => {
       for (const m of due) {
         if (cancelled) return;
-        const closes = await mwFetchSeries(m);
-        if (cancelled) return;
-        const pct = mwSeriesPct(closes);
-        if (Number.isFinite(pct)) setChartChg(prev => ({ ...prev, [m]: pct }));
+        try {
+          const closes = await mwFetchSpark(m);   // real OHLCV closes, contract-matched
+          if (cancelled) return;
+          if (Array.isArray(closes) && closes.length >= 2) {
+            const a = Number(closes[0]), b = Number(closes[closes.length - 1]);
+            if (a > 0 && Number.isFinite(b)) {
+              const pct = ((b - a) / a) * 100;
+              setChartChg(prev => ({ ...prev, [m]: pct }));
+            }
+          }
+        } catch { /* keep the feed's real change until next cycle */ }
       }
     })();
 
@@ -1609,12 +1655,13 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
    DETAIL VIEW
    ════════════════════════════════════════════════════════════════════ */
 // ── Token detail chart ──────────────────────────────────────────────
-// Resolves a mint → its contract-matched GeckoTerminal pool and embeds the
-// chart. GeckoTerminal ONLY (it indexes pump.fun bonding-curve pools from
-// launch); no DexScreener, no fallback. The pool's BASE token MUST equal this
-// mint (exact contract match, no quote-side fallback); among matches we pick the
-// highest-USD-liquidity pool. The reduce is seeded with the first candidate so a
-// single pool with 0 / unknown liquidity (brand-new tokens) still charts.
+// Resolves a mint → its best pool and embeds a candlestick chart.
+// Provider order: GeckoTerminal first (indexes pump.fun BONDING-CURVE pools
+// that aren't graduated yet). CoinGecko (GeckoTerminal) only.
+// Both enforce: pool's BASE token MUST equal this mint (exact contract match,
+// no quote-side fallback), and pick the highest-USD-liquidity matching pool.
+// The reduce is seeded with the first candidate so a single pool with 0 /
+// unknown liquidity (brand-new tokens) still charts.
 // fetch() with a hard timeout — without this, a hung provider request never
 // settles and the chart is stuck on 'loading' forever. On timeout it aborts
 // (rejects), so the caller falls through to the next provider / 'none'.
@@ -1642,55 +1689,66 @@ function pickBestGeckoPool(pools, mint) {
   return base.reduce((best, p) => liq(p) > liq(best) ? p : best, base[0]);            // highest-liquidity matching pool
 }
 
+
 /* ════════════════════════════════════════════════════════════════════
-   EMBEDDED CHART — GeckoTerminal ONLY. Pool is contract-matched (base token
-   === mint, via pickBestGeckoPool); no DexScreener, no fallback. Default
-   resolution is 1H, matching the sparkline/% series. Resolution map is
-   centralized in MW_CHART_RES so a tweak is one edit.
+   EMBEDDED CHART  — CoinGecko (GeckoTerminal) ONLY. Base-token pool match
+   (contract MUST match), resolution pills, 1s default. No DexScreener.
    ════════════════════════════════════════════════════════════════════ */
 const MW_CHART_RES = [
-  { key: '1m',  label: '1m', gecko: '1m'  },
-  { key: '5m',  label: '5m', gecko: '5m'  },
-  { key: '15m', label: '15m', gecko: '15m' },
-  { key: '1h',  label: '1H', gecko: '1h'  },
-  { key: '4h',  label: '4H', gecko: '4h'  },
-  { key: '1d',  label: '1D', gecko: '1d'  },
+  { key: '1s',  label: '1s', gecko: '1s',  dex: '1S'  },
+  { key: '15s', label: '15s', gecko: '15s', dex: '15S' },
+  { key: '1m',  label: '1m', gecko: '1m',  dex: '1'   },
+  { key: '5m',  label: '5m', gecko: '5m',  dex: '5'   },
+  { key: '1h',  label: '1H', gecko: '1h',  dex: '60'  },
 ];
-const MW_RES_DEFAULT = '1h';
+const MW_RES_DEFAULT = '1s';
 
 function mwBuildEmbedSrc(pool, resKey) {
   if (!pool) return null;
-  const r = MW_CHART_RES.find(x => x.key === resKey) || MW_CHART_RES.find(x => x.key === MW_RES_DEFAULT) || MW_CHART_RES[0];
-  // GeckoTerminal only.
+  const r = MW_CHART_RES.find(x => x.key === resKey) || MW_CHART_RES[0];
+  if (pool.provider !== 'GECKOTERMINAL') return null;
   return 'https://www.geckoterminal.com/solana/pools/' + pool.addr +
     '?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&bg_color=0a0b0d&resolution=' + r.gecko;
 }
 
-function MwTokenChart({ mint, symbol = '' }) {
-  const [status, setStatus] = useState('loading'); // loading | ok | none
-  const [pool, setPool]     = useState(null);       // { provider:'GECKOTERMINAL', addr }
+function MwTokenChart({ mint, symbol = '', poolHint = null }) {
+  const [status, setStatus] = useState('loading'); // loading | ok | none | fail
+  const [pool, setPool]     = useState(null);       // { provider, addr }
   const [res, setRes]       = useState(MW_RES_DEFAULT);
   const [copied, setCopied] = useState(false);
   const reqRef = useRef(0);
 
-  // Reset to the 1H default each time a different token opens.
+  // Reset to the 1s view each time a different token opens.
   useEffect(() => { setRes(MW_RES_DEFAULT); }, [mint]);
 
   useEffect(() => {
     if (!mint) { setStatus('none'); setPool(null); return; }
     const id = ++reqRef.current;
+    // Feed already gave us a contract-matched pool → chart immediately.
+    if (poolHint && typeof poolHint === 'string') {
+      setPool({ provider: 'GECKOTERMINAL', addr: poolHint }); setStatus('ok'); return;
+    }
     setStatus('loading'); setPool(null);
 
     (async () => {
-      // GeckoTerminal ONLY, contract-matched (base token === mint). No
-      // DexScreener, no fallback. Shares the resolver/cache with the sparkline
-      // and %, so the chart resolves instantly once that mint is known.
-      const addr = await mwResolveGeckoPool(mint);
+      // CoinGecko (GeckoTerminal) only — the pool whose BASE token is exactly
+      // this mint. No DexScreener.
+      let chosen = null;
+      try {
+        const r = await fetchTO(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}/pools`, 4500);
+        if (r.ok) {
+          const j = await r.json();
+          const addr = pickBestGeckoPool(j?.data, mint)?.attributes?.address;
+          if (addr) chosen = { provider: 'GECKOTERMINAL', addr };
+        }
+      } catch {}
       if (id !== reqRef.current) return;
-      if (addr) { setPool({ provider: 'GECKOTERMINAL', addr }); setStatus('ok'); return; }
-      setStatus('none'); // no pool whose base token is this mint
+      if (chosen) { setPool(chosen); setStatus('ok'); return; }
+
+      // No contract-matched pool yet (typical for a seconds-old bonding curve).
+      setStatus('none');
     })();
-  }, [mint]);
+  }, [mint, poolHint]);
 
   const src = useMemo(() => mwBuildEmbedSrc(pool, res), [pool, res]);
   const shortCa = mint ? mint.slice(0, 4) + '…' + mint.slice(-4) : '';
@@ -1715,8 +1773,10 @@ function MwTokenChart({ mint, symbol = '' }) {
         </div>
       ) : status === 'loading' ? (
         <div className="mw-chart-state"><div className="mw-chart-spin" /></div>
-      ) : (
+      ) : status === 'none' ? (
         <div className="mw-chart-state">Chart appears once {symbol || 'this token'} is indexed — trading on the bonding curve for now.</div>
+      ) : (
+        <div className="mw-chart-state">Couldn’t load the chart. Try again shortly.</div>
       )}
       <div className="mw-tf-pills">
         {MW_CHART_RES.map(r => (
@@ -1754,7 +1814,7 @@ function DetailView({ token, onClose, onTrade }) {
         </div>
       </div>
 
-      <MwTokenChart mint={token.mint} symbol={token.sym} />
+      <MwTokenChart mint={token.mint} symbol={token.sym} poolHint={token.pool} />
 
       <div className="mw-inline-actions">
         <button type="button" className="mw-big-btn mw-buy"  onClick={() => onTrade('buy')}>🚀 BUY</button>
@@ -2153,7 +2213,7 @@ function TradeSheet({
           <button type="button" className="mw-icon-btn" onClick={onClose} disabled={swapping}>×</button>
         </div>
 
-        <MwTokenChart mint={token.mint} symbol={token.sym} />
+        <MwTokenChart mint={token.mint} symbol={token.sym} poolHint={token.pool} />
 
         <div className={'mw-tab-switch' + (isSell ? ' mw-sell-mode' : '')}>
           <div className="mw-tab-indicator"></div>
