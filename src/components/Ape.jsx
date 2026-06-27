@@ -57,6 +57,9 @@ const DUST_MIN_USD = 0.05; // owned-tab: hide positions worth less than this (am
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
 const FEE_BPS    = 300;
 const SOL_RESERVE = 0; // no reserve — MAX buy uses the full balance, nothing held back for ATA rent / fees
+// Polish-phase soft cap: the app's buy flow (manual + auto) won't let token
+// holdings exceed this USD value. Client-side guardrail only — NOT custody.
+const BURNER_CAP_USD = 100;
 
 const DEFAULT_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
 const DEFAULT_SELL_PRESETS = [25, 50, 100];
@@ -1360,6 +1363,18 @@ const AP_CSS = `
 .ap-btn-buy{background:var(--green);color:#04130d}
 .ap-btn-buy .arrow{color:#04130d}
 .ap-confirm{color:#04130d}
+/* ── completion: elements that were solid black (#0b0b0c) on the light theme,
+   which read as black-on-black until remapped to Solana accents ── */
+.ap-nav-wallet,.ap-watch-addbtn,.ap-field-chip .lg,.ap-chart-ca .cp,.ap-hero-ref .pct,.ap-filter-btn .ct{background:var(--purple);color:#fff;border-color:transparent}
+.ap-qamt.active,.ap-chip.on,.ap-chip.owned.on,.ap-hotwin-pill.on,.ap-disc-sort.on{background:#eef0f6;color:#0a0b0e;border-color:transparent}
+.ap-brand-glyph{background:linear-gradient(135deg,var(--purple),var(--green));color:#0a0b0e}
+.ap-balcard{background:linear-gradient(160deg,#1b1d29,#101120);border:1px solid var(--hairline2)}
+.ap-lure{background:linear-gradient(160deg,#17151f,#0f1016);border:1px solid var(--hairline2);color:var(--ink)}
+.ap-lure-intro{background:var(--green);color:#04130d}
+.wp-tab.on{border-bottom-color:var(--purple)}
+.ap-chart-state .sp{border-top-color:var(--purple)}
+.ap-av .age-dot,.ap-av .age-dot.fresh{box-shadow:0 0 0 2px #0a0b0e}
+.ap-addr{background:#1b1e23}
 `;
 
 function useApCSS() {
@@ -1384,10 +1399,22 @@ const BACKED_KEY     = 'lr_wallet_backed_v1';
    BURNER WALLET
    ============================================================ */
 function loadOrCreateKeypair() {
-  try {
-    const sk = localStorage.getItem(SK_KEY);
-    if (sk) return Keypair.fromSecretKey(bs58.decode(sk));
-  } catch (e) {}
+  let stored = null;
+  try { stored = localStorage.getItem(SK_KEY); } catch (e) {}
+  if (stored) {
+    try { return Keypair.fromSecretKey(bs58.decode(stored)); }
+    catch (e) {
+      // The stored key didn't parse. DON'T silently overwrite it — it may be
+      // recoverable (wrong encoding/length from another version) and clobbering
+      // it would strand any funds. Preserve it under a sidecar key, log loudly,
+      // and start a fresh burner so the app can still load.
+      try { if (!localStorage.getItem(SK_KEY + '_unparsed')) localStorage.setItem(SK_KEY + '_unparsed', stored); } catch (_) {}
+      try { console.error('[wallet] stored key did not parse; preserved at "' + SK_KEY + '_unparsed" and created a new burner. Recover the old one manually if it held funds.'); } catch (_) {}
+      const fresh = Keypair.generate();
+      try { localStorage.setItem(SK_KEY, bs58.encode(fresh.secretKey)); } catch (_) {}
+      return fresh;
+    }
+  }
   const kp = Keypair.generate();
   try { localStorage.setItem(SK_KEY, bs58.encode(kp.secretKey)); } catch (e) {}
   return kp;
@@ -2216,7 +2243,7 @@ function PresetsModal({ buyPresets, setBuyPresets, sellPresets, setSellPresets, 
       <div className="ap-sheet mini" onClick={e=>e.stopPropagation()}>
         <div className="ap-tshead">
           <button className="ap-x" onClick={onClose}>×</button>
-          <h3 style={{fontFamily:"'Inter',sans-serif",fontSize:26,margin:0,letterSpacing:'-.015em',color:'#0b0b0c'}}>Quick <em style={{fontStyle:'italic',color:'#86868b'}}>amounts</em></h3>
+          <h3 style={{fontFamily:"'Inter',sans-serif",fontSize:26,margin:0,letterSpacing:'-.015em',color:'#f4f5f7'}}>Quick <em style={{fontStyle:'italic',color:'#86868b'}}>amounts</em></h3>
           <div style={{fontFamily:'inherit',fontSize:10.5,color:'#86868b',marginTop:5,fontWeight:600}}>Tap to set · edit any time</div>
         </div>
         <div style={{padding:'14px 22px 22px'}}>
@@ -2244,7 +2271,7 @@ function FiltersModal({ wildOnly, setWildOnly, minLiq, setMinLiq, onClose }) {
       <div className="ap-sheet mini" onClick={e => e.stopPropagation()}>
         <div className="ap-tshead">
           <button className="ap-x" onClick={onClose}>×</button>
-          <h3 style={{fontFamily:"'Inter',sans-serif",fontSize:26,margin:0,letterSpacing:'-.015em',color:'#0b0b0c'}}>Filters</h3>
+          <h3 style={{fontFamily:"'Inter',sans-serif",fontSize:26,margin:0,letterSpacing:'-.015em',color:'#f4f5f7'}}>Filters</h3>
           <div style={{fontFamily:'inherit',fontSize:10.5,color:'#86868b',marginTop:5,fontWeight:600}}>Narrow the feed</div>
         </div>
         <div style={{padding:'8px 22px 22px'}}>
@@ -2269,7 +2296,7 @@ function FiltersModal({ wildOnly, setWildOnly, minLiq, setMinLiq, onClose }) {
   );
 }
 
-function WalletDrawer({ wallet, solBalance, solPrice, onWithdraw, onClose, busy, balances, resolveToken }) {
+function WalletDrawer({ wallet, solBalance, solPrice, onWithdraw, onClose, busy, balances, resolveToken, heldTokenUsd = 0, capUsd = 0 }) {
   const [tab, setTab] = useState('deposit');
   const [copied, setCopied] = useState(false);
   const [dest, setDest] = useState(''); const [amt, setAmt] = useState('');
@@ -2303,7 +2330,7 @@ function WalletDrawer({ wallet, solBalance, solPrice, onWithdraw, onClose, busy,
       <div className="ap-sheet" onClick={e=>e.stopPropagation()}>
         <div className="ap-tshead">
           <button className="ap-x" onClick={onClose}>×</button>
-          <h3 style={{fontFamily:"'Inter',sans-serif",fontSize:26,margin:0,letterSpacing:'-.015em',color:'#0b0b0c',display:'flex',alignItems:'center',gap:10}}><span style={{width:8,height:8,borderRadius:'50%',background:'#11b87f',boxShadow:'0 0 8px #11b87f'}} />Your <em style={{fontStyle:'italic',color:'#86868b'}}>wallet</em></h3>
+          <h3 style={{fontFamily:"'Inter',sans-serif",fontSize:26,margin:0,letterSpacing:'-.015em',color:'#f4f5f7',display:'flex',alignItems:'center',gap:10}}><span style={{width:8,height:8,borderRadius:'50%',background:'#11b87f',boxShadow:'0 0 8px #11b87f'}} />Your <em style={{fontStyle:'italic',color:'#86868b'}}>wallet</em></h3>
           <div style={{fontFamily:'inherit',fontSize:10.5,color:'#86868b',marginTop:5,fontWeight:600}}>lives on this device · signs instantly · your keys</div>
         </div>
         <div style={{padding:'14px 22px 22px'}}>
@@ -2311,6 +2338,11 @@ function WalletDrawer({ wallet, solBalance, solPrice, onWithdraw, onClose, busy,
             <div className="ap-ballbl">Ready to trade</div>
             <div className="ap-balval">{formatSol(sol)} <span className="u">SOL</span></div>
             <div className="ap-balusd">{solPrice > 0 ? '≈ $' + format(sol * solPrice) : ' '}</div>
+            {capUsd > 0 ? (
+              <div style={{ marginTop: 10, fontFamily: 'ui-monospace,Menlo,monospace', fontSize: 11, fontWeight: 700, color: heldTokenUsd >= capUsd ? '#f0425a' : '#86868b' }}>
+                Token cap · ${Math.round(heldTokenUsd)} / ${capUsd} held{heldTokenUsd >= capUsd ? ' · limit reached' : ''}
+              </div>
+            ) : null}
           </div>
           {ownedList.length > 0 && (
             <div className="ap-block">
@@ -2346,7 +2378,7 @@ function WalletDrawer({ wallet, solBalance, solPrice, onWithdraw, onClose, busy,
           <div className="ap-block">
             <div className="ap-block-l">Back up your wallet {wallet.backedUp ? '✓' : ''}</div>
             {!revealed ? (
-              <button className="ap-go" style={{background:'#f4f4f5',color:'#a67200',boxShadow:'none',border:'1px solid rgba(166,114,0,.30)'}} onClick={()=>{ setRevealed(true); wallet.markBackedUp(); }}>Show secret key</button>
+              <button className="ap-go" style={{background:'rgba(245,181,69,0.12)',color:'#f5b545',boxShadow:'none',border:'1px solid rgba(166,114,0,.30)'}} onClick={()=>{ setRevealed(true); wallet.markBackedUp(); }}>Show secret key</button>
             ) : (
               <>
                 <div className="ap-secret">{wallet.exportSecret()}</div>
@@ -2460,7 +2492,7 @@ function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPr
             <span className="ap-field-l">{isBuy?'You pay':'You sell'}</span>
             <span className="ap-field-bal">
               {isBuy ? <>Wallet: <b>{formatSol((solBalance&&solBalance.uiAmount)||0)} SOL</b></> : <>You own: <b>{formatTokens(ownedUi)} ${token.sym}</b></>}
-              {isBuy && availSol > 0 ? <button className="ap-field-max" onClick={()=>setAmount(String(Math.floor(availSol*10000)/10000))}>MAX</button> : null}
+              {isBuy && availSol > 0 ? <button className="ap-field-max" onClick={()=>setAmount(String(Math.max(0, Math.floor((availSol / 1.03 - 0.003) * 10000) / 10000)))}>MAX</button> : null}
             </span>
           </div>
           <div className="ap-field-row2">
@@ -3032,8 +3064,38 @@ export default function Ape({ mainWalletPubkey }) {
   }, [wallet.keypair, wallet.publicKey, tradeConnection, walletStr, mainWalletPubkey, refreshSol, refreshOneToken]);
 
   // FIX 5: result.sig (ape-helpers returns { confirmed, sig })
+  // ── Burner token cap (soft, client-side guardrail) ────────────────
+  // Total non-SOL token holdings in USD. Gates every buy entry point so the
+  // burner can't accumulate more than BURNER_CAP_USD of tokens through this
+  // app. Checked at buy time only — it never force-sells, and (being client
+  // code) it is not a custody control.
+  const heldTokenUsd = useMemo(() => {
+    let sum = 0;
+    for (const mint of Object.keys(balances)) {
+      if (mint === SOL_MINT) continue;
+      const bal = balances[mint];
+      if (!bal || !(bal.uiAmount > 0)) continue;
+      const tok = recent.find(t => t.mint === mint) || resolveToken(mint);
+      const px = tok && tok.price > 0 ? tok.price : 0;
+      sum += bal.uiAmount * px;
+    }
+    return sum;
+  }, [balances, recent, resolveToken]);
+  const heldUsdRef = useRef(heldTokenUsd);
+  useEffect(() => { heldUsdRef.current = heldTokenUsd; }, [heldTokenUsd]);
+  // Returns a user-facing message if a buy of `solAmount` SOL is blocked, else null.
+  const capBlock = useCallback((solAmount) => {
+    const held = heldUsdRef.current || 0;
+    const buyUsd = (Number(solAmount) || 0) * (solPriceRef.current || 0);
+    if (held >= BURNER_CAP_USD) return 'Burner cap reached — holding ≈ $' + held.toFixed(0) + ' of a $' + BURNER_CAP_USD + ' max. Sell or withdraw to buy more.';
+    if (buyUsd > 0 && held + buyUsd > BURNER_CAP_USD + 1) return 'That buy (≈ $' + buyUsd.toFixed(0) + ') would push you over the $' + BURNER_CAP_USD + ' burner cap. Try a smaller size.';
+    return null;
+  }, []);
+
   const onApe = useCallback(async (token) => {
     if (busyMints[token.mint]) return;
+    const capErr = capBlock(quickAmount);
+    if (capErr) { pushToast({ type: 'error', em: '⊘', body: capErr }); return; }
     setBusyMints(prev => ({ ...prev, [token.mint]: true }));
     try {
       const params = buildBuyParams(quickAmount);
@@ -3049,13 +3111,18 @@ export default function Ape({ mainWalletPubkey }) {
       });
     } catch (e) { pushToast({ type: 'error', em: '⊘', body: friendlyError(e) }); }
     finally { setBusyMints(prev => { const n = { ...prev }; delete n[token.mint]; return n; }); }
-  }, [busyMints, quickAmount, executeSwap, pushToast, walletStr]);
+  }, [busyMints, quickAmount, executeSwap, pushToast, walletStr, capBlock]);
 
   const onSell = useCallback((token) => { setTradeToken(token); setTradeMode('sell'); }, []);
   const onRowClick = useCallback((token) => { setTradeToken(token); setTradeMode('buy'); }, []);
 
   // FIX 6: result.sig
   const onTradeConfirm = useCallback(async ({ mode, swapParams, token }) => {
+    if (mode === 'buy') {
+      const solAmt = Number(swapParams && swapParams.tradeLamports || 0) / 1e9;
+      const capErr = capBlock(solAmt);
+      if (capErr) { pushToast({ type: 'error', em: '⊘', body: capErr }); return; }
+    }
     const result = await executeSwap({ mode, token, swapParams });
     setConfettiAt(Date.now());
     setTradeToken(null);
@@ -3067,7 +3134,7 @@ export default function Ape({ mainWalletPubkey }) {
         { type: 'tweet', text: (mode === 'buy' ? 'Just aped into $' : 'Just sold $') + token.sym + ' on Nexus\n\n', url: shareUrlPath(walletStr), label: 'Share' },
       ] : [],
     });
-  }, [executeSwap, pushToast, walletStr]);
+  }, [executeSwap, pushToast, walletStr, capBlock]);
 
   const onWithdraw = useCallback(async (dest, amount) => {
     if (!dest || !(amount > 0)) return;
@@ -3076,11 +3143,11 @@ export default function Ape({ mainWalletPubkey }) {
       const conn = getTradeConn();
       const lamports = Math.round(amount * 1e9);
       const ix = SystemProgram.transfer({ fromPubkey: wallet.publicKey, toPubkey: new PublicKey(dest), lamports });
-      const { blockhash } = await conn.getLatestBlockhash('confirmed');
+      const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash('confirmed');
       const msg = new TransactionMessage({ payerKey: wallet.publicKey, recentBlockhash: blockhash, instructions: [ix] }).compileToV0Message();
       const tx = new VersionedTransaction(msg); tx.sign([wallet.keypair]);
       const sig = await conn.sendTransaction(tx);
-      await conn.confirmTransaction(sig, 'confirmed');
+      await conn.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'confirmed');
       setTimeout(refreshSol, 1000);
       pushToast({ type: 'success', em: '✓', body: <>Withdrew <b>{amount} SOL</b></>, actions: [{ type: 'link', href: 'https://solscan.io/tx/' + sig, label: 'TX' }] });
       setShowWallet(false);
@@ -3089,7 +3156,7 @@ export default function Ape({ mainWalletPubkey }) {
   }, [wallet, refreshSol, pushToast]);
 
   const auto = useAutoTrade({
-    recentTokens: recent, solBalance, solPrice, balances, executeSwap, pushToast,
+    recentTokens: recent, solBalance, solPrice, balances, executeSwap, pushToast, heldTokenUsd,
   });
 
   const filtered = useMemo(() => {
@@ -3229,6 +3296,9 @@ export default function Ape({ mainWalletPubkey }) {
           ))}
           <button className="ap-qedit" onClick={() => setShowPresets(true)} title="Edit amounts">✎</button>
           <span className="ap-qfast"><span className="d" /><span>2-SEC TRADE</span></span>
+          <span className="ap-qfast" title="Burner token cap (polish phase)" style={{ marginLeft: 'auto', color: heldTokenUsd >= BURNER_CAP_USD ? 'var(--red)' : 'var(--ink2)' }}>
+            <span>CAP ${Math.round(heldTokenUsd)} / ${BURNER_CAP_USD}</span>
+          </span>
         </div>
 
         <div className="ap-page">
@@ -3383,7 +3453,7 @@ export default function Ape({ mainWalletPubkey }) {
       )}
       {showPresets && (<PresetsModal buyPresets={buyPresets} setBuyPresets={setBuyPresets} sellPresets={sellPresets} setSellPresets={setSellPresets} onClose={() => setShowPresets(false)} />)}
       {showFilters && (<FiltersModal wildOnly={wildOnly} setWildOnly={setWildOnly} minLiq={minLiq} setMinLiq={setMinLiq} onClose={() => setShowFilters(false)} />)}
-      {showWallet && (<WalletDrawer wallet={wallet} solBalance={solBalance} solPrice={solPrice} onWithdraw={onWithdraw} onClose={() => setShowWallet(false)} busy={withdrawBusy} balances={balances} resolveToken={resolveToken} />)}
+      {showWallet && (<WalletDrawer wallet={wallet} solBalance={solBalance} solPrice={solPrice} onWithdraw={onWithdraw} onClose={() => setShowWallet(false)} busy={withdrawBusy} balances={balances} resolveToken={resolveToken} heldTokenUsd={heldTokenUsd} capUsd={BURNER_CAP_USD} />)}
       <StatsPanel open={showStats} onClose={() => setShowStats(false)} wallet={wallet} mainWalletPubkey={mainWalletPubkey} solPrice={solPrice} initialTab={statsTab} />
       <AutoPanel open={showAuto} onClose={() => setShowAuto(false)} auto={auto} solBalance={solBalance} solPrice={solPrice} />
       <WatchedWallets open={showWatch} onClose={() => setShowWatch(false)} solPrice={solPrice} resolveToken={resolveToken} />
@@ -3410,7 +3480,7 @@ export default function Ape({ mainWalletPubkey }) {
             const dx = (Math.random() - 0.5) * 600;
             const dy = 300 + Math.random() * 200;
             const dr = (Math.random() - 0.5) * 1200;
-            const c = ['#16c08a', '#0b0b0c', '#a67200', '#2f6bff', '#3ee07f'][i % 5];
+            const c = ['#1ad98a', '#8b7bff', '#f5b545', '#4d8bff', '#14f195'][i % 5];
             return <span className="ap-cpiece" key={i} style={{ '--dx': dx + 'px', '--dy': dy + 'px', '--dr': dr + 'deg', background: c, animationDelay: (Math.random() * 0.15) + 's' }} />;
           })}
         </div>
@@ -3667,8 +3737,8 @@ function StatsPanel({ open, onClose, wallet, mainWalletPubkey, solPrice, initial
     <div className="wp-root">
       <div className="wp-head">
         <div style={{display:'flex',alignItems:'center',gap:11,cursor:'pointer'}} onClick={onClose}>
-          <div style={{width:30,height:30,borderRadius:10,background:'#0b0b0c',display:'grid',placeItems:'center',fontFamily:"'Inter',sans-serif",fontStyle:'italic',fontSize:17,color:'#fff'}}>A</div>
-          <span style={{fontFamily:"'Inter',sans-serif",fontSize:22,letterSpacing:'-.015em',color:'#0b0b0c'}}>Ape <em style={{fontStyle:'italic',color:'#86868b'}}>· early</em></span>
+          <div style={{width:30,height:30,borderRadius:10,background:'linear-gradient(135deg,#8b7bff,#1ad98a)',display:'grid',placeItems:'center',fontFamily:"'Inter',sans-serif",fontStyle:'italic',fontSize:17,color:'#fff'}}>A</div>
+          <span style={{fontFamily:"'Inter',sans-serif",fontSize:22,letterSpacing:'-.015em',color:'#f4f5f7'}}>Ape <em style={{fontStyle:'italic',color:'#86868b'}}>· early</em></span>
         </div>
         <div className="wp-headlbl"><span className="d" /><span>STATS · PERSONAL</span></div>
         <button className="wp-close" onClick={onClose}>×</button>
@@ -3726,7 +3796,7 @@ function loadEnabled() { try { return localStorage.getItem(AT_ENABLED_KEY) === '
 function saveEnabled(v) { try { localStorage.setItem(AT_ENABLED_KEY, v ? '1' : '0'); } catch (e) {} }
 
 function useAutoTrade(deps) {
-  const { recentTokens, solBalance, solPrice, balances, executeSwap, pushToast } = deps;
+  const { recentTokens, solBalance, solPrice, balances, executeSwap, pushToast, heldTokenUsd } = deps;
   const initialDaily = useMemo(() => loadDailyState() || {}, []);
   const [enabled, setEnabledState] = useState(() => loadEnabled());
   const [custom, setCustom] = useState(() => loadCustomSettings());
@@ -3737,6 +3807,7 @@ function useAutoTrade(deps) {
   const [paused, setPaused] = useState(initialDaily.paused || false);
   const seenMintsRef = useRef(new Set());
   const inflightRef = useRef(new Set());
+  const cappedRef = useRef(false);
   const tradeStampsRef = useRef([]);
   const positionsRef = useRef(positions);
   useEffect(() => { positionsRef.current = positions; }, [positions]);
@@ -3796,12 +3867,20 @@ function useAutoTrade(deps) {
     const now = Date.now();
     tradeStampsRef.current = tradeStampsRef.current.filter(t => now - t < 60 * 60 * 1000);
     if (tradeStampsRef.current.length >= effective.maxPerHour) return;
-    if (positionsRef.current.length >= effective.maxOpen) return;
+    if (positionsRef.current.length + inflightRef.current.size >= effective.maxOpen) return;
+
+    // Burner token cap — hold, don't buy, once holdings would exceed the cap.
+    const perTradeUsd = effective.perTradeSol * (solPrice || 0);
+    if (heldTokenUsd >= BURNER_CAP_USD || (perTradeUsd > 0 && heldTokenUsd + perTradeUsd > BURNER_CAP_USD + 1)) {
+      if (!cappedRef.current) { cappedRef.current = true; pushLog('info', 'At $' + BURNER_CAP_USD + ' burner cap — holding, not buying'); }
+      return;
+    }
+    cappedRef.current = false;
 
     // Not enough SOL for even one trade → stop the engine and tell the user
     // once, rather than scanning the whole feed and failing every token.
     const availSol = (solBalance && solBalance.uiAmount) || 0;
-    if (availSol < effective.perTradeSol) {
+    if (availSol < effective.perTradeSol * 1.03 + 0.003) {
       setEnabled(false);
       pushLog('error', 'Auto-trade stopped — burner out of SOL');
       pushToast && pushToast({ type: 'error', em: '◎', body: <>Out of SOL — auto-trade stopped. <b>Add funds to your burner</b> to keep going.</>, duration: 9000 });
@@ -3827,7 +3906,7 @@ function useAutoTrade(deps) {
       const r = riskRead(tk);
       if (r.score < effective.minVibe) continue;
       if (!(tk.price > 0)) continue;
-      if (((solBalance && solBalance.uiAmount) || 0) < effective.perTradeSol) continue;
+      if (((solBalance && solBalance.uiAmount) || 0) < effective.perTradeSol * 1.03 + 0.003) continue;
 
       seenMintsRef.current.add(tk.mint);
       inflightRef.current.add(tk.mint);
@@ -3868,7 +3947,7 @@ function useAutoTrade(deps) {
       })();
       break;
     }
-  }, [enabled, paused, recentTokens, effective, solBalance, executeSwap, pushLog, pushToast, setPositions]);
+  }, [enabled, paused, recentTokens, effective, solBalance, solPrice, heldTokenUsd, executeSwap, pushLog, pushToast, setPositions]);
 
   // Exit loop — TP/SL/timeout.
   // Reads positions/balances/solPrice from refs so the interval is built once
@@ -3979,8 +4058,8 @@ function AutoPanel({ open, onClose, auto, solBalance, solPrice }) {
     <div className="wa-root">
       <div className="wa-head">
         <div style={{display:'flex',alignItems:'center',gap:11,cursor:'pointer'}} onClick={onClose}>
-          <div style={{width:30,height:30,borderRadius:10,background:'#0b0b0c',display:'grid',placeItems:'center',fontFamily:"'Inter',sans-serif",fontStyle:'italic',fontSize:17,color:'#fff'}}>A</div>
-          <span style={{fontFamily:"'Inter',sans-serif",fontSize:22,letterSpacing:'-.015em',color:'#0b0b0c'}}>Ape <em style={{fontStyle:'italic',color:'#86868b'}}>· auto-trade</em></span>
+          <div style={{width:30,height:30,borderRadius:10,background:'linear-gradient(135deg,#8b7bff,#1ad98a)',display:'grid',placeItems:'center',fontFamily:"'Inter',sans-serif",fontStyle:'italic',fontSize:17,color:'#fff'}}>A</div>
+          <span style={{fontFamily:"'Inter',sans-serif",fontSize:22,letterSpacing:'-.015em',color:'#f4f5f7'}}>Ape <em style={{fontStyle:'italic',color:'#86868b'}}>· auto-trade</em></span>
         </div>
         <div className={'wa-stat-pill ' + (paused ? 'paused' : enabled ? 'on' : 'off')}>
           {enabled && !paused ? <><span className="d" /><span>RUNNING</span></> : paused ? <span>PAUSED · CAP HIT</span> : <span>OFF</span>}
