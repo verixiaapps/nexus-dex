@@ -1395,6 +1395,52 @@ const AP_CSS = `
 .ap-mode-tabs.sell .ap-mode-tab.active{color:#1a0608}
 .ap-preset.on{background:#edeff2;color:#0a0b0e}
 .ap-preset.on.sell{background:var(--red);color:#1a0608}
+
+/* ============================================================
+   V2 DESIGN SYSTEM — premium pass over the first-light theme.
+   Appended last; wins on equal specificity. Tokens + a few
+   structural refinements (flex rows, risk meter, safety bar,
+   trust strip, sunrise rule).
+   ============================================================ */
+.ap-root{
+  --green:#16d196; --greent:#16d196; --cyan:#16d196; --sky:#16d196; --mint:#16d196; --dep:#16d196;
+  --red:#ff4d6a; --pink:#ff4d6a;
+  --ember1:#ffb020; --ember2:#ff6a2c;
+}
+/* top trust strip */
+.ap-topstrip{display:flex;align-items:center;gap:10px;padding:8px 16px;
+  background:linear-gradient(180deg,#0e1014,#0a0b0e);border-bottom:1px solid var(--hairline)}
+.ap-topstrip .pf{display:flex;align-items:center;gap:6px;font-family:'JetBrains Mono',monospace;
+  font-size:10.5px;font-weight:600;color:var(--ink2);white-space:nowrap}
+.ap-topstrip .pf .ico{width:15px;height:15px;border-radius:5px;display:grid;place-items:center;
+  background:linear-gradient(140deg,#4dd2e0,#2ba7c9);font-size:9px;color:#04161a;font-weight:800}
+.ap-topstrip .pf b{color:var(--ink);font-weight:700}
+.ap-topstrip .aud{margin-left:auto;display:flex;align-items:center;gap:5px;font-family:'JetBrains Mono',monospace;
+  font-size:9.5px;font-weight:600;color:var(--ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ap-topstrip .aud .shield{flex:0 0 auto;width:12px;height:12px;color:var(--green)}
+.ap-topstrip .aud b{color:var(--green);font-weight:700}
+/* sunrise rule under the nav */
+.ap-sunrise{height:1.5px;background:linear-gradient(90deg,transparent,#ff6a2c 30%,#ffb020 50%,#ff6a2c 70%,transparent)}
+/* quick-buy chips: squarer, mono */
+.ap-qamt{border-radius:10px}
+/* avatars: subtle depth */
+.ap-av{box-shadow:inset 0 1px 0 rgba(255,255,255,.2),inset 0 -2px 6px rgba(0,0,0,.32)}
+/* rows → flex (robust across viewports; lets the risk meter live under the name) */
+.ap-row{display:flex;align-items:center;gap:12px}
+.ap-row-tk{flex:1;min-width:0}
+/* segmented risk meter (replaces the text pill; visible on mobile) */
+.ap-riskmeter{display:inline-flex;align-items:center;gap:2px;margin-top:7px}
+.ap-riskmeter i{width:13px;height:3px;border-radius:2px;background:var(--border-hi)}
+.ap-riskmeter .lab{font-family:'JetBrains Mono',monospace;font-size:8.5px;font-weight:700;
+  letter-spacing:.06em;text-transform:uppercase;margin-left:6px}
+.ap-riskmeter.low i.on{background:var(--green)} .ap-riskmeter.low .lab{color:var(--green)}
+.ap-riskmeter.med i.on{background:var(--ember1)} .ap-riskmeter.med .lab{color:var(--ember1)}
+.ap-riskmeter.high i.on{background:var(--red)} .ap-riskmeter.high .lab{color:var(--red)}
+/* sheet safety bar */
+.ap-safety-bar{height:5px;border-radius:3px;background:rgba(255,255,255,.06);overflow:hidden;margin:10px 0}
+.ap-safety-bar i{display:block;height:100%;border-radius:3px;background:linear-gradient(90deg,#0fae7d,var(--green))}
+.ap-safety-bar i.amber{background:linear-gradient(90deg,var(--ember2),var(--ember1))}
+.ap-safety-bar i.red{background:linear-gradient(90deg,#cc3450,var(--red))}
 `;
 
 function useApCSS() {
@@ -2133,7 +2179,12 @@ function OpenPositionsStrip({ walletStr, solPrice, onOpenStats }) {
     return positions.map(p => {
       const px = prices[p.mint] || 0;
       const currentValueSol = (p.open_tokens * px) / solPrice;
-      const costBasisSol = Math.max(0, (p.sol_in || 0) - (p.sol_out || 0));
+      // Cost basis of the tokens still open = avg buy price (SOL/token) × open
+      // amount. True unrealized P&L on the remaining position; correct after
+      // partial sells. Falls back to net SOL-in-trade if avg price is absent.
+      const costBasisSol = (p.avg_buy_price_sol || 0) > 0
+        ? p.avg_buy_price_sol * (p.open_tokens || 0)
+        : Math.max(0, (p.sol_in || 0) - (p.sol_out || 0));
       const unrealizedSol = currentValueSol - costBasisSol;
       const unrealizedPct = costBasisSol > 0 ? (unrealizedSol / costBasisSol) * 100 : 0;
       return { ...p, unrealizedSol, unrealizedPct, hasPrice: px > 0 };
@@ -2173,7 +2224,15 @@ const SpecimenRow = React.memo(function SpecimenRow({ token, ageMsLive, owned, c
   let pnl = null;
   let pnlMiss = null; // why P&L can't show, in owned mode (diagnostic)
   if (costBasis && solPrice > 0 && (token.price || 0) > 0) {
-    const costSol = Math.max(0, (costBasis.sol_in || 0) - (costBasis.sol_out || 0));
+    // Cost basis of the tokens STILL HELD = avg buy price (SOL/token) × held
+    // amount. This is true unrealized P&L on the open position and is correct
+    // after partial sells, where sol_in − sol_out would fold realized proceeds
+    // into the number. Fall back to net SOL-in-trade only if avg price is
+    // missing from the ledger.
+    const avgBuy = costBasis.avg_buy_price_sol || 0;
+    const costSol = avgBuy > 0
+      ? avgBuy * ownedUi
+      : Math.max(0, (costBasis.sol_in || 0) - (costBasis.sol_out || 0));
     if (costSol > 0) {
       const curValSol = (ownedUi * token.price) / solPrice;
       const gainSol = curValSol - costSol;
@@ -2190,6 +2249,8 @@ const SpecimenRow = React.memo(function SpecimenRow({ token, ageMsLive, owned, c
   }
   const ape = (e) => { e.stopPropagation(); if (busy) return; onApe(token); };
   const sell = (e) => { e.stopPropagation(); if (busy) return; onSell(token); };
+  // Segmented risk meter: more bars = safer (higher safety score). Tier sets color.
+  const riskDots = Math.max(1, Math.min(5, Math.round((r.score / RISK_CEIL) * 5)));
   return (
     <div className={'ap-row' + (isFresh ? ' fresh' : '') + (ownedMode ? ' owned' : '')} onClick={()=>onOpen(token)}>
       <div className="ap-row-tk">
@@ -2206,10 +2267,13 @@ const SpecimenRow = React.memo(function SpecimenRow({ token, ageMsLive, owned, c
             <span className="ghost">{formatMoney(token.liquidity)} liq · {token.holders > 0 ? Math.round(token.holders).toLocaleString() : 0} holders</span>
             {ownedMode ? <><span className="dot">·</span><span className="ownedusd">{formatTokens(ownedUi)} · {formatUsdAbs(ownedUsd)}</span></> : null}
           </div>
+          <div className={'ap-riskmeter ' + r.tier}>
+            {[0,1,2,3,4].map(d => <i key={d} className={d < riskDots ? 'on' : ''} />)}
+            <span className="lab">{r.tier === 'low' ? 'low risk' : r.tier === 'med' ? 'medium risk' : 'high risk'}</span>
+          </div>
         </div>
       </div>
       <MiniSparkline token={token} change={token.change} />
-      <span className={'ap-pill ' + r.tier}><span className="d" />{r.tier === 'low' ? 'low' : r.tier === 'med' ? 'medium' : 'high risk'}</span>
       {(ownedMode && pnl) ? (
         <div className={'ap-row-pnl' + (pnl.up ? ' up' : pnl.dn ? ' dn' : '')}>
           <span className="pct">{(pnl.pct >= 0 ? '+' : '') + pnl.pct.toFixed(1)}%</span>
@@ -2243,6 +2307,7 @@ const SpecimenRow = React.memo(function SpecimenRow({ token, ageMsLive, owned, c
   && prev.solPrice === next.solPrice
   && ((prev.costBasis && prev.costBasis.sol_in) || 0) === ((next.costBasis && next.costBasis.sol_in) || 0)
   && ((prev.costBasis && prev.costBasis.sol_out) || 0) === ((next.costBasis && next.costBasis.sol_out) || 0)
+  && ((prev.costBasis && prev.costBasis.avg_buy_price_sol) || 0) === ((next.costBasis && next.costBasis.avg_buy_price_sol) || 0)
   && prev.quickAmount === next.quickAmount
   && prev.ownedMode === next.ownedMode
   && prev.isFresh === next.isFresh
@@ -2344,7 +2409,10 @@ function WalletDrawer({ wallet, solBalance, solPrice, onWithdraw, onClose, busy,
     return () => { alive = false; };
   }, [tab, addr]);
   const copy = () => { try { navigator.clipboard.writeText(addr); setCopied(true); setTimeout(()=>setCopied(false), 1500); } catch (e) {} };
-  const maxOut = Math.max(0, sol - 0.001);
+  // Withdraw everything — nothing reserved. The only amount left behind is the
+  // network fee the transfer itself must pay (a full-balance transfer can't
+  // cover its own fee), not a discretionary buffer.
+  const maxOut = Math.max(0, sol - 0.00001);
   return (
     <div className="ap-overlay" onClick={onClose}>
       <div className="ap-sheet" onClick={e=>e.stopPropagation()}>
@@ -2359,8 +2427,8 @@ function WalletDrawer({ wallet, solBalance, solPrice, onWithdraw, onClose, busy,
             <div className="ap-balval">{formatSol(sol)} <span className="u">SOL</span></div>
             <div className="ap-balusd">{solPrice > 0 ? '≈ $' + format(sol * solPrice) : ' '}</div>
             {capUsd > 0 ? (
-              <div style={{ marginTop: 10, fontFamily: 'ui-monospace,Menlo,monospace', fontSize: 11, fontWeight: 700, color: heldTokenUsd >= capUsd ? '#f0425a' : '#86868b' }}>
-                Token cap · ${Math.round(heldTokenUsd)} / ${capUsd} held{heldTokenUsd >= capUsd ? ' · limit reached' : ''}
+              <div style={{ marginTop: 10, fontFamily: 'ui-monospace,Menlo,monospace', fontSize: 11, fontWeight: 700, color: '#86868b' }}>
+                Tokens held · ${Math.round(heldTokenUsd)}
               </div>
             ) : null}
           </div>
@@ -2479,6 +2547,7 @@ function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPr
             <span className="ap-safety-l">Safety read</span>
             <span className={'ap-safety-s ' + tierClass}>{read.score}<span className="of">/{RISK_CEIL}</span></span>
           </div>
+          <div className="ap-safety-bar"><i className={tierClass} style={{ width: Math.round((read.score / RISK_CEIL) * 100) + '%' }} /></div>
           <div className={'ap-safety-verdict ' + tierClass}>{verdict}</div>
           <div className="ap-safety-chks">{read.knowns.map((c,i)=><span key={i} className={'ap-chk '+c[0]}>{c[1]}</span>)}</div>
         </div>
@@ -2512,7 +2581,7 @@ function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPr
             <span className="ap-field-l">{isBuy?'You pay':'You sell'}</span>
             <span className="ap-field-bal">
               {isBuy ? <>Wallet: <b>{formatSol((solBalance&&solBalance.uiAmount)||0)} SOL</b></> : <>You own: <b>{formatTokens(ownedUi)} ${token.sym}</b></>}
-              {isBuy && availSol > 0 ? <button className="ap-field-max" onClick={()=>setAmount(String(Math.max(0, Math.floor((availSol / 1.03 - 0.003) * 10000) / 10000)))}>MAX</button> : null}
+              {isBuy && availSol > 0 ? <button className="ap-field-max" onClick={()=>setAmount(String(Math.max(0, Math.floor((availSol / 1.03) * 10000) / 10000)))}>MAX</button> : null}
             </span>
           </div>
           <div className="ap-field-row2">
@@ -2709,11 +2778,11 @@ export default function Ape({ mainWalletPubkey }) {
         const map = {};
         for (const p of (d.positions || [])) {
           if (!p || !p.mint) continue;
-          map[p.mint] = { sol_in: Number(p.sol_in) || 0, sol_out: Number(p.sol_out) || 0, open_tokens: Number(p.open_tokens) || 0, open: p.open !== false };
+          map[p.mint] = { sol_in: Number(p.sol_in) || 0, sol_out: Number(p.sol_out) || 0, open_tokens: Number(p.open_tokens) || 0, open: p.open !== false, avg_buy_price_sol: Number(p.avg_buy_price_sol) || 0 };
         }
         setPnlBasis(prev => {
           const keys = Object.keys(map);
-          if (keys.length === Object.keys(prev).length && keys.every(k => prev[k] && prev[k].sol_in === map[k].sol_in && prev[k].sol_out === map[k].sol_out && prev[k].open_tokens === map[k].open_tokens && prev[k].open === map[k].open)) return prev;
+          if (keys.length === Object.keys(prev).length && keys.every(k => prev[k] && prev[k].sol_in === map[k].sol_in && prev[k].sol_out === map[k].sol_out && prev[k].open_tokens === map[k].open_tokens && prev[k].open === map[k].open && prev[k].avg_buy_price_sol === map[k].avg_buy_price_sol)) return prev;
           return map;
         });
       } catch (e) {}
@@ -3084,11 +3153,10 @@ export default function Ape({ mainWalletPubkey }) {
   }, [wallet.keypair, wallet.publicKey, tradeConnection, walletStr, mainWalletPubkey, refreshSol, refreshOneToken]);
 
   // FIX 5: result.sig (ape-helpers returns { confirmed, sig })
-  // ── Burner token cap (soft, client-side guardrail) ────────────────
-  // Total non-SOL token holdings in USD. Gates every buy entry point so the
-  // burner can't accumulate more than BURNER_CAP_USD of tokens through this
-  // app. Checked at buy time only — it never force-sells, and (being client
-  // code) it is not a custody control.
+  // ── Token holdings (display only) ─────────────────────────────────
+  // Total non-SOL token holdings in USD, shown in the header and wallet
+  // drawer. No cap is enforced anywhere — buys are never gated or blocked on
+  // accumulated value.
   const heldTokenUsd = useMemo(() => {
     let sum = 0;
     for (const mint of Object.keys(balances)) {
@@ -3103,14 +3171,10 @@ export default function Ape({ mainWalletPubkey }) {
   }, [balances, recent, resolveToken]);
   const heldUsdRef = useRef(heldTokenUsd);
   useEffect(() => { heldUsdRef.current = heldTokenUsd; }, [heldTokenUsd]);
-  // Returns a user-facing message if a buy of `solAmount` SOL is blocked, else null.
-  const capBlock = useCallback((solAmount) => {
-    const held = heldUsdRef.current || 0;
-    const buyUsd = (Number(solAmount) || 0) * (solPriceRef.current || 0);
-    if (held >= BURNER_CAP_USD) return 'Burner cap reached — holding ≈ $' + held.toFixed(0) + ' of a $' + BURNER_CAP_USD + ' max. Sell or withdraw to buy more.';
-    if (buyUsd > 0 && held + buyUsd > BURNER_CAP_USD + 1) return 'That buy (≈ $' + buyUsd.toFixed(0) + ') would push you over the $' + BURNER_CAP_USD + ' burner cap. Try a smaller size.';
-    return null;
-  }, []);
+  // No holdings limit and no reserve: a buy is never blocked client-side. The
+  // chain validates funds; nothing is held back. Kept as a no-op so call sites
+  // stay unchanged.
+  const capBlock = useCallback(() => null, []);
 
   const onApe = useCallback(async (token) => {
     if (busyMints[token.mint]) return;
@@ -3307,6 +3371,13 @@ export default function Ape({ mainWalletPubkey }) {
   return (
     <div className="ap-root">
       <div className="ap-app">
+        <div className="ap-topstrip">
+          <span className="pf"><span className="ico">◎</span>Provided by <b>pump.fun</b></span>
+          <span className="aud">
+            <svg className="shield" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><path d="M9 12l2 2 4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            Audited by <b>Pashov&nbsp;·&nbsp;Sherlock</b>
+          </span>
+        </div>
         <nav className="ap-nav">
           <div className="ap-brand" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
             <div className="ap-brand-glyph">A</div>
@@ -3323,6 +3394,7 @@ export default function Ape({ mainWalletPubkey }) {
             {!wallet.backedUp && <span className="nudge" title="Back up your wallet" />}
           </button>
         </nav>
+        <div className="ap-sunrise" aria-hidden="true" />
 
         <div className="ap-qbar">
           <span className="ap-qlabel"><span className="b">⚡</span>Quick buy</span>
@@ -3333,8 +3405,8 @@ export default function Ape({ mainWalletPubkey }) {
           ))}
           <button className="ap-qedit" onClick={() => setShowPresets(true)} title="Edit amounts">✎</button>
           <span className="ap-qfast"><span className="d" /><span>2-SEC TRADE</span></span>
-          <span className="ap-qfast" title="Burner token cap (polish phase)" style={{ marginLeft: 'auto', color: heldTokenUsd >= BURNER_CAP_USD ? 'var(--red)' : 'var(--ink2)' }}>
-            <span>CAP ${Math.round(heldTokenUsd)} / ${BURNER_CAP_USD}</span>
+          <span className="ap-qfast" title="Token holdings (no cap)" style={{ marginLeft: 'auto', color: 'var(--ink2)' }}>
+            <span>HELD ${Math.round(heldTokenUsd)}</span>
           </span>
         </div>
 
@@ -3906,18 +3978,13 @@ function useAutoTrade(deps) {
     if (tradeStampsRef.current.length >= effective.maxPerHour) return;
     if (positionsRef.current.length + inflightRef.current.size >= effective.maxOpen) return;
 
-    // Burner token cap — hold, don't buy, once holdings would exceed the cap.
-    const perTradeUsd = effective.perTradeSol * (solPrice || 0);
-    if (heldTokenUsd >= BURNER_CAP_USD || (perTradeUsd > 0 && heldTokenUsd + perTradeUsd > BURNER_CAP_USD + 1)) {
-      if (!cappedRef.current) { cappedRef.current = true; pushLog('info', 'At $' + BURNER_CAP_USD + ' burner cap — holding, not buying'); }
-      return;
-    }
+    // No holdings cap — auto-buy is never gated on accumulated token value.
     cappedRef.current = false;
 
     // Not enough SOL for even one trade → stop the engine and tell the user
     // once, rather than scanning the whole feed and failing every token.
     const availSol = (solBalance && solBalance.uiAmount) || 0;
-    if (availSol < effective.perTradeSol * 1.03 + 0.003) {
+    if (availSol < effective.perTradeSol * 1.03) {
       setEnabled(false);
       pushLog('error', 'Auto-trade stopped — burner out of SOL');
       pushToast && pushToast({ type: 'error', em: '◎', body: <>Out of SOL — auto-trade stopped. <b>Add funds to your burner</b> to keep going.</>, duration: 9000 });
@@ -3943,7 +4010,7 @@ function useAutoTrade(deps) {
       const r = riskRead(tk);
       if (r.score < effective.minVibe) continue;
       if (!(tk.price > 0)) continue;
-      if (((solBalance && solBalance.uiAmount) || 0) < effective.perTradeSol * 1.03 + 0.003) continue;
+      if (((solBalance && solBalance.uiAmount) || 0) < effective.perTradeSol * 1.03) continue;
 
       seenMintsRef.current.add(tk.mint);
       inflightRef.current.add(tk.mint);
@@ -4033,7 +4100,14 @@ function useAutoTrade(deps) {
             const exitFee = sellFeeLamports(owned.uiAmount, px, exitSolPriceRef.current);
             await executeSwap({ mode: 'sell', token: tk, tradeTokensRaw: BigInt(owned.amount || '0'), tradeTokensUi: owned.uiAmount, decimals: owned.decimals, feeLamports: exitFee });
             const exitSol = (owned.uiAmount * px) / (exitSolPriceRef.current || 150);
-            const pnlSol = exitSol - (p.entrySol || 0);
+            // Realized P&L, net of fees: proceeds minus the 3% sell fee, against
+            // the full entry cost (trade size + the 3% buy fee paid on top). The
+            // old `exitSol - entrySol` ignored both and overstated every result,
+            // which also let the daily loss cap drift. This feeds setDailyPnlSol
+            // and SAFETY_FLOOR.dailyLossCapSol, so it has to be exact.
+            const netProceedsSol = exitSol - Number(exitFee) / 1e9;
+            const entryCostSol = (p.entrySol || 0) * (1 + FEE_BPS / 10000);
+            const pnlSol = netProceedsSol - entryCostSol;
             setPositions(prev => prev.filter(x => x.mint !== p.mint));
             setDailyPnlSol(n => n + pnlSol);
             tradeStampsRef.current.push(Date.now());
