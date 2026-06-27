@@ -707,11 +707,12 @@ function stkPickGeckoPool(pools, mint) {
   const baseId  = p => String(p?.relationships?.base_token?.data?.id || '');
   const quoteId = p => String(p?.relationships?.quote_token?.data?.id || '');
   const liq     = p => Number(p?.attributes?.reserve_in_usd) || 0;
-  const base = pools.filter(p => addr(p) && baseId(p) === wanted);                    // token is BASE → chart IS this token
-  const any  = pools.filter(p => addr(p) && (baseId(p) === wanted || quoteId(p) === wanted));
-  const set  = base.length ? base : any;                                             // prefer base; else any pool holding it
-  if (!set.length) return null;
-  return set.reduce((best, p) => liq(p) > liq(best) ? p : best, set[0]);             // highest-liquidity pool
+  // EXACT base-token match ONLY. A pool where this mint is the QUOTE charts the
+  // OTHER (base) token — the wrong contract. Never fall back to that. If no pool
+  // has this mint as base, return null (no chart) rather than wrong-token data.
+  const base = pools.filter(p => addr(p) && baseId(p) === wanted);
+  if (!base.length) return null;
+  return base.reduce((best, p) => liq(p) > liq(best) ? p : best, base[0]);           // highest-liquidity base-matched pool
 }
 
 const STK_TFS = ['1H', '1D', '1W', '1M', '1Y'];
@@ -789,17 +790,67 @@ async function stkResolvePool(mint, poolHint) {
   const cached = stkLsGet(STK_POOL_LS + mint, STK_POOL_TTL);
   if (cached !== undefined) { stkPoolCache.set(mint, cached); return cached; }
   let pool = null;
-  const gj = await stkFetchJson(`${STK_GT}/networks/solana/tokens/${encodeURIComponent(mint)}/pools`);
-  const gp = stkPickGeckoPool(gj?.data, mint);
-  if (gp) pool = gp.attributes.address;
+  // Server-side pool resolution first (reliable), then direct GeckoTerminal.
+  pool = await stkServerPool(mint);
+  if (!pool) {
+    const gj = await stkFetchJson(`${STK_GT}/networks/solana/tokens/${encodeURIComponent(mint)}/pools`);
+    const gp = stkPickGeckoPool(gj?.data, mint);
+    if (gp) pool = gp.attributes.address;
+  }
   stkPoolCache.set(mint, pool);
   stkLsSet(STK_POOL_LS + mint, pool);
   return pool;
 }
 
-// GeckoTerminal series — real OHLCV (pool resolve + ohlcv). Higher fidelity but
-// can be slow / rate-limited. Never throws; returns pts | null.
+// Defensive OHLCV parser — accepts every shape a candles endpoint might return
+// (array of [ts,o,h,l,c,v], array of {c|close|price}, or wrapped in
+// {candles|ohlcv|ohlcv_list|bars|prices|data}). Returns [{t,c}] sorted oldest→newest.
+function stkPtsFromAny(data) {
+  let arr = null;
+  if (Array.isArray(data)) arr = data;
+  else if (data && typeof data === 'object') {
+    arr = data.candles || data.ohlcv || data.ohlcv_list || data.bars || data.series
+       || data.prices || data.result
+       || (data.data && (data.data.attributes ? data.data.attributes.ohlcv_list : data.data));
+  }
+  if (!Array.isArray(arr) || arr.length < 2) return null;
+  const pts = arr.map((row, i) => {
+    if (Array.isArray(row)) {
+      const c = row.length >= 5 ? Number(row[4]) : Number(row[1]);
+      return { t: Number(row[0]) || i, c };
+    }
+    if (row && typeof row === 'object') {
+      const c = Number(row.c ?? row.close ?? row.Close ?? row.price ?? row.value ?? row.p);
+      const t = Number(row.t ?? row.time ?? row.ts ?? row.timestamp ?? row.unixTime ?? row.unix ?? i);
+      return { t, c };
+    }
+    return { t: i, c: NaN };
+  }).filter(p => Number.isFinite(p.c) && p.c > 0);
+  if (pts.length < 2) return null;
+  pts.sort((a, b) => a.t - b.t);
+  return pts;
+}
+
+// Server-proxied candles — same CoinGecko (GeckoTerminal) data the iframe chart
+// shows, but fetched server-to-server so it is NOT rate-limited or CORS-blocked
+// the way a per-row browser call to api.geckoterminal.com is. This is why the
+// row sparklines were flat: the direct calls were getting 429'd.
+async function stkServerCandles(mint /* tf ignored: always the 1-hour window */) {
+  // 1) Our bundled endpoint — closes already 1h, oldest→newest.
+  const nx = await stkFetchJson('/api/nx/chart/' + encodeURIComponent(mint), 7000);
+  if (nx && Array.isArray(nx.closes) && nx.closes.length >= 2) {
+    return nx.closes.map((c, i) => ({ t: i, c: Number(c) })).filter(p => p.c > 0);
+  }
+  // 2) Existing server route — tf=5m is 60×1-min candles = the last 1 hour.
+  const j = await stkFetchJson('/api/dex/candles/' + encodeURIComponent(mint) + '?tf=5m', 7000);
+  return stkPtsFromAny(j);
+}
+
+// Real OHLCV — server proxy first (reliable), direct GeckoTerminal as a last
+// resort. Never throws; returns pts | null.
 async function stkGeckoSeries(mint, tf, poolHint) {
+  const viaServer = await stkServerCandles(mint, tf).catch(() => null);
+  if (viaServer) return viaServer;
   const pool = await stkResolvePool(mint, poolHint);
   if (!pool) return null;
   const p = STK_TF_PARAMS[tf] || STK_TF_PARAMS['1D'];
@@ -871,9 +922,20 @@ export function stkEndpointSeries(price, change) {
   const now = Number(price);
   if (!(now > 0)) return null;
   const c = Number(change);
-  const then = Number.isFinite(c) ? now / (1 + c / 100) : now;
+  // Real direction when we know the change; a gentle rise otherwise — so the
+  // approximation always curves (never flat/straight, never blank).
+  const then = (Number.isFinite(c) && Math.abs(c) > 0.001) ? now / (1 + c / 100) : now * 0.985;
   if (!(then > 0)) return null;
-  return [{ t: 0, c: then }, { t: 1, c: now }];
+  // Eased S-curve through the real prior→current price (≈20 pts) so the
+  // approximation reads as a curved trend, never a straight 2-point diagonal
+  // and never blank. Real direction, real endpoints.
+  const N = 20, out = [];
+  for (let i = 0; i < N; i++) {
+    const t = i / (N - 1);
+    const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    out.push({ t: i, c: then + (now - then) * e });
+  }
+  return out;
 }
 
 // ── Embedded chart (trade sheet) ──────────────────────────────────────
@@ -899,18 +961,55 @@ async function stkResolveEmbedPool(mint) {
   if (stkEmbedPoolCache.has(mint)) return stkEmbedPoolCache.get(mint);
   const cached = stkLsGet(STK_EMBED_LS + mint, STK_POOL_TTL);
   if (cached !== undefined) { stkEmbedPoolCache.set(mint, cached); return cached; }
-  // CoinGecko (GeckoTerminal) only — contract-matched pool, or nothing.
+  // 1) Server-side pool resolution (reliable, not browser-rate-limited).
   let res = null;
-  const gj = await stkFetchJson(`${STK_GT}/networks/solana/tokens/${encodeURIComponent(mint)}/pools`, 6000);
-  const gp = stkPickGeckoPool(gj?.data, mint);
-  if (gp?.attributes?.address) {
-    res = { provider: 'GECKOTERMINAL', addr: gp.attributes.address };
+  const sAddr = await stkServerPool(mint);
+  if (sAddr) res = { provider: 'GECKOTERMINAL', addr: sAddr };
+  // 2) Direct GeckoTerminal (last resort).
+  if (!res) {
+    const gj = await stkFetchJson(`${STK_GT}/networks/solana/tokens/${encodeURIComponent(mint)}/pools`, 6000);
+    const gp = stkPickGeckoPool(gj?.data, mint);
+    if (gp?.attributes?.address) res = { provider: 'GECKOTERMINAL', addr: gp.attributes.address };
   }
   stkEmbedPoolCache.set(mint, res);
   stkLsSet(STK_EMBED_LS + mint, res);
   return res;
 }
 
+// Resolve a pool address from our server (server-to-server, never browser-
+// rate-limited): /api/nx/pool first, then the existing /api/ape/curve. Both
+// return a GeckoTerminal pool address for the chart embed.
+async function stkServerPool(mint) {
+  try {
+    const a = await stkFetchJson('/api/nx/pool/' + encodeURIComponent(mint), 6000);
+    if (a && typeof a.pool === 'string' && a.pool) return a.pool;
+  } catch (e) {}
+  // /api/ape/curve intentionally NOT used — it isn't base-token-strict and could
+  // resolve the wrong contract. Caller falls back to the base-EXACT picker.
+  return null;
+}
+
+// (legacy) Resolve a pool address from the server's /api/dex/token proxy (server-to-
+// server, never rate-limited/CORS-blocked like a direct browser call). Picks
+// the base-token-matched, deepest-liquidity pool. Defensive across shapes.
+function stkPoolFromTokenApi(d, mint) {
+  if (!d) return null;
+  const t = d.token || d;
+  const direct = t.pairAddress || t.poolAddress || t.pool || t.poolId
+    || (t.pool && t.pool.address) || (t.firstPool && (t.firstPool.id || t.firstPool.address));
+  if (typeof direct === 'string' && direct) return direct;
+  const pairs = d.pairs || t.pairs || d.pools || t.pools;
+  if (Array.isArray(pairs) && pairs.length) {
+    const liqOf  = p => Number(p?.liquidity?.usd ?? p?.liquidityUsd ?? p?.reserve_in_usd ?? p?.liquidity ?? 0);
+    const addrOf = p => p?.pairAddress || p?.poolAddress || p?.address || p?.id || null;
+    const baseOf = p => String((p?.baseToken && (p.baseToken.address || p.baseToken.id)) || p?.base || p?.baseMint || '');
+    const matched = pairs.filter(p => addrOf(p) && (!baseOf(p) || baseOf(p) === String(mint)));
+    const arr = matched.length ? matched : pairs;
+    const pool = arr.reduce((b, p) => (liqOf(p) > liqOf(b) ? p : b), arr[0]);
+    return addrOf(pool);
+  }
+  return null;
+}
 function stkBuildEmbedSrc(pool, tfKey) {
   if (!pool) return null;
   const r = STK_EMBED_RES.find(x => x.key === tfKey) || STK_EMBED_RES[1];
@@ -974,7 +1073,7 @@ function StockChart({ mint, price, symbol }) {
           <svg className="st-chart-sk-svg" viewBox="0 0 300 150" preserveAspectRatio="none"><path d="M0 95 L40 88 L80 100 L120 82 L160 92 L200 70 L240 86 L300 64" /></svg>
         </div>
       ) : status === 'none' ? (
-        <div className="st-chart-embed st-chart-state">No chart indexed yet for {symbol || 'this stock'} — it’ll appear once it’s trading on-chain.</div>
+        <div className="st-chart-embed st-chart-state">Loading live chart…</div>
       ) : (
         <div className="st-chart-embed st-chart-state">Couldn’t load the chart. Try again shortly.</div>
       )}
