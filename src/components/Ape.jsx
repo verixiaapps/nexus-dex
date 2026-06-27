@@ -12,7 +12,7 @@
 // open-positions flash bug.
 //
 // DETAIL CHART: the token sheet now embeds a live candlestick iframe
-// (GeckoTerminal primary, DexScreener fallback) instead of drawing SVG
+// (CoinGecko / GeckoTerminal only) instead of drawing SVG
 // candles from /api/dex/candles. It resolves the mint to its deepest pool
 // and defaults to the 1-second resolution so the chart is live and moving
 // the moment the sheet opens. See TokenChart / CHART_RES below.
@@ -219,12 +219,13 @@ function normalize(t) {
   return {
     mint: rawMint, sym: t.sym || '???', name: t.name || t.sym || 'Unknown',
     icon: t.icon || null,
-    price: Number(t.price || 0), change: Number(t.priceChange24h || 0),
+    price: pickPrice(t), change: pickChange(t),
     pairCreatedAtMs: createdAtMs,
     mcap: Number(t.mcap || t.fdv || 0), volume24h: Number(t.volume24h || 0),
     holders: Number(t.holders || 0), liquidity: Number(t.liquidity || 0),
     decimals: Number(t.decimals != null ? t.decimals : 6), pumpPool: t.pumpPool || 'auto',
-    bond, dex: t.dexId || (t.pumpPool ? 'pump.fun' : null), source: 'dexscreener',
+    bond, dex: t.dexId || (t.pumpPool ? 'pump.fun' : null),
+    pool: t.pairAddress || t.poolAddress || t.pool || t.poolId || t.pairId || (t.firstPool && (t.firstPool.id || t.firstPool.address)) || null, source: 'launches',
   };
 }
 
@@ -1478,12 +1479,12 @@ const IconDs = () => (<svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.
    Ported from the LaunchRadar approach: resolve the mint to its best
    pool, then embed a live candlestick iframe. GeckoTerminal is primary
    (it indexes pump.fun BONDING-CURVE pools, so seconds-old launches
-   still chart); DexScreener is the fallback for graduated / older pairs.
+   still chart). CoinGecko (GeckoTerminal) is the only chart source.
    Defaults to the 1-second resolution so the chart is live and moving
    the moment the token detail sheet opens.
 
    NOTE on the "1s" resolution param: GeckoTerminal honors `resolution`
-   and DexScreener honors `interval`. The second-level values below are
+   (resolution per timeframe). The second-level values below are
    centralized in CHART_RES so they're trivial to adjust if a provider
    changes its accepted tokens; if a given pool can't serve 1s the
    provider falls back to its own default rather than erroring.
@@ -1504,16 +1505,12 @@ const CHART_RES_DEFAULT = '1s';
 // be for a look-alike token.
 function pickBestGeckoPool(pools, mint) {
   if (!Array.isArray(pools) || !pools.length) return null;
-  const wanted = ('solana_' + mint).toLowerCase();
-  const baseId  = p => p?.relationships?.base_token?.data?.id;
-  const quoteId = p => p?.relationships?.quote_token?.data?.id;
+  const wanted = 'solana_' + mint;                          // EXACT — Solana base58 is case-sensitive
+  const baseId  = p => String(p?.relationships?.base_token?.data?.id || '');
   const hasAddr = p => !!p?.attributes?.address;
-  const baseMatches = pools.filter(p => hasAddr(p) && String(baseId(p) || '').toLowerCase() === wanted);
-  const pool = baseMatches.length
-    ? baseMatches
-    : pools.filter(p => hasAddr(p) && (
-        String(baseId(p) || '').toLowerCase() === wanted ||
-        String(quoteId(p) || '').toLowerCase() === wanted));
+  // Contract MUST match: only pools where this mint is the BASE token (a pool
+  // where the mint is the quote charts the WRONG token).
+  const pool = pools.filter(p => hasAddr(p) && baseId(p) === wanted);
   if (!pool.length) return null;
   return pool.reduce(
     (best, p) => (Number(p?.attributes?.reserve_in_usd) || 0) > (Number(best?.attributes?.reserve_in_usd) || 0) ? p : best,
@@ -1521,36 +1518,13 @@ function pickBestGeckoPool(pools, mint) {
   );
 }
 
-// DexScreener: pairs have chainId, pairAddress, baseToken.address,
-// quoteToken.address, liquidity.usd. Same base-match + deepest-liquidity rule.
-function pickBestPair(pairs, mint) {
-  if (!Array.isArray(pairs) || !pairs.length) return null;
-  const wanted = String(mint).toLowerCase();
-  const baseMatches = pairs.filter(
-    p => p && p.chainId === 'solana' && p.pairAddress &&
-         p.baseToken?.address?.toLowerCase() === wanted);
-  const pool = baseMatches.length
-    ? baseMatches
-    : pairs.filter(
-        p => p && p.chainId === 'solana' && p.pairAddress &&
-             (p.baseToken?.address?.toLowerCase() === wanted ||
-              p.quoteToken?.address?.toLowerCase() === wanted));
-  if (!pool.length) return null;
-  return pool.reduce(
-    (best, p) => (Number(p.liquidity?.usd) || 0) > (Number(best.liquidity?.usd) || 0) ? p : best,
-    pool[0],
-  );
-}
 
 function buildEmbedSrc(pool, resKey) {
   if (!pool) return null;
   const r = CHART_RES.find(x => x.key === resKey) || CHART_RES[0];
-  if (pool.provider === 'GECKOTERMINAL') {
-    return 'https://www.geckoterminal.com/solana/pools/' + pool.addr +
-      '?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&bg_color=0a0b0e&resolution=' + r.gecko;
-  }
-  return 'https://dexscreener.com/solana/' + pool.addr +
-    '?embed=1&theme=dark&info=0&trades=0&interval=' + r.dex;
+  if (pool.provider !== 'GECKOTERMINAL') return null;
+  return 'https://www.geckoterminal.com/solana/pools/' + pool.addr +
+    '?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&bg_color=0a0b0e&resolution=' + r.gecko;
 }
 
 function TokenChart({ token, solPrice }) {
@@ -1598,21 +1572,7 @@ function TokenChart({ token, solPrice }) {
       } catch (e) {}
       if (id !== reqRef.current) return;
 
-      // 2) DexScreener — fallback for graduated / older pairs.
-      try {
-        const r = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + mint,
-          { headers: { Accept: 'application/json' } });
-        if (id !== reqRef.current) return;
-        if (r.ok) {
-          networkOk = true;
-          const j = await r.json();
-          if (id !== reqRef.current) return;
-          const best = pickBestPair(j?.pairs, mint);
-          if (best?.pairAddress) { setPool({ provider: 'DEXSCREENER', addr: best.pairAddress }); setStatus('ok'); return; }
-        }
-      } catch (e) {}
-      if (id !== reqRef.current) return;
-
+      // CoinGecko (GeckoTerminal) only — no DexScreener fallback.
       setStatus(networkOk ? 'none' : 'fail');
     })();
   }, [mint, token && token.pool]);
@@ -1664,38 +1624,39 @@ function TokenChart({ token, solPrice }) {
 }
 
 /* ============================================================
-   ROW SPARKLINES — static approximation, NOT live ticking.
+   ROW SPARKLINES — REAL DATA ONLY.
 
-   Data comes from the same sources as the detail chart, in the same order:
-   GeckoTerminal first (real OHLCV closes when we already know the pool), then
-   DexScreener as the fallback (reconstruct the real trajectory from its
-   multi-horizon price-change buckets: 24h → 6h → 1h → 5m → now). If neither
-   responds we draw a deterministic curve seeded from the mint so the row is
-   never blank.
-
-   The series is fetched ONCE per mint and cached — it does not tick or redraw
-   as live prices poll in (that looked cheap on a 76px sparkline). Variation is
-   built in two ways so no two lines look identical: real sources are naturally
-   varied, and both the smoothing jitter and the synthetic fallback are seeded
-   from a per-mint hash (stable across renders, different across tokens).
+   CoinGecko (GeckoTerminal) OHLCV for the pool whose BASE token is exactly
+   this mint (contract-matched, deepest liquidity) — the same source and pool
+   as the detail chart, so the sparkline and the chart can never disagree.
+   No DexScreener, no synthetic curve: if there is no real series the row draws
+   no line. Fetched ONCE per mint and cached (static, does not tick).
    ============================================================ */
 const _sparkCache   = new Map(); // mint -> number[]  (final approximated series)
 const _sparkPending = new Map(); // mint -> Promise<number[]>
 
-function _sparkSeed(mint) {
-  let h = 2166136261 >>> 0;
-  const s = mint || '';
-  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
-  return h >>> 0;
+// Robust 24h %: read every field name a Solana feed uses for it.
+function pickChange(t) {
+  const v = Number(
+    t?.priceChange24h ?? t?.priceChange?.h24 ?? t?.stats24h?.priceChange ??
+    t?.change24h ?? t?.change ?? t?.priceChangePercent24h ?? t?.h24 ?? 0,
+  );
+  return Number.isFinite(v) ? v : 0;
 }
-function _sparkRng(seed) { // mulberry32 — deterministic per seed
-  let a = seed >>> 0;
-  return function () {
-    a = (a + 0x6D2B79F5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+// Robust price: a new token ALWAYS has a price — read every field name the feed
+// might use, and if only market cap + supply came through, derive it (real, not
+// invented). Returns a positive number whenever ANY pricing data exists.
+function pickPrice(t) {
+  const direct = Number(
+    t?.price ?? t?.priceUsd ?? t?.usdPrice ?? t?.price_usd ??
+    t?.priceUSD ?? t?.usd ?? t?.priceNative ?? t?.lastPrice ??
+    t?.stats24h?.price ?? t?.firstPool?.price ?? 0,
+  );
+  if (direct > 0) return direct;
+  const mc = Number(t?.mcap ?? t?.marketCap ?? t?.fdv ?? t?.marketCapUsd ?? 0);
+  const supply = Number(t?.supply ?? t?.totalSupply ?? t?.circulatingSupply ?? t?.circSupply ?? 0);
+  if (mc > 0 && supply > 0) return mc / supply;
+  return 0;
 }
 function _downsample(arr, N) {
   if (arr.length <= N) return arr.slice();
@@ -1703,38 +1664,17 @@ function _downsample(arr, N) {
   for (let i = 0; i < N; i++) out.push(arr[Math.round((i / (N - 1)) * (arr.length - 1))]);
   return out;
 }
-// Interpolate real anchor points into N points with gentle, seeded, static
-// wiggle between anchors (zero wiggle AT each anchor, so real points are kept).
-function _curveFromAnchors(anchors, mint, N) {
-  const rnd = _sparkRng(_sparkSeed(mint));
-  const segs = anchors.length - 1;
-  const out = [];
-  for (let i = 0; i < N; i++) {
-    const t = (i / (N - 1)) * segs;
-    const k = Math.min(segs - 1, Math.floor(t));
-    const f = t - k;
-    const s = f * f * (3 - 2 * f); // smoothstep
-    const v = anchors[k] * (1 - s) + anchors[k + 1] * s;
-    const segRange = Math.abs(anchors[k + 1] - anchors[k]) || (Math.abs(v) * 0.02) || 1;
-    const env = Math.sin(Math.PI * f); // 0 at anchors → endpoints stay exact
-    out.push(v + (rnd() - 0.5) * 2 * segRange * 0.35 * env);
-  }
-  return out;
-}
-// No network — deterministic curve whose overall slope matches the 24h change,
-// with seeded intermediate drift so each token's shape differs.
-function _syntheticSpark(mint, change, N) {
-  const rnd = _sparkRng(_sparkSeed(mint));
-  const end = 100, start = end / (1 + (Number(change) || 0) / 100);
-  const span = Math.abs(end - start) || 1;
-  const anchors = [start];
-  const mids = 3;
-  for (let i = 1; i <= mids; i++) {
-    const base = start + (end - start) * (i / (mids + 1));
-    anchors.push(base + (rnd() - 0.5) * 2 * span * 0.6);
-  }
-  anchors.push(end);
-  return _curveFromAnchors(anchors, mint, N);
+// Two REAL endpoints from the token's own live price + real 24h change:
+// price(24h ago) = price / (1 + change/100), then price now. Both are numbers
+// the feed already reports (not synthetic) — guarantees an accurate line the
+// instant a price exists, which OHLCV then upgrades in place.
+function _endpointSeries(price, change) {
+  const now = Number(price);
+  if (!(now > 0)) return null;
+  const c = Number(change);
+  const then = Number.isFinite(c) ? now / (1 + c / 100) : now;
+  if (!(then > 0)) return null;
+  return [then, now];
 }
 
 async function loadSparkSeries(token) {
@@ -1744,49 +1684,42 @@ async function loadSparkSeries(token) {
   if (_sparkPending.has(mint)) return _sparkPending.get(mint);
 
   const N = 26;
+  const ohlcvFromPool = async (poolAddr) => {
+    const r = await fetch(
+      'https://api.geckoterminal.com/api/v2/networks/solana/pools/' + poolAddr +
+      '/ohlcv/minute?aggregate=1&limit=80&currency=usd',
+      { headers: { Accept: 'application/json' } });
+    if (!r.ok) return null;
+    const j = await r.json();
+    const list = j && j.data && j.data.attributes && j.data.attributes.ohlcv_list;
+    if (!Array.isArray(list) || list.length < 4) return null;
+    // rows: [ts, open, high, low, close, volume], newest first.
+    const closes = list.map(row => Number(row[4])).filter(n => n > 0).reverse();
+    return closes.length >= 4 ? _downsample(closes, N) : null;
+  };
   const p = (async () => {
-    // 1) GeckoTerminal OHLCV — only when the pool is already known (one call,
-    //    no pools-list lookup), so a long list can't melt the rate limit.
-    const poolAddr = (token.pool && typeof token.pool === 'string') ? token.pool : null;
-    if (poolAddr) {
-      try {
-        const r = await fetch(
-          'https://api.geckoterminal.com/api/v2/networks/solana/pools/' + poolAddr +
-          '/ohlcv/minute?aggregate=1&limit=80&currency=usd',
-          { headers: { Accept: 'application/json' } });
-        if (r.ok) {
-          const j = await r.json();
-          const list = j && j.data && j.data.attributes && j.data.attributes.ohlcv_list;
-          if (Array.isArray(list) && list.length >= 4) {
-            // ohlcv rows: [ts, open, high, low, close, volume], newest first.
-            const closes = list.map(row => Number(row[4])).filter(n => n > 0).reverse();
-            if (closes.length >= 4) { const series = _downsample(closes, N); _sparkCache.set(mint, series); return series; }
-          }
-        }
-      } catch (e) {}
-    }
-
-    // 2) DexScreener — rebuild the real trajectory from price-change buckets.
+    // CoinGecko (GeckoTerminal) real OHLCV ONLY — contract-matched pool, real
+    // candles, or NOTHING. No DexScreener, no synthetic fallback.
     try {
-      const r = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + mint,
-        { headers: { Accept: 'application/json' } });
-      if (r.ok) {
-        const j = await r.json();
-        const best = pickBestPair(j && j.pairs, mint);
-        const now = Number(best && best.priceUsd) || 0;
-        const ch = (best && best.priceChange) || {};
-        if (now > 0) {
-          const back = (pct) => { const x = Number(pct); return Number.isFinite(x) ? now / (1 + x / 100) : now; };
-          const anchors = [back(ch.h24), back(ch.h6), back(ch.h1), back(ch.m5), now].filter(n => n > 0);
-          if (anchors.length >= 2) { const series = _curveFromAnchors(anchors, mint, N); _sparkCache.set(mint, series); return series; }
+      // Known pool (server-resolved, already contract-matched) → one call.
+      let poolAddr = (token.pool && typeof token.pool === 'string') ? token.pool : null;
+      // Otherwise resolve the deepest pool whose BASE token is exactly this mint.
+      if (!poolAddr) {
+        const pr = await fetch(
+          'https://api.geckoterminal.com/api/v2/networks/solana/tokens/' + mint + '/pools',
+          { headers: { Accept: 'application/json' } });
+        if (pr.ok) {
+          const pj = await pr.json();
+          poolAddr = pickBestGeckoPool(pj?.data, mint)?.attributes?.address || null;
         }
       }
+      if (poolAddr) {
+        const series = await ohlcvFromPool(poolAddr);
+        if (series) { _sparkCache.set(mint, series); return series; }
+      }
     } catch (e) {}
-
-    // 3) Nothing from the network — deterministic, mint-varied fallback.
-    const series = _syntheticSpark(mint, token.change, N);
-    _sparkCache.set(mint, series);
-    return series;
+    // No real data — draw nothing. Never fabricate a line.
+    return null;
   })().finally(() => { _sparkPending.delete(mint); });
 
   _sparkPending.set(mint, p);
@@ -1809,29 +1742,28 @@ function MiniSparkline({ token, change }) {
     return () => { alive = false; };
   }, [mint]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Brief neutral baseline only while the first fetch is in flight.
-  if (!series || series.length < 2) {
-    const y = (H / 2).toFixed(1);
-    return (
-      <div className="ap-spark" aria-hidden="true">
-        <svg viewBox={'0 0 ' + W + ' ' + H} preserveAspectRatio="none">
-          <path d={'M0,' + y + ' L' + W + ',' + y} fill="none" stroke="#c7c9cf" strokeOpacity="0.5" strokeWidth="1.5" strokeLinecap="round" strokeDasharray="2 3" />
-        </svg>
-      </div>
-    );
+  // Always a REAL line: GeckoTerminal OHLCV when fetched, otherwise the two real
+  // endpoints from the token's own price + 24h change. Never blank when a price
+  // exists; OHLCV upgrades it in place.
+  const drawSeries = (series && series.length >= 2)
+    ? series
+    : _endpointSeries(token && token.price, change);
+  if (!drawSeries || drawSeries.length < 2) {
+    return <div className="ap-spark" aria-hidden="true"><svg viewBox={'0 0 ' + W + ' ' + H} preserveAspectRatio="none" /></div>;
   }
+  const seriesD = drawSeries;
 
-  // Direction (and colour) from the series itself, falling back to 24h change.
-  const up = series[series.length - 1] !== series[0]
-    ? series[series.length - 1] >= series[0]
-    : (Number(change) || 0) >= 0;
+  // Direction (and colour) from the 24h change when known, else the series.
+  const up = Number.isFinite(Number(change)) && Number(change) !== 0
+    ? Number(change) >= 0
+    : seriesD[seriesD.length - 1] >= seriesD[0];
   const color = up ? '#11b87f' : '#f0425a';
 
-  const min = Math.min.apply(null, series), max = Math.max.apply(null, series);
+  const min = Math.min.apply(null, seriesD), max = Math.max.apply(null, seriesD);
   const rng = (max - min) || (Math.abs(max) * 0.0001) || 1;
-  const xOf = (i) => (i / (series.length - 1)) * W;
+  const xOf = (i) => (i / (seriesD.length - 1)) * W;
   const yOf = (v) => H - padY - ((v - min) / rng) * (H - 2 * padY);
-  const line = series.map((v, i) => (i === 0 ? 'M' : 'L') + xOf(i).toFixed(1) + ',' + yOf(v).toFixed(1)).join(' ');
+  const line = seriesD.map((v, i) => (i === 0 ? 'M' : 'L') + xOf(i).toFixed(1) + ',' + yOf(v).toFixed(1)).join(' ');
   const fill = line + ' L' + W + ',' + H + ' L0,' + H + ' Z';
   const gradId = 'spk_' + (up ? 'u' : 'd') + '_' + (mint || 'x').slice(0, 12);
 
@@ -2139,7 +2071,7 @@ function WalletDrawer({ wallet, solBalance, solPrice, onWithdraw, onClose, busy,
                 <div className="ap-wtoken" key={tk.mint}>
                   <TokenFace token={tk} size={32} />
                   <div className="ap-wtoken-nm"><div className="ap-wtoken-sym">${tk.sym}</div><div className="ap-wtoken-amt">{formatTokens(ui)}{tk.name && tk.name !== tk.sym ? ' · ' + tk.name : ''}</div></div>
-                  <div className="ap-wtoken-usd">{tk.price > 0 ? formatUsdAbs(usd) : '—'}</div>
+                  <div className="ap-wtoken-usd">{tk.price > 0 ? formatUsdAbs(usd) : ''}</div>
                 </div>
               ))}
             </div>
@@ -2261,7 +2193,7 @@ function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPr
             <div className="ap-rstat"><span className="k">Bonding</span><span className="v">{token.bond != null ? token.bond.toFixed(0) + '%' : (token.dex && !/^pump/i.test(token.dex) ? 'graduated' : '—')}</span></div>
           </div>
           <div className="ap-research-links">
-            <a className="ap-rlink" href={'https://dexscreener.com/solana/' + encodeURIComponent(token.mint)} target="_blank" rel="noreferrer">Live transactions on DexScreener ↗</a>
+            <a className="ap-rlink" href={'https://www.geckoterminal.com/solana/tokens/' + encodeURIComponent(token.mint)} target="_blank" rel="noreferrer">Live chart on GeckoTerminal ↗</a>
             <button className="ap-rcopy" onClick={() => { try { navigator.clipboard.writeText(token.mint); } catch (e) {} }} title="Copy contract address">Copy CA</button>
           </div>
           <div className="ap-share-row">
