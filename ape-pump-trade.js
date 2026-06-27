@@ -16,6 +16,26 @@
 // RPC
 //   NONE here. PumpPortal returns the built tx; the client decodes + submits.
 //
+// SPEED / PRIORITY FEE  ── the only knob that affects inclusion speed ──
+//   We do NOT use Jito and we do NOT buy MEV protection. The tx is submitted
+//   straight to a normal RPC (Alchemy → Ankr) via sendRawTransaction with
+//   skipPreflight. The single lever for "land fast" is PRIORITY_FEE below:
+//   PumpPortal turns it into a ComputeBudget SetComputeUnitPrice instruction,
+//   which the client preserves when it re-signs. Higher = paid per trade, lands
+//   sooner under congestion. Lower = cheaper, can sit behind faster bidders.
+//
+//   Tuning (SOL, applied to EVERY buy AND sell):
+//     0.0005  very low — gets outrun on contested launches
+//     0.001   current default — light, cheap per trade
+//     0.005   fast — solid first-blocks inclusion most days
+//     0.01+   max-aggression — first-block sniping during heavy congestion
+//   Override at runtime without a redeploy: set env APE_PRIORITY_FEE=0.01
+//
+//   TRADEOFF (deliberate, per spec): no Jito/MEV means no sandwich protection.
+//   On thin/hyped launches a higher priority fee lands you faster but does not
+//   shield the fill from being sandwiched. That risk is accepted here in
+//   exchange for raw speed.
+//
 // RESPONSE SHAPE (matches what Ape.jsx already expects)
 //   { action, route:'pumpportal', pool, slippagePct, priorityFee, tx }
 //   where `tx` is a base64 serialized (unsigned) VersionedTransaction.
@@ -26,7 +46,12 @@
 const PUMPPORTAL_URL = 'https://pumpportal.fun/api/trade-local';
 const BASE58_RE      = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const SLIPPAGE_PCT   = 10;
-const PRIORITY_FEE   = 0.0005;
+// Fast by default. Tunable via env so you can react to congestion without a
+// redeploy. Falls back to 0.005 SOL if the env var is unset/invalid.
+const PRIORITY_FEE   = (() => {
+  const v = Number(process.env.APE_PRIORITY_FEE);
+  return Number.isFinite(v) && v > 0 ? v : 0.001;
+})();
 const ROUTE          = '/api/ape/pump-trade';
 const TIMEOUT_MS     = 15_000;
 
