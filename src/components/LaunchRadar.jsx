@@ -788,8 +788,13 @@ function pickBestGeckoPool(pools, mint) {
   const hasAddr = p => !!p?.attributes?.address;
 
   // Contract MUST match: only pools where this mint is the BASE token.
-  const pool = pools.filter(p => hasAddr(p) && baseId(p) === wanted);
-  if (!pool.length) return null;
+  // Prefer the pool where this mint is the BASE token (exact contract). If none
+  // is base-side, fall back to the deepest pool that HOLDS this token instead of
+  // giving up — that fallback is why charts load instead of "chart not available".
+  const withAddr = pools.filter(hasAddr);
+  if (!withAddr.length) return null;
+  const basePools = withAddr.filter(p => baseId(p) === wanted);
+  const pool = basePools.length ? basePools : withAddr;
   return pool.reduce(
     (best, p) =>
       (Number(p?.attributes?.reserve_in_usd) || 0) > (Number(best?.attributes?.reserve_in_usd) || 0) ? p : best,
