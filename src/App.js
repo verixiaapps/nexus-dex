@@ -268,43 +268,9 @@ function pctFromSeries(pts) {
   return ((b - a) / a) * 100;
 }
 
-// draw-only sparkline — smooth curve. Fed by the OHLCV the strip already
-// fetched (pts) or live observed ticks. When the series is thin (a fresh
-// launch with only a couple of points), it draws a gentle eased trend in the
-// real direction instead of a flat 2-point diagonal. Curve via Catmull-Rom.
-const _spkHist = new Map();
-function recordSpark(mint, price) {
-  if (!mint || !(price > 0)) return _spkHist.get(mint) || [];
-  let pts = _spkHist.get(mint);
-  if (!pts) { pts = []; _spkHist.set(mint, pts); }
-  if (pts[pts.length - 1] !== price) { pts.push(price); if (pts.length > 32) pts.shift(); }
-  return pts;
-}
-// Thin series → resample into a few eased points so the curve reads as a soft
-// trend, not a straight line. Keeps the real first/last values (true direction).
-function _spkSeed(str) {
-  let h = 0; const s = String(str || '');
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
-  return (Math.abs(h) || 1) >>> 0;
-}
-function _spkPrep(vals, seed = 0) {
-  if (vals.length >= 6) return vals;
-  const a = vals[0], b = vals[vals.length - 1];
-  // Seeded wobble so two thin tokens don't render the identical S-curve.
-  const span = Math.abs(b - a) || Math.abs(a) * 0.04 || 1;
-  const amp  = span * 0.55;
-  let s = (seed >>> 0) || 1;
-  const rnd = () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-  const n = 6, out = [];
-  for (let i = 0; i < n; i++) {
-    const t = i / (n - 1), e = t * t * (3 - 2 * t);
-    let v = a + (b - a) * e;
-    if (i > 0 && i < n - 1) v += (rnd() - 0.5) * amp * Math.sin(t * Math.PI);
-    out.push(v);
-  }
-  out[0] = a; out[n - 1] = b;
-  return out;
-}
+// draw-only sparkline — smooth curve from REAL contract-matched OHLCV only.
+// No fabricated wobble, no observed-tick fill: if the series has <2 real points
+// the sparkline renders nothing. Curve via Catmull-Rom.
 function _spkSmoothPath(vals, w, h, pad) {
   const n = vals.length;
   let lo = Math.min(...vals), hi = Math.max(...vals);
@@ -322,11 +288,9 @@ function _spkSmoothPath(vals, w, h, pad) {
   return { line: d, area: d + ` L${P[n - 1].x.toFixed(2)},${h} L${P[0].x.toFixed(2)},${h} Z`, lastX: P[n - 1].x, lastY: P[n - 1].y };
 }
 function Spark({ pts, mint, price, w = 60, h = 30 }) {
-  const hist = recordSpark(mint, Number(price));
-  const obs  = hist.length >= 2 ? hist.map(c => ({ c })) : null;
-  const use  = (pts && pts.length >= 2) ? pts : obs;   // prefer OHLCV, else observed ticks
-  if (!use) return <svg width={w} height={h} style={{ display: 'block', flex: '0 0 auto' }} />;
-  const vals = _spkPrep(use.map(p => p.c), _spkSeed(mint));
+  // Real contract-matched series only. <2 real points → render nothing.
+  const vals = (pts && pts.length >= 2) ? pts.map(p => p.c).filter(Number.isFinite) : [];
+  if (vals.length < 2) return <svg width={w} height={h} style={{ display: 'block', flex: '0 0 auto' }} />;
   const up   = vals[vals.length - 1] >= vals[0];
   const col  = up ? C.green : C.down;
   const path = _spkSmoothPath(vals, w, h, 3);
@@ -414,62 +378,102 @@ function Row({ onClick, last, ico, grad, sym, tag, sub, price, pct, pts, mint, r
 }
 
 // ── Token detail bottom-sheet chart ──────────────────────────────────
-// Copied verbatim in behavior from Ape.jsx TokenChart: live embedded iframe,
-// GeckoTerminal primary (covers fresh bonding-curve pools) → DexScreener
-// fallback. Pool resolved BY CONTRACT (exact base-token match) + deepest USD
-// liquidity, so the chart can never show a look-alike token. Defaults to the
-// 1s resolution so the chart is live and moving the moment the sheet opens.
+// Live embedded chart. GeckoTerminal ONLY (covers fresh bonding-curve pools);
+// no DexScreener, no fallback. Pool resolved BY CONTRACT (exact base-token
+// match) + deepest USD liquidity, so the chart can never show a look-alike
+// token. Defaults to 1H — the same series the row sparklines and % use.
 const CHART_RES = [
-  { key: '1s',  label: '1s', gecko: '1s',  dex: '1S'  },
-  { key: '15s', label: '15s', gecko: '15s', dex: '15S' },
-  { key: '1m',  label: '1m', gecko: '1m',  dex: '1'   },
-  { key: '5m',  label: '5m', gecko: '5m',  dex: '5'   },
-  { key: '1h',  label: '1H', gecko: '1h',  dex: '60'  },
+  { key: '1m',  label: '1m', gecko: '1m'  },
+  { key: '5m',  label: '5m', gecko: '5m'  },
+  { key: '15m', label: '15m', gecko: '15m' },
+  { key: '1h',  label: '1H', gecko: '1h'  },
+  { key: '4h',  label: '4H', gecko: '4h'  },
+  { key: '1d',  label: '1D', gecko: '1d'  },
 ];
-const CHART_RES_DEFAULT = '1s';
+const CHART_RES_DEFAULT = '1h';
 
 function pickBestGeckoPool(pools, mint) {
   if (!Array.isArray(pools) || !pools.length) return null;
   const wanted = 'solana_' + mint;                         // EXACT — Solana base58 is case-sensitive
   const baseId  = p => String(p?.relationships?.base_token?.data?.id || '');
-  const quoteId = p => String(p?.relationships?.quote_token?.data?.id || '');
   const hasAddr = p => !!p?.attributes?.address;
-  const baseMatches = pools.filter(p => hasAddr(p) && baseId(p) === wanted);
-  const pool = baseMatches.length
-    ? baseMatches
-    : pools.filter(p => hasAddr(p) && (baseId(p) === wanted || quoteId(p) === wanted));
-  if (!pool.length) return null;
-  return pool.reduce(
+  // Contract MUST match: only pools whose BASE token is this mint. No quote-side
+  // fallback — a pool where the mint is the quote is the WRONG token. None → null.
+  const base = pools.filter(p => hasAddr(p) && baseId(p) === wanted);
+  if (!base.length) return null;
+  return base.reduce(
     (best, p) => (Number(p?.attributes?.reserve_in_usd) || 0) > (Number(best?.attributes?.reserve_in_usd) || 0) ? p : best,
-    pool[0],
-  );
-}
-function pickBestPair(pairs, mint) {
-  if (!Array.isArray(pairs) || !pairs.length) return null;
-  const baseMatches = pairs.filter(
-    p => p && p.chainId === 'solana' && p.pairAddress &&
-         p.baseToken?.address === mint);                   // EXACT, case-sensitive
-  const pool = baseMatches.length
-    ? baseMatches
-    : pairs.filter(
-        p => p && p.chainId === 'solana' && p.pairAddress &&
-             (p.baseToken?.address === mint ||
-              p.quoteToken?.address === mint));
-  if (!pool.length) return null;
-  return pool.reduce(
-    (best, p) => (Number(p.liquidity?.usd) || 0) > (Number(best.liquidity?.usd) || 0) ? p : best,
-    pool[0],
+    base[0],
   );
 }
 function buildEmbedSrc(pool, resKey) {
   if (!pool) return null;
-  const r = CHART_RES.find(x => x.key === resKey) || CHART_RES[0];
-  if (pool.provider === 'GECKOTERMINAL') {
-    return 'https://www.geckoterminal.com/solana/pools/' + pool.addr +
-      '?embed=1&info=0&swaps=0&grayscale=0&light_chart=1&bg_color=ffffff&resolution=' + r.gecko;
-  }
-  return 'https://dexscreener.com/solana/' + pool.addr +
-    '?embed=1&theme=light&info=0&trades=0&interval=' + r.dex;
+  const r = CHART_RES.find(x => x.key === resKey) || CHART_RES.find(x => x.key === CHART_RES_DEFAULT) || CHART_RES[0];
+  // GeckoTerminal only.
+  return 'https://www.geckoterminal.com/solana/pools/' + pool.addr +
+    '?embed=1&info=0&swaps=0&grayscale=0&light_chart=1&bg_color=ffffff&resolution=' + r.gecko;
+}
+
+// ── GeckoTerminal 1H series layer — row sparklines and % share it with the
+// chart (same contract-matched pool, same 1H timeframe), so the line, the %
+// and the chart always agree. Pool via pickBestGeckoPool (base === mint, no
+// fallback). Cached 60s, de-duped, ≤4 concurrent → fast and under the rate
+// limit. Returns [{c}] oldest→newest, or null (no contract-matched pool/series
+// → the sparkline renders nothing and the % shows "—"; never fabricated).
+const _agPool       = new Map(); // mint -> addr (resolved pools only)
+const _agPoolWait   = new Map();
+const _agSeries     = new Map(); // mint -> { ts, pts:[{c}]|null }
+const _agSeriesWait = new Map();
+let _agN = 0; const _agQ = [];
+function _agPump() { while (_agN < 4 && _agQ.length) { const job = _agQ.shift(); _agN++; job().finally(() => { _agN--; _agPump(); }); } }
+function agResolvePool(mint) {
+  if (!mint) return Promise.resolve(null);
+  const cached = _agPool.get(mint);
+  if (cached) return Promise.resolve(cached);            // cache hits only for resolved pools
+  if (_agPoolWait.has(mint)) return _agPoolWait.get(mint);
+  const p = (async () => {
+    let addr = null;
+    try {
+      const r = await fetch('https://api.geckoterminal.com/api/v2/networks/solana/tokens/' + mint + '/pools',
+        { headers: { Accept: 'application/json' } });
+      if (r.ok) { const j = await r.json(); addr = pickBestGeckoPool(j?.data, mint)?.attributes?.address || null; }
+    } catch { addr = null; }
+    if (addr) _agPool.set(mint, addr);                   // never cache a miss → fresh mints can resolve on retry
+    _agPoolWait.delete(mint);
+    return addr;
+  })();
+  _agPoolWait.set(mint, p);
+  return p;
+}
+function agFetchSeries(mint) {
+  if (!mint) return Promise.resolve(null);
+  const c = _agSeries.get(mint);
+  if (c && Date.now() - c.ts < 60000) return Promise.resolve(c.pts);
+  if (_agSeriesWait.has(mint)) return _agSeriesWait.get(mint);
+  const p = new Promise(resolve => {
+    _agQ.push(async () => {
+      let out = null;
+      try {
+        const addr = await agResolvePool(mint);
+        if (addr) {
+          const r = await fetch('https://api.geckoterminal.com/api/v2/networks/solana/pools/' + addr + '/ohlcv/hour?aggregate=1&limit=24&currency=usd',
+            { headers: { Accept: 'application/json' } });
+          if (r.ok) {
+            const j = await r.json();
+            const list = j?.data?.attributes?.ohlcv_list || []; // [ts,o,h,l,c,v], newest first
+            const pts = list.map(row => Number(row?.[4])).filter(v => Number.isFinite(v) && v > 0).reverse().map(c => ({ c }));
+            if (pts.length >= 2) out = pts; // oldest → newest
+          }
+        }
+      } catch { out = null; }
+      _agSeries.set(mint, { ts: Date.now(), pts: out });
+      _agSeriesWait.delete(mint);
+      resolve(out);
+    });
+    _agPump();
+  });
+  _agSeriesWait.set(mint, p);
+  return p;
 }
 
 function SheetChart({ mint, sym }) {
@@ -487,43 +491,15 @@ function SheetChart({ mint, sym }) {
     let stop = false;
     const alive = () => !stop && id === reqRef.current;
 
-    // GeckoTerminal first (live 1s candles). Only if it returns no pool do we
-    // fall back to DexScreener. No racing. A few short retries cover seconds-old
-    // mints, then we settle to 'none' instead of spinning forever.
-    const fetchGecko = async () => {
-      try {
-        const r = await fetch(
-          'https://api.geckoterminal.com/api/v2/networks/solana/tokens/' + mint + '/pools',
-          { headers: { Accept: 'application/json' } });
-        if (!r.ok) return null;
-        const j = await r.json();
-        const addr = pickBestGeckoPool(j?.data, mint)?.attributes?.address;
-        return addr ? { provider: 'GECKOTERMINAL', addr } : null;
-      } catch { return null; }
-    };
-    const fetchDex = async () => {
-      try {
-        const r = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + mint,
-          { headers: { Accept: 'application/json' } });
-        if (!r.ok) return null;
-        const j = await r.json();
-        const addr = pickBestPair(j?.pairs, mint)?.pairAddress;
-        return addr ? { provider: 'DEXSCREENER', addr } : null;
-      } catch { return null; }
-    };
-
+    // GeckoTerminal ONLY, contract-matched (base === mint). No DexScreener, no
+    // fallback. A few short retries cover seconds-old mints, then settle to
+    // 'none'. Shares agResolvePool's cache with the row sparklines and %.
     (async () => {
       for (let attempt = 0; attempt < 4 && alive(); attempt++) {
-        // 1) GeckoTerminal first.
-        const g = await fetchGecko();
+        const addr = await agResolvePool(mint);
         if (!alive()) return;
-        if (g) { setPool(g); setStatus('ok'); return; }
-        // 2) Gecko had nothing → try DexScreener.
-        const d = await fetchDex();
-        if (!alive()) return;
-        if (d) { setPool(d); setStatus('ok'); return; }
-        // Neither yet (fresh mint / 429) → short backoff, retry.
-        await new Promise(r => setTimeout(r, 700 + attempt * 600));
+        if (addr) { setPool({ provider: 'GECKOTERMINAL', addr }); setStatus('ok'); return; }
+        await new Promise(r => setTimeout(r, 700 + attempt * 600)); // fresh mint / 429 → backoff, retry
       }
       if (alive()) setStatus('none');
     })();
@@ -1658,7 +1634,7 @@ export function LaunchRadarStrip({ onSwitchTab, onOpenToken }) {
       list.forEach(t => {
         if (fetched.current[t.mint]) return;            // don't refetch on every 5s poll
         fetched.current[t.mint] = true;
-        stkThrottle(() => stkFetchSeries(t.mint, '1D'))
+        agFetchSeries(t.mint)
           .then(s => { if (!cancelled && s && s.length >= 2) setSeries(prev => ({ ...prev, [t.mint]: s })); })
           .catch(() => { fetched.current[t.mint] = false; });
       });
@@ -1686,7 +1662,7 @@ export function LaunchRadarStrip({ onSwitchTab, onOpenToken }) {
       <SectionHead title="Launch" italic="Radar" meta="LIVE" onAll={() => onSwitchTab('launchradar')} />
       <ListShell>
         {toks.map((t, i) => {
-          const _cs = pctFromSeries(series[t.mint]); const pct = Number.isFinite(_cs) ? _cs : (Number.isFinite(t.change) ? t.change : null);
+          const pct = pctFromSeries(series[t.mint]);
           return (
             <Row
               key={t.mint}
@@ -1768,7 +1744,7 @@ function LiveTokenFeeds({ onSwitchTab, onOpenToken, onConnectWallet }) {
       list.forEach(t => {
         if (fetched.current[t.mint]) return;
         fetched.current[t.mint] = true;
-        stkThrottle(() => stkFetchSeries(t.mint, '1D'))
+        agFetchSeries(t.mint)
           .then(s => { if (!cancelled && s && s.length >= 2) setSeries(prev => ({ ...prev, [t.mint]: s })); })
           .catch(() => { fetched.current[t.mint] = false; });
       });
@@ -1819,7 +1795,7 @@ function LiveTokenFeeds({ onSwitchTab, onOpenToken, onConnectWallet }) {
   const gainCount = trendToks.filter(t => Number.isFinite(t.change) && t.change > 0).length;
 
   const mkRow = (t, i, n, sub, tab = 'launchradar') => {
-    const _cs = pctFromSeries(series[t.mint]); const pct = Number.isFinite(_cs) ? _cs : (Number.isFinite(t.change) ? t.change : null);
+    const pct = pctFromSeries(series[t.mint]);
     return (
       <Row
         key={t.mint}
