@@ -660,6 +660,18 @@ function pickPrice(t) {
   if (mc > 0 && supply > 0) return mc / supply;
   return 0;
 }
+// Stablecoins/pegged tokens are not "trending" — they sit at ~$1 with ±0.01%
+// moves. Exclude them so the list shows real movers, not USDC/USDT/CASH.
+const STABLE_SYMS = new Set(['USDC','USDT','USD1','USDH','USDS','DAI','PYUSD','USDD','FDUSD','TUSD','USDE','CASH','JUPUSD','JUPSOL','BUSD','USDY','USDB','USDG','EURC','GUSD','LUSD','USDR','USDX','UXD','USTC','FRAX']);
+function isStablecoin(t) {
+  const sym = String(t?.sym || t?.symbol || '').toUpperCase().replace(/^\$/, '');
+  if (STABLE_SYMS.has(sym)) return true;
+  const p = Number(t?.price);
+  const ch = Math.abs(Number(t?.change) || 0);
+  if (p > 0.95 && p < 1.05 && ch < 0.5 && /USD|DAI|CASH/.test(sym)) return true;
+  return false;
+}
+
 function normalize(t) {
   const change = pickChange(t);
   const created = t.firstPool?.createdAt || t.createdAt;
@@ -912,6 +924,35 @@ async function _resolvePoolAddr(mint) {
 // Real ~24h hourly closes for a row sparkline — contract-matched, NO Stocks.
 // Throttled (≤3 concurrent) + cached 2 min. Returns null on any failure, so the
 // caller falls back to the smooth 24h anchor curve.
+// Defensive OHLCV parser — accepts every shape a candles endpoint might return
+// (array of [ts,o,h,l,c,v], array of {c|close|price}, or wrapped in
+// {candles|ohlcv|ohlcv_list|bars|prices|data}). Returns [{t,c}] sorted oldest→newest.
+function mwPtsFromAny(data) {
+  let arr = null;
+  if (Array.isArray(data)) arr = data;
+  else if (data && typeof data === 'object') {
+    arr = data.candles || data.ohlcv || data.ohlcv_list || data.bars || data.series
+       || data.prices || data.result
+       || (data.data && (data.data.attributes ? data.data.attributes.ohlcv_list : data.data));
+  }
+  if (!Array.isArray(arr) || arr.length < 2) return null;
+  const pts = arr.map((row, i) => {
+    if (Array.isArray(row)) {
+      const c = row.length >= 5 ? Number(row[4]) : Number(row[1]);
+      return { t: Number(row[0]) || i, c };
+    }
+    if (row && typeof row === 'object') {
+      const c = Number(row.c ?? row.close ?? row.Close ?? row.price ?? row.value ?? row.p);
+      const t = Number(row.t ?? row.time ?? row.ts ?? row.timestamp ?? row.unixTime ?? row.unix ?? i);
+      return { t, c };
+    }
+    return { t: i, c: NaN };
+  }).filter(p => Number.isFinite(p.c) && p.c > 0);
+  if (pts.length < 2) return null;
+  pts.sort((a, b) => a.t - b.t);
+  return pts;
+}
+
 function mwFetchSpark(mint) {
   if (!mint) return Promise.resolve(null);
   const c = _ohlcv.get(mint);
@@ -921,14 +962,33 @@ function mwFetchSpark(mint) {
     _ohQ.push(async () => {
       let out = null;
       try {
-        const addr = await _resolvePoolAddr(mint);
-        if (addr) {
-          const r = await fetchTO(`https://api.geckoterminal.com/api/v2/networks/solana/pools/${addr}/ohlcv/hour?aggregate=1&limit=24`, 5000);
-          if (r.ok) {
-            const j = await r.json();
-            const list = j?.data?.attributes?.ohlcv_list || []; // [ts,o,h,l,c,v], newest first
-            const closes = list.map(row => Number(row?.[4])).filter(v => Number.isFinite(v) && v > 0).reverse();
-            if (closes.length >= 2) out = closes;
+        // 1) Server proxy — same CG data as the chart, NOT rate-limited like a
+        //    direct browser call to api.geckoterminal.com (that 429 was why the
+        //    sparklines were flat).
+        try {
+          const nr = await fetchTO('/api/nx/chart/' + encodeURIComponent(mint), 7000);
+          if (nr.ok) { const nd = await nr.json(); if (Array.isArray(nd?.closes) && nd.closes.length >= 2) out = nd.closes.map(Number).filter(n => n > 0); }
+        } catch {}
+        if (out) { _ohlcv.set(mint, { ts: Date.now(), closes: out }); _ohlcvWait.delete(mint); resolve(out); return; }
+        try {
+          // tf=5m is 60×1-min candles = the last 1 hour.
+          const sr = await fetchTO('/api/dex/candles/' + encodeURIComponent(mint) + '?tf=5m', 7000);
+          if (sr.ok) {
+            const pts = mwPtsFromAny(await sr.json());
+            if (pts) out = pts.map(p => p.c);
+          }
+        } catch { /* fall through to direct */ }
+        // 2) Direct GeckoTerminal (last resort).
+        if (!out) {
+          const addr = await _resolvePoolAddr(mint);
+          if (addr) {
+            const r = await fetchTO(`https://api.geckoterminal.com/api/v2/networks/solana/pools/${addr}/ohlcv/minute?aggregate=1&limit=60`, 5000);
+            if (r.ok) {
+              const j = await r.json();
+              const list = j?.data?.attributes?.ohlcv_list || []; // [ts,o,h,l,c,v], newest first
+              const closes = list.map(row => Number(row?.[4])).filter(v => Number.isFinite(v) && v > 0).reverse();
+              if (closes.length >= 2) out = closes;
+            }
           }
         }
       } catch { out = null; }
@@ -950,9 +1010,19 @@ function endpointSeries(price, change) {
   const now = Number(price);
   if (!(now > 0)) return null;
   const c = Number(change);
-  const then = Number.isFinite(c) ? now / (1 + c / 100) : now;
+  // Real direction when we know the change; a gentle rise otherwise — so the
+  // approximation always curves (never flat/straight, never blank).
+  const then = (Number.isFinite(c) && Math.abs(c) > 0.001) ? now / (1 + c / 100) : now * 0.985;
   if (!(then > 0)) return null;
-  return [then, now];
+  // Eased S-curve (≈20 pts) so the approximation curves in the real direction
+  // — never a straight 2-point diagonal, never blank.
+  const N = 20, out = [];
+  for (let i = 0; i < N; i++) {
+    const t = i / (N - 1);
+    const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    out.push(then + (now - then) * e);
+  }
+  return out;
 }
 
 function recordSpark(mint, price) {
@@ -1278,7 +1348,7 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
         const d = await r.json();
         const list = Array.isArray(d) ? d : (d?.data || d?.tokens || []);
         if (!cancelled) {
-          setTokens(_uniqMint(list.map(normalize).filter(t => t.mint && t.mint !== SOL_MINT && t.sym !== 'WSOL' && t.sym !== 'SOL')));
+          setTokens(_uniqMint(list.map(normalize).filter(t => t.mint && !isStablecoin(t) && t.mint !== SOL_MINT && t.sym !== 'WSOL' && t.sym !== 'SOL')));
           setLoading(false);
         }
       } catch { if (!cancelled) setLoading(false); }
@@ -1288,8 +1358,9 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  // Per-mint % for the list — derived from the SAME CoinGecko (GeckoTerminal)
-  // OHLCV the sparkline draws (first close → last close), for the pool whose
+  // Per-mint 1-HOUR % for the list — derived from the SAME CoinGecko
+  // (GeckoTerminal) 1h OHLCV the sparkline draws (first close → last close, the
+  // last 60 minutes), for the pool whose
   // BASE token is exactly this mint. The % and the line therefore always agree,
   // and both agree with the detail chart (same provider, same contract-matched
   // pool). No DexScreener, no Jupiter stats. Throttled ≤ once / 45s per mint.
@@ -1301,14 +1372,6 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
       .filter(m => m && (now - (chgTsRef.current.get(m) || 0)) >= 45000);
     if (!due.length) return;
     due.forEach(m => chgTsRef.current.set(m, now));
-
-    // Show the feed's real 24h change immediately so every token has a % now;
-    // the OHLCV-derived window % replaces it in place when it lands (same pool).
-    const seed = {};
-    for (const t of tokens) {
-      if (t?.mint && Number.isFinite(t.change)) seed[t.mint] = t.change;
-    }
-    if (Object.keys(seed).length) setChartChg(prev => ({ ...seed, ...prev }));
 
     (async () => {
       for (const m of due) {
@@ -1419,7 +1482,7 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
   }, []);
 
   // Displayed % is derived from the chart series (chartChg: first→last close
-  // over the 1D window), so the number always matches the sparkline. Jupiter's
+  // over the last 1 hour), so the number always matches the sparkline. Jupiter's
   // stats24h.priceChange is NOT used for display — it spikes on fresh/thin
   // pools. Fall back to the Jupiter figure only until that mint's series loads.
   // Displayed % comes ONLY from the chart series (chartChg). NO Jupiter, ever.
@@ -1703,6 +1766,41 @@ const MW_CHART_RES = [
 ];
 const MW_RES_DEFAULT = '1s';
 
+
+// Resolve a pool address from the server /api/dex/token proxy (server-to-server,
+// never rate-limited/CORS-blocked). Picks the base-token-matched, deepest pool.
+// Server-side pool resolution (never browser-rate-limited): /api/nx/pool first,
+// then the existing /api/ape/curve. Both return a GeckoTerminal pool address.
+async function mwServerPool(mint) {
+  try {
+    const r = await fetch('/api/nx/pool/' + encodeURIComponent(mint), { headers: { Accept: 'application/json' } });
+    if (r.ok) { const d = await r.json(); if (d && typeof d.pool === 'string' && d.pool) return d.pool; }
+  } catch (e) {}
+  // NOTE: /api/ape/curve is intentionally NOT used here — it returns top_pools[0]
+  // without enforcing base-token match, so it could point at the wrong contract.
+  // If /api/nx/pool isn't available, the caller falls back to its own base-EXACT
+  // GeckoTerminal picker (pickBestGeckoPool), keeping the contract guaranteed.
+  return null;
+}
+
+function mwPoolFromTokenApi(d, mint) {
+  if (!d) return null;
+  const t = d.token || d;
+  const direct = t.pairAddress || t.poolAddress || t.pool || t.poolId
+    || (t.pool && t.pool.address) || (t.firstPool && (t.firstPool.id || t.firstPool.address));
+  if (typeof direct === 'string' && direct) return direct;
+  const pairs = d.pairs || t.pairs || d.pools || t.pools;
+  if (Array.isArray(pairs) && pairs.length) {
+    const liqOf  = p => Number(p?.liquidity?.usd ?? p?.liquidityUsd ?? p?.reserve_in_usd ?? p?.liquidity ?? 0);
+    const addrOf = p => p?.pairAddress || p?.poolAddress || p?.address || p?.id || null;
+    const baseOf = p => String((p?.baseToken && (p.baseToken.address || p.baseToken.id)) || p?.base || p?.baseMint || '');
+    const matched = pairs.filter(p => addrOf(p) && (!baseOf(p) || baseOf(p) === String(mint)));
+    const arr = matched.length ? matched : pairs;
+    return addrOf(arr.reduce((b, p) => (liqOf(p) > liqOf(b) ? p : b), arr[0]));
+  }
+  return null;
+}
+
 function mwBuildEmbedSrc(pool, resKey) {
   if (!pool) return null;
   const r = MW_CHART_RES.find(x => x.key === resKey) || MW_CHART_RES[0];
@@ -1734,6 +1832,14 @@ function MwTokenChart({ mint, symbol = '', poolHint = null }) {
       // CoinGecko (GeckoTerminal) only — the pool whose BASE token is exactly
       // this mint. No DexScreener.
       let chosen = null;
+      // 0) Server-side pool resolution — reliable, not rate-limited.
+      try {
+        const sAddr = await mwServerPool(mint);
+        if (sAddr) chosen = { provider: 'GECKOTERMINAL', addr: sAddr };
+      } catch {}
+      if (id !== reqRef.current) return;
+      if (chosen) { setPool(chosen); setStatus('ok'); return; }
+      // 1) Direct GeckoTerminal (last resort).
       try {
         const r = await fetchTO(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}/pools`, 4500);
         if (r.ok) {
@@ -1774,7 +1880,7 @@ function MwTokenChart({ mint, symbol = '', poolHint = null }) {
       ) : status === 'loading' ? (
         <div className="mw-chart-state"><div className="mw-chart-spin" /></div>
       ) : status === 'none' ? (
-        <div className="mw-chart-state">Chart appears once {symbol || 'this token'} is indexed — trading on the bonding curve for now.</div>
+        <div className="mw-chart-state">Live chart unavailable right now.</div>
       ) : (
         <div className="mw-chart-state">Couldn’t load the chart. Try again shortly.</div>
       )}
