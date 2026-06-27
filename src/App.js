@@ -19,7 +19,7 @@ import {
 } from '@solana/spl-token';
 import { useNexusWallet } from './WalletContext.js';
 import SwapWidget          from './components/SwapWidget.jsx';
-import Stocks, { BRANDS, fetchBrandPrices, stkFetchSeries, stkBuildPath, stkThrottle, stkEndpointSeries } from './components/Stocks.jsx';
+import Stocks, { BRANDS, fetchBrandPrices, stkFetchSeries, stkBuildPath, stkThrottle } from './components/Stocks.jsx';
 import * as StocksNS from './components/Stocks.jsx';
 // Optional named export read off the namespace so a stale Stocks.jsx (missing the
 // export) can't break the build. Renders the real buy/sell modal when present.
@@ -296,12 +296,35 @@ function _spkSmoothPath(vals, w, h, pad) {
   }
   return { line: d, area: d + ` L${P[n - 1].x.toFixed(2)},${h} L${P[0].x.toFixed(2)},${h} Z`, lastX: P[n - 1].x, lastY: P[n - 1].y };
 }
+// Two REAL endpoints from the token's own live price + real 24h change —
+// local copy so this file has no cross-module export dependency to break the
+// build. price(24h ago) = price / (1 + change/100), then price now.
+function endpointSeries(price, change) {
+  const now = Number(price);
+  if (!(now > 0)) return null;
+  const c = Number(change);
+  // Real direction when we know the change; a gentle rise otherwise — so the
+  // approximation always curves (never flat/straight, never blank).
+  const then = (Number.isFinite(c) && Math.abs(c) > 0.001) ? now / (1 + c / 100) : now * 0.985;
+  if (!(then > 0)) return null;
+  // Eased S-curve through the real prior→current price (≈20 pts) so the
+  // approximation reads as a curved trend, never a straight 2-point diagonal
+  // and never blank. Real direction, real endpoints.
+  const N = 20, out = [];
+  for (let i = 0; i < N; i++) {
+    const t = i / (N - 1);
+    const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    out.push({ t: i, c: then + (now - then) * e });
+  }
+  return out;
+}
+
 function Spark({ pts, mint, price, change, w = 60, h = 30 }) {
   const hist = recordSpark(mint, Number(price));
   const obs  = hist.length >= 2 ? hist.map(c => ({ c })) : null;
   // REAL data, priority: GeckoTerminal OHLCV → live observed ticks → the two
   // real endpoints from price + 24h change. Always a line once a price exists.
-  const use  = (pts && pts.length >= 2) ? pts : (obs || stkEndpointSeries(price, change));
+  const use  = (pts && pts.length >= 2) ? pts : (obs || endpointSeries(price, change));
   if (!use) return <svg width={w} height={h} style={{ display: 'block', flex: '0 0 auto' }} />;
   const vals = use.map(p => p.c);
   const up   = Number.isFinite(change) ? change >= 0 : vals[vals.length - 1] >= vals[0];
@@ -404,6 +427,41 @@ const CHART_RES = [
 ];
 const CHART_RES_DEFAULT = '1s';
 
+
+// Resolve a pool address from the server /api/dex/token proxy (server-to-server,
+// never rate-limited/CORS-blocked). Picks the base-token-matched, deepest pool.
+// Server-side pool resolution (never browser-rate-limited): /api/nx/pool first,
+// then the existing /api/ape/curve. Both return a GeckoTerminal pool address.
+async function appServerPool(mint) {
+  try {
+    const r = await fetch('/api/nx/pool/' + encodeURIComponent(mint), { headers: { Accept: 'application/json' } });
+    if (r.ok) { const d = await r.json(); if (d && typeof d.pool === 'string' && d.pool) return d.pool; }
+  } catch (e) {}
+  // NOTE: /api/ape/curve is intentionally NOT used here — it returns top_pools[0]
+  // without enforcing base-token match, so it could point at the wrong contract.
+  // If /api/nx/pool isn't available, the caller falls back to its own base-EXACT
+  // GeckoTerminal picker (pickBestGeckoPool), keeping the contract guaranteed.
+  return null;
+}
+
+function appPoolFromTokenApi(d, mint) {
+  if (!d) return null;
+  const t = d.token || d;
+  const direct = t.pairAddress || t.poolAddress || t.pool || t.poolId
+    || (t.pool && t.pool.address) || (t.firstPool && (t.firstPool.id || t.firstPool.address));
+  if (typeof direct === 'string' && direct) return direct;
+  const pairs = d.pairs || t.pairs || d.pools || t.pools;
+  if (Array.isArray(pairs) && pairs.length) {
+    const liqOf  = p => Number(p?.liquidity?.usd ?? p?.liquidityUsd ?? p?.reserve_in_usd ?? p?.liquidity ?? 0);
+    const addrOf = p => p?.pairAddress || p?.poolAddress || p?.address || p?.id || null;
+    const baseOf = p => String((p?.baseToken && (p.baseToken.address || p.baseToken.id)) || p?.base || p?.baseMint || '');
+    const matched = pairs.filter(p => addrOf(p) && (!baseOf(p) || baseOf(p) === String(mint)));
+    const arr = matched.length ? matched : pairs;
+    return addrOf(arr.reduce((b, p) => (liqOf(p) > liqOf(b) ? p : b), arr[0]));
+  }
+  return null;
+}
+
 function pickBestGeckoPool(pools, mint) {
   if (!Array.isArray(pools) || !pools.length) return null;
   const wanted = 'solana_' + mint;                         // EXACT — Solana base58 is case-sensitive
@@ -459,7 +517,15 @@ function SheetChart({ mint, sym, poolHint = null }) {
       } catch { return null; }
     };
 
+    const fetchServer = async () => {
+      const addr = await appServerPool(mint);
+      return addr ? { provider: 'GECKOTERMINAL', addr } : null;
+    };
     (async () => {
+      // Server proxy first — reliable.
+      const s = await fetchServer();
+      if (!alive()) return;
+      if (s) { setPool(s); setStatus('ok'); return; }
       for (let attempt = 0; attempt < 4 && alive(); attempt++) {
         const g = await fetchGecko();
         if (!alive()) return;
@@ -497,7 +563,7 @@ function SheetChart({ mint, sym, poolHint = null }) {
         ) : status === 'loading' ? (
           <span style={{ width: 24, height: 24, borderRadius: '50%', border: '2.5px solid ' + C.border, borderTopColor: '#0b0b0c', animation: 'nx-spin .8s linear infinite' }} />
         ) : status === 'none' ? (
-          <span style={{ fontFamily: MONO, fontSize: 11, color: C.ink3, padding: '0 24px', lineHeight: 1.5 }}>Chart appears once ${sym || 'this token'} is indexed — trading on the bonding curve for now.</span>
+          <span style={{ fontFamily: MONO, fontSize: 11, color: C.ink3, padding: '0 24px', lineHeight: 1.5 }}>Live chart unavailable right now.</span>
         ) : (
           <span style={{ fontFamily: MONO, fontSize: 11, color: C.ink3, padding: '0 24px' }}>Couldn’t load the chart. Try again shortly.</span>
         )}
@@ -1775,7 +1841,7 @@ function LiveTokenFeeds({ onSwitchTab, onOpenToken, onConnectWallet }) {
   if (!toks.length && !trendToks.length) return null;
 
   const radar    = toks.slice(0, 15);
-  const trending = [...trendToks].sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0)).slice(0, 15);
+  const trending = [...trendToks].filter(t => !isStablecoin(t)).sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0)).slice(0, 15);
   const gainers  = [...trendToks].filter(t => Number.isFinite(t.change)).sort((a, b) => b.change - a.change).slice(0, 15);
 
   // live stats
@@ -1919,6 +1985,18 @@ async function appFetchBrandIcons(mints) {
     }
     return out;
   } catch { return {}; }
+}
+
+// Stablecoins/pegged tokens are not "trending" — they sit at ~$1 with ±0.01%
+// moves. Exclude them from trending so the list shows real movers, not USDC/USDT.
+const STABLE_SYMS = new Set(['USDC','USDT','USD1','USDH','USDS','DAI','PYUSD','USDD','FDUSD','TUSD','USDE','CASH','JUPUSD','JUPSOL','BUSD','USDY','USDB','USDG','EURC','GUSD','LUSD','USDR','USDX','UXD','USTC','FRAX']);
+function isStablecoin(t) {
+  const sym = String(t?.sym || t?.symbol || '').toUpperCase().replace(/^\$/, '');
+  if (STABLE_SYMS.has(sym)) return true;
+  const p = Number(t?.price);
+  const ch = Math.abs(Number(t?.change) || 0);
+  if (p > 0.95 && p < 1.05 && ch < 0.5 && /USD|DAI|CASH/.test(sym)) return true;
+  return false;
 }
 
 export function XStocksStrip({ onSwitchTab, onOpenToken, onOpenStock }) {
