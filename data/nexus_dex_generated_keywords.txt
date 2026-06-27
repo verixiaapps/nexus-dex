@@ -345,11 +345,21 @@ bridge usdc to base
 bridge usdc to optimism
 bridge usdc to polygon
 bridge usdc to solana
+bridge usdc to solana cheapest
+bridge usdt
+bridge usdt to arbitrum
+bridge usdt to base
 bridge usdt to optimism
 bridge usdt to polygon
+bridge usdt to solana
 bridge without kyc
+bridge xrp to arbitrum
+bridge xrp to base
 bridge xrp to optimism
 bridge xrp to polygon
+bridge xrp to solana
+btc swap from solana
+bullx alternative solana dex
 bullx vs photon fees
 bullx vs photon for beginners
 bullx vs photon for memecoins
@@ -357,10 +367,30 @@ bullx vs photon for new tokens
 bullx vs photon reddit
 bullx vs photon slippage
 bullx vs photon speed
+bullx vs photon swap fees compared
 bullx vs photon which is better
+buy aave with solana
+buy ai16z with solana
+buy altcoins
 buy amazon with crypto
 buy apple with crypto
+buy aptos with solana
+buy arb with solana
+buy bitcoin with solana
+buy bonk with solana
+buy brett with solana
+buy cardano with solana
+buy chainlink with solana
+buy crypto no kyc
+buy dogecoin with solana
+buy drift with solana
+buy ethereum with solana
+buy fartcoin with solana
+buy floki with solana
 buy google with crypto
+buy grass with solana
+buy helium with solana
+buy hype with solana
 buy meme coins
 buy meme coins instantly
 buy meta with crypto
