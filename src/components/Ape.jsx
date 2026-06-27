@@ -54,6 +54,12 @@ import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
    ============================================================ */
 const SOL_MINT   = 'So11111111111111111111111111111111111111112';
 const DUST_MIN_USD = 0.05; // owned-tab: hide positions worth less than this (amount × price)
+// owned-tab: when the trade log shows a position was SOLD OUT through the app
+// (a sell happened and no tokens remain open), any leftover on-chain balance is
+// un-swept dust from the route. Hide it as long as it's worth under this much, so
+// a fully-closed position stops lingering in your bag. The ceiling guards against
+// a stale/zero open_tokens reading wrongly hiding a real holding.
+const CLOSED_DUST_USD = 1.50;
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
 const FEE_BPS    = 300;
 const SOL_RESERVE = 0; // no reserve — MAX buy uses the full balance, nothing held back for ATA rent / fees
@@ -1336,45 +1342,59 @@ const AP_CSS = `
    Re-skins via tokens + the few hardcoded light surfaces.
    ============================================================ */
 .ap-root{
-  --ink:#f4f5f7; --ink2:#9aa0ab; --ink3:#646a76;
-  --hairline:#242830; --hairline2:#2e333c;
-  --cyan:#1ad98a; --sky:#1ad98a; --pink:#ff4d61; --lav:#8b7bff; --mint:#1ad98a;
-  --peach:#f5b545; --gold:#f5b545; --green:#1ad98a; --greent:#1ad98a; --red:#ff4d61; --amber:#f5b545;
-  --orange:#f5b545; --purple:#8b7bff; --blue:#4d8bff;
-  --cream:#16181d; --dep:#1ad98a; --buyblk:#1ad98a;
-  --glass:#16181d; --glass-strong:#16181d;
-  --fill:#1b1e23; --fill2:#16181d;
-  --border:#242830; --border-hi:#30343d;
+  --ink:#edeff2; --ink2:#9aa3b0; --ink3:#646c79;
+  --hairline:#262c36; --hairline2:#323a46;
+  /* brand / non-semantic accent = warm "first light" amber (repurposes --purple
+     so every brand surface recolors without touching markup) */
+  --cyan:#22c77e; --sky:#22c77e; --pink:#ff4d5e; --lav:#ffb020; --mint:#22c77e;
+  --peach:#ffb020; --gold:#ffb020; --green:#22c77e; --greent:#22c77e; --red:#ff4d5e; --amber:#ffb020;
+  --orange:#ffb020; --purple:#ffb020; --blue:#4dd2e0;
+  --cream:#14171d; --dep:#22c77e; --buyblk:#22c77e;
+  --glass:#14171d; --glass-strong:#14171d;
+  --fill:#191d25; --fill2:#14171d;
+  --border:#262c36; --border-hi:#323a46;
   background:#0a0b0e;
 }
 /* full-page overlays */
 .wp-root,.wa-root{background:#0a0b0e}
 /* translucent sticky bars */
-.ap-nav,.ap-qbar,.wp-head,.wp-tabs,.wa-head,.wa-kill{background:rgba(10,11,14,.82)}
+.ap-nav,.ap-qbar,.wp-head,.wp-tabs,.wa-head,.wa-kill{background:rgba(10,11,14,.88)}
 /* solid card surfaces */
 .ap-hero-ref,.ap-positions,.ap-trend-card,.ap-list-frame,.ap-sheet,.ap-chart-embed,
 .ap-research,.ap-watch,.ap-watch-row,.ap-field-chip,.ap-toast,.ap-toast.info,
 .wp-card,.wp-card.feature,.wp-stat,.wp-pnl-hero,.wp-pnl-hero.neg,.wp-pos-frame,
 .wp-lb-frame,.wp-toast,.wa-master,.wa-master.on,.wa-master.paused,.wa-locked-card,
-.wa-sliders,.wa-statc,.wa-pos-frame,.wa-log-frame{background:#16181d}
-.ap-disc-f select{background:#1b1e23;color:var(--ink)}
+.wa-sliders,.wa-statc,.wa-pos-frame,.wa-log-frame{background:#14171d}
+.ap-disc-f select{background:#191d25;color:var(--ink)}
 .ap-btn-sell:hover{background:#22262d}
 /* primary actions: green button with dark, high-contrast label */
-.ap-btn-buy{background:var(--green);color:#04130d}
-.ap-btn-buy .arrow{color:#04130d}
-.ap-confirm{color:#04130d}
-/* ── completion: elements that were solid black (#0b0b0c) on the light theme,
-   which read as black-on-black until remapped to Solana accents ── */
-.ap-nav-wallet,.ap-watch-addbtn,.ap-field-chip .lg,.ap-chart-ca .cp,.ap-hero-ref .pct,.ap-filter-btn .ct{background:var(--purple);color:#fff;border-color:transparent}
-.ap-qamt.active,.ap-chip.on,.ap-chip.owned.on,.ap-hotwin-pill.on,.ap-disc-sort.on{background:#eef0f6;color:#0a0b0e;border-color:transparent}
-.ap-brand-glyph{background:linear-gradient(135deg,var(--purple),var(--green));color:#0a0b0e}
-.ap-balcard{background:linear-gradient(160deg,#1b1d29,#101120);border:1px solid var(--hairline2)}
-.ap-lure{background:linear-gradient(160deg,#17151f,#0f1016);border:1px solid var(--hairline2);color:var(--ink)}
-.ap-lure-intro{background:var(--green);color:#04130d}
-.wp-tab.on{border-bottom-color:var(--purple)}
-.ap-chart-state .sp{border-top-color:var(--purple)}
+.ap-btn-buy{background:var(--green);color:#06120c}
+.ap-btn-buy .arrow{color:#06120c}
+.ap-confirm{color:#06120c}
+.ap-confirm.sell{color:#1a0608}
+/* brand / accent surfaces — amber with dark, legible labels */
+.ap-nav-wallet,.ap-watch-addbtn,.ap-field-chip .lg,.ap-chart-ca .cp,.ap-hero-ref .pct,.ap-filter-btn .ct{background:var(--amber);color:#1a1205;border-color:transparent}
+.ap-qamt.active,.ap-chip.on,.ap-chip.owned.on,.ap-hotwin-pill.on,.ap-disc-sort.on{background:#edeff2;color:#0a0b0e;border-color:transparent}
+.ap-brand-glyph{background:linear-gradient(140deg,#ffb020,#ff8a2c);color:#1a1205;box-shadow:0 4px 14px -4px rgba(255,150,40,.5)}
+.ap-balcard{background:linear-gradient(160deg,#1c1a14,#101013);border:1px solid var(--hairline2)}
+.ap-lure{background:linear-gradient(160deg,#1c1a14,#0f1016);border:1px solid var(--hairline2);color:var(--ink)}
+.ap-lure-intro{background:linear-gradient(140deg,#ffb020,#ff8a2c);color:#1a1205}
+.wp-tab.on{border-bottom-color:var(--amber)}
+.ap-chart-state .sp{border-top-color:var(--amber)}
+.ap-addr{background:#191d25}
+/* fresh-launch marker: gold edge bar + amber ring on the age dot */
 .ap-av .age-dot,.ap-av .age-dot.fresh{box-shadow:0 0 0 2px #0a0b0e}
-.ap-addr{background:#1b1e23}
+.ap-av .age-dot.fresh{background:var(--amber);color:#1a1205}
+.ap-row.fresh{position:relative}
+.ap-row.fresh::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:2.5px;border-radius:2px;background:linear-gradient(180deg,#ffb020,#ff7a3c);box-shadow:0 0 10px rgba(255,176,32,.55)}
+/* safety read tints rebuilt on the new amber/red */
+.ap-safety.amber{border-color:rgba(255,176,32,.22);background:rgba(255,176,32,.05)}
+.ap-safety.red{border-color:rgba(255,77,94,.20);background:rgba(255,77,94,.05)}
+/* mode + preset selected states keep dark labels on the semantic fills */
+.ap-mode-tab.active{color:#06120c}
+.ap-mode-tabs.sell .ap-mode-tab.active{color:#1a0608}
+.ap-preset.on{background:#edeff2;color:#0a0b0e}
+.ap-preset.on.sell{background:var(--red);color:#1a0608}
 `;
 
 function useApCSS() {
@@ -2689,11 +2709,11 @@ export default function Ape({ mainWalletPubkey }) {
         const map = {};
         for (const p of (d.positions || [])) {
           if (!p || !p.mint) continue;
-          map[p.mint] = { sol_in: Number(p.sol_in) || 0, sol_out: Number(p.sol_out) || 0, open_tokens: Number(p.open_tokens) || 0 };
+          map[p.mint] = { sol_in: Number(p.sol_in) || 0, sol_out: Number(p.sol_out) || 0, open_tokens: Number(p.open_tokens) || 0, open: p.open !== false };
         }
         setPnlBasis(prev => {
           const keys = Object.keys(map);
-          if (keys.length === Object.keys(prev).length && keys.every(k => prev[k] && prev[k].sol_in === map[k].sol_in && prev[k].sol_out === map[k].sol_out && prev[k].open_tokens === map[k].open_tokens)) return prev;
+          if (keys.length === Object.keys(prev).length && keys.every(k => prev[k] && prev[k].sol_in === map[k].sol_in && prev[k].sol_out === map[k].sol_out && prev[k].open_tokens === map[k].open_tokens && prev[k].open === map[k].open)) return prev;
           return map;
         });
       } catch (e) {}
@@ -3121,7 +3141,10 @@ export default function Ape({ mainWalletPubkey }) {
     if (mode === 'buy') {
       const solAmt = Number(swapParams && swapParams.tradeLamports || 0) / 1e9;
       const capErr = capBlock(solAmt);
-      if (capErr) { pushToast({ type: 'error', em: '⊘', body: capErr }); return; }
+      // Throw (don't toast+return): the trade sheet's confirm handler awaits
+      // this and only resets its "Buying…" state via the catch path. A bare
+      // return would resolve successfully and leave the button stuck.
+      if (capErr) throw new Error(capErr);
     }
     const result = await executeSwap({ mode, token, swapParams });
     setConfettiAt(Date.now());
@@ -3159,35 +3182,49 @@ export default function Ape({ mainWalletPubkey }) {
     recentTokens: recent, solBalance, solPrice, balances, executeSwap, pushToast, heldTokenUsd,
   });
 
+  // Your bag — the held positions worth showing. Extracted so both the owned
+  // tab's rows AND the "You own · N" badge derive from one list and can never
+  // disagree. A position is shown only if it has a real price and at least
+  // DUST_MIN_USD of value, and is NOT a position the trade log says you've
+  // already closed (leftover route dust under CLOSED_DUST_USD is hidden).
+  const ownedTokens = useMemo(() => {
+    const held = [];
+    for (const mint of Object.keys(balances)) {
+      if (mint === SOL_MINT) continue;
+      const bal = balances[mint];
+      if (!bal || !(bal.uiAmount > 0)) continue;
+      // Prefer live feed data for the token if present, else resolve metadata.
+      const tok = recent.find(t => t.mint === mint) || resolveToken(mint);
+      if (!tok) continue;
+      const px = Number(tok.price) || 0;
+      const valUsd = (bal.uiAmount || 0) * px;
+      // CLOSED via the trade log: the ledger's `open` flag is authoritative;
+      // fall back to "a sell happened and nothing remains open" when it's
+      // absent. On a closed position any chain balance left is route dust, so
+      // drop it. The value ceiling stops a stale/zero reading from hiding a
+      // holding that's actually worth something; a never-sold token (no sell
+      // logged, open !== false) is never hidden by this rule.
+      const basis = pnlBasis[mint];
+      const closedByLog = !!basis && (basis.open === false || ((basis.sol_out || 0) > 0 && (basis.open_tokens || 0) <= 0));
+      if (closedByLog && valUsd < CLOSED_DUST_USD) continue;
+      if (px <= 0) continue;
+      if (valUsd < DUST_MIN_USD) continue;
+      held.push(tok);
+    }
+    held.sort((a, b) => {
+      const av = ((balances[a.mint] && balances[a.mint].uiAmount) || 0) * (a.price || 0);
+      const bv = ((balances[b.mint] && balances[b.mint].uiAmount) || 0) * (b.price || 0);
+      return bv - av;
+    });
+    return held;
+  }, [balances, recent, resolveToken, pnlBasis]);
+
   const filtered = useMemo(() => {
     // OWNED tab = your bag. Driven entirely by wallet balances, never by the
-    // launch feed. Show EVERYTHING you hold (no cap), biggest position value
-    // first, and do NOT apply the discovery filters (wild / min-liq) — those
-    // shape "All new" only and must never hide a token you actually own.
-    if (activeTab === 'owned') {
-      const held = [];
-      for (const mint of Object.keys(balances)) {
-        if (mint === SOL_MINT) continue;
-        const bal = balances[mint];
-        if (!bal || !(bal.uiAmount > 0)) continue;
-        // Prefer live feed data for the token if present, else resolve metadata.
-        const fromFeed = recent.find(t => t.mint === mint);
-        const tok = fromFeed || resolveToken(mint);
-        if (!tok) continue;
-        // Show a position only if it has a real price AND is worth at least
-        // DUST_MIN_USD. Zero/unknown price → hidden. Priced but tiny → hidden.
-        const px = Number(tok.price) || 0;
-        if (px <= 0) continue;
-        if ((bal.uiAmount || 0) * px < DUST_MIN_USD) continue;
-        held.push(tok);
-      }
-      held.sort((a, b) => {
-        const av = ((balances[a.mint] && balances[a.mint].uiAmount) || 0) * (a.price || 0);
-        const bv = ((balances[b.mint] && balances[b.mint].uiAmount) || 0) * (b.price || 0);
-        return bv - av;
-      });
-      return held;
-    }
+    // launch feed. Shows everything you hold (no cap), biggest value first, and
+    // does NOT apply the discovery filters (wild / min-liq) — those shape "All
+    // new" only and must never hide a token you actually own.
+    if (activeTab === 'owned') return ownedTokens;
 
     // ALL-NEW tab = discovery feed. Filters apply here; capped for scannability.
     let list = recent;
@@ -3245,7 +3282,7 @@ export default function Ape({ mainWalletPubkey }) {
     }
 
     return list.slice(0, 15);
-  }, [recent, discTokens, wildOnly, minLiq, activeTab, hotWindow, discSort, discMinLiq, discMinMcap, discMaxMcap, discMinHolders, discMinScore, discAge, balances, resolveToken]);
+  }, [recent, discTokens, wildOnly, minLiq, activeTab, hotWindow, discSort, discMinLiq, discMinMcap, discMaxMcap, discMinHolders, discMinScore, discAge, ownedTokens]);
 
   const trending = useMemo(() => {
     return [...recent]
@@ -3262,7 +3299,7 @@ export default function Ape({ mainWalletPubkey }) {
     }
   }, [recent]);
 
-  const ownedCount = useMemo(() => Object.keys(balances).filter(m => m !== SOL_MINT && balances[m].uiAmount > 0).length, [balances]);
+  const ownedCount = useMemo(() => ownedTokens.length, [ownedTokens]);
   const activeFiltersCount = (wildOnly ? 1 : 0) + (minLiq > 0 ? 1 : 0);
   const discActiveCount = (discMinLiq > 0 ? 1 : 0) + (discMinMcap > 0 ? 1 : 0) + (discMaxMcap > 0 ? 1 : 0) + (discMinHolders > 0 ? 1 : 0) + (discMinScore > 0 ? 1 : 0) + (discAge !== 'any' ? 1 : 0);
   const burnerHasNoSol = !solBalance || solBalance.uiAmount <= 0;
