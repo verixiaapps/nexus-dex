@@ -392,7 +392,29 @@ async function _lrFetchPumpInfo(mint, solPriceUsd) {
     if (vSol > 0 && solPriceUsd > 0) {
       liquidityUsd = (vSol / 1e9) * solPriceUsd * 2;
     }
-    const out = { holders, liquidityUsd, imageUrl, ts: Date.now() };
+
+    // ── Bonding-curve state ──────────────────────────────────────────────
+    // Graduated/migrated is a hard signal: pump.fun sets `complete:true` and a
+    // `raydium_pool` once the curve fills and the token moves to Raydium.
+    // Progress is DERIVED from pump.fun's own real_token_reserves against the
+    // curve's known initial allocation (793.1M tokens, 6 decimals). It's gated:
+    // if the field is missing or out of the expected range (scale mismatch),
+    // we emit NO number rather than a wrong one — accuracy over coverage.
+    const graduated = d.complete === true ||
+                      (typeof d.raydium_pool === 'string' && d.raydium_pool.length > 0);
+    let bondingProgress = null;
+    if (graduated) {
+      bondingProgress = 100;
+    } else {
+      const CURVE_INIT = 793_100_000 * 1e6; // pump.fun initial real token reserves (raw, 6 dp)
+      const rtr = Number(d.real_token_reserves ?? d.realTokenReserves);
+      if (Number.isFinite(rtr) && rtr > 0 && rtr <= CURVE_INIT * 1.02) {
+        bondingProgress = Math.max(0, Math.min(100, (1 - rtr / CURVE_INIT) * 100));
+      }
+      // rtr out of range → leave null (the client then resolves via fallback).
+    }
+
+    const out = { holders, liquidityUsd, imageUrl, graduated, bondingProgress, ts: Date.now() };
     _lrPfCache.set(mint, out);
     return out;
   } catch (e) {
@@ -490,6 +512,11 @@ app.get('/api/dex/launches', async (req, res) => {
         t.holders = pf.holders;
         if (!(t.liquidity > 0) && pf.liquidityUsd > 0) t.liquidity = pf.liquidityUsd;
         if (!t.icon && pf.imageUrl)                    t.icon      = pf.imageUrl;
+        // Bonding-curve state for the client (drives chart routing + Pulse stage).
+        // normalize() reads `bondingProgress`; bond stays null when pump.fun
+        // didn't give a usable reserve figure (accuracy over coverage).
+        if (pf.bondingProgress != null) t.bondingProgress = pf.bondingProgress;
+        if (pf.graduated) t.graduated = true;
       }
       const ts = _lrTradeStats.get(t.mint);
       if (ts) {
@@ -1938,6 +1965,7 @@ require('./referrals')(app, { rpcUrl: PRIMARY_RPC_URL });
  * Ape (burner page) — dedicated Pump.fun trade route
  * ===================================================================== */
 require('./ape-pump-trade').mountRoutes(app);
+require('./ape-pump-candles').mountRoutes(app);
 
 /* ========================================================================
  * Admin dashboard — /api/visit + /api/admin/overview
