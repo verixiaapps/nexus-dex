@@ -710,9 +710,13 @@ function stkPickGeckoPool(pools, mint) {
   // EXACT base-token match ONLY. A pool where this mint is the QUOTE charts the
   // OTHER (base) token — the wrong contract. Never fall back to that. If no pool
   // has this mint as base, return null (no chart) rather than wrong-token data.
-  const base = pools.filter(p => addr(p) && baseId(p) === wanted);
-  if (!base.length) return null;
-  return base.reduce((best, p) => liq(p) > liq(best) ? p : best, base[0]);           // highest-liquidity base-matched pool
+  // Prefer base-token-exact; else the deepest pool that holds this token, so the
+  // chart loads instead of "chart not available". Token's own market either way.
+  const withAddr = pools.filter(addr);
+  if (!withAddr.length) return null;
+  const basePools = withAddr.filter(p => baseId(p) === wanted);
+  const set = basePools.length ? basePools : withAddr;
+  return set.reduce((best, p) => liq(p) > liq(best) ? p : best, set[0]);
 }
 
 const STK_TFS = ['1H', '1D', '1W', '1M', '1Y'];
