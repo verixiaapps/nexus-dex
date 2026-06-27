@@ -1968,83 +1968,119 @@ require('./admin')(app);
  * ===================================================================== */
 const NX_GT       = 'https://api.geckoterminal.com/api/v2';
 const NX_B58      = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-const NX_TTL      = 15_000;
-const NX_POOL_TTL = 5 * 60_000;
-const _nxCache     = new Map();
-const _nxPoolCache = new Map();
+// THE ONE DIAL: a cached token is served instantly; once it is older than this,
+// the NEXT view triggers a background refresh (the stale value is still shown,
+// then swapped in place). Lower = fresher but more GeckoTerminal calls; higher =
+// fewer calls but staler. 5 min keeps a 1-hour sparkline live without hammering;
+// bump toward 3_600_000 (1 hour) if you want even fewer refetches.
+const NX_FRESH_MS = 5 * 60_000;
+const NX_MAX      = 5000;       // big LRU cap — keep lots of tokens hot so nothing reloads from blank
+const _nxCache    = new Map();  // mint -> { at, payload }  (last good value; never expires under a request)
+const _nxInflight = new Map();  // mint -> Promise           (dedupe concurrent refreshes)
 
+// Pick the chart pool. Prefer the pool whose BASE token is exactly this mint
+// (token-as-base → the embed shows this exact contract). If none is base-side,
+// fall back to the deepest pool that HOLDS this token (still this token's
+// market) rather than giving up — that fallback is why charts now load instead
+// of saying "chart not available".
 function _nxPickPool(pools, mint) {
   if (!Array.isArray(pools) || !pools.length) return null;
   const wanted = 'solana_' + mint;
   const baseId = p => String(p?.relationships?.base_token?.data?.id || '');
-  const addrOf = p => p?.attributes?.address || null;
-  const liqOf  = p => Number(p?.attributes?.reserve_in_usd || 0);
-  const matched = pools.filter(p => addrOf(p) && baseId(p) === wanted);
-  if (!matched.length) return null;
-  return matched.reduce((b, p) => (liqOf(p) > liqOf(b) ? p : b), matched[0]);
+  const addr   = p => p?.attributes?.address || null;
+  const liq    = p => Number(p?.attributes?.reserve_in_usd || 0);
+  const withAddr = pools.filter(addr);
+  if (!withAddr.length) return null;
+  const base = withAddr.filter(p => baseId(p) === wanted);
+  const set  = base.length ? base : withAddr;
+  const best = set.reduce((b, p) => (liq(p) > liq(b) ? p : b), set[0]);
+  return best ? best.attributes.address : null;
 }
 
-async function _nxResolvePool(mint) {
-  const hit = _nxPoolCache.get(mint);
-  if (hit && Date.now() - hit.at < NX_POOL_TTL) return hit.pool;
-  let pool = null;
-  try {
-    const r = await fetchWithTimeout(
-      NX_GT + '/networks/solana/tokens/' + encodeURIComponent(mint) + '/pools',
-      { headers: { Accept: 'application/json' } },
-      7_000,
-    );
-    if (r.ok) {
-      const j = await r.json();
-      pool = _nxPickPool(j && j.data, mint)?.attributes?.address || null;
-    }
-  } catch (e) { /* leave null */ }
-  _nxPoolCache.set(mint, { at: Date.now(), pool });
-  return pool;
+async function _nxFetchPool(mint) {
+  const r = await fetchWithTimeout(
+    NX_GT + '/networks/solana/tokens/' + encodeURIComponent(mint) + '/pools',
+    { headers: { Accept: 'application/json' } },
+    7_000,
+  );
+  if (!r.ok) return null;
+  const j = await r.json();
+  return _nxPickPool(j && j.data, mint);
 }
 
+// 1-hour window: 60 × 1-minute closes, oldest → newest.
 async function _nxCloses1h(pool) {
-  try {
-    const r = await fetchWithTimeout(
-      NX_GT + '/networks/solana/pools/' + pool + '/ohlcv/minute?aggregate=1&limit=60&currency=usd',
-      { headers: { Accept: 'application/json' } },
-      7_000,
-    );
-    if (!r.ok) return null;
-    const j = await r.json();
-    const list = j?.data?.attributes?.ohlcv_list;
-    if (!Array.isArray(list) || list.length < 2) return null;
-    const closes = list
-      .map(row => Number(row[4]))
-      .filter(n => Number.isFinite(n) && n > 0)
-      .reverse();
-    return closes.length >= 2 ? closes : null;
-  } catch (e) { return null; }
+  const r = await fetchWithTimeout(
+    NX_GT + '/networks/solana/pools/' + pool + '/ohlcv/minute?aggregate=1&limit=60&currency=usd',
+    { headers: { Accept: 'application/json' } },
+    7_000,
+  );
+  if (!r.ok) return null;
+  const j = await r.json();
+  const list = j?.data?.attributes?.ohlcv_list;
+  if (!Array.isArray(list) || list.length < 2) return null;
+  const closes = list.map(row => Number(row[4])).filter(n => Number.isFinite(n) && n > 0).reverse();
+  return closes.length >= 2 ? closes : null;
 }
 
-async function _nxBuild(mint) {
-  const hit = _nxCache.get(mint);
-  if (hit && Date.now() - hit.at < NX_TTL) return hit.payload;
-  const pool = await _nxResolvePool(mint);
-  let closes = null;
-  if (pool) closes = await _nxCloses1h(pool);
+// Keep the last good fields — a refresh that comes back empty (rate limit, blip)
+// must never wipe a pool/closes we already have. That's the whole cache promise.
+function _nxMerge(prev, next) {
+  if (!prev) return next;
+  const ok = a => Array.isArray(a) && a.length >= 2;
+  return {
+    mint:   next.mint,
+    pool:   next.pool   || prev.pool   || null,
+    closes: ok(next.closes) ? next.closes : (prev.closes || null),
+    change: next.change != null ? next.change : prev.change,
+    price:  next.price  != null ? next.price  : prev.price,
+  };
+}
+
+async function _nxBuildFresh(mint) {
+  const pool   = await _nxFetchPool(mint).catch(() => null);
+  const closes = pool ? await _nxCloses1h(pool).catch(() => null) : null;
   let change = null, price = null;
   if (Array.isArray(closes) && closes.length >= 2) {
     const a = closes[0], b = closes[closes.length - 1];
     price = b;
     if (a > 0) change = ((b - a) / a) * 100;
   }
-  const payload = { mint, pool: pool || null, closes: closes || null, change, price };
-  _nxCache.set(mint, { at: Date.now(), payload });
-  if (_nxCache.size > 600) { const k = _nxCache.keys().next().value; if (k) _nxCache.delete(k); }
-  return payload;
+  return { mint, pool: pool || null, closes: closes || null, change, price };
+}
+
+function _nxRefresh(mint) {
+  if (_nxInflight.has(mint)) return _nxInflight.get(mint);
+  const job = _nxBuildFresh(mint)
+    .then(fresh => {
+      const prev = _nxCache.get(mint);
+      _nxCache.set(mint, { at: Date.now(), payload: _nxMerge(prev?.payload, fresh) });
+      if (_nxCache.size > NX_MAX) { const k = _nxCache.keys().next().value; if (k) _nxCache.delete(k); }
+      return _nxCache.get(mint).payload;
+    })
+    .catch(() => _nxCache.get(mint)?.payload || { mint, pool: null, closes: null, change: null, price: null })
+    .finally(() => _nxInflight.delete(mint));
+  _nxInflight.set(mint, job);
+  return job;
+}
+
+// Stale-while-revalidate: if we have anything cached, return it immediately and
+// (if old) refresh in the background; only block on a network call when the
+// token is completely cold. Once a token has loaded once, it never goes blank.
+async function _nxGet(mint) {
+  const hit = _nxCache.get(mint);
+  if (hit) {
+    if (Date.now() - hit.at >= NX_FRESH_MS) _nxRefresh(mint);
+    return hit.payload;
+  }
+  return await _nxRefresh(mint);
 }
 
 app.get('/api/nx/chart/:mint', async (req, res) => {
   try {
     const mint = String(req.params.mint || '');
     if (!NX_B58.test(mint)) return res.status(400).json({ error: 'Invalid mint' });
-    return res.json(await _nxBuild(mint));
+    return res.json(await _nxGet(mint));
   } catch (e) {
     return res.json({ mint: String(req.params.mint || ''), pool: null, closes: null, change: null, price: null });
   }
@@ -2054,10 +2090,47 @@ app.get('/api/nx/pool/:mint', async (req, res) => {
   try {
     const mint = String(req.params.mint || '');
     if (!NX_B58.test(mint)) return res.status(400).json({ error: 'Invalid mint' });
-    return res.json({ mint, pool: await _nxResolvePool(mint) });
+    const p = await _nxGet(mint);
+    return res.json({ mint, pool: (p && p.pool) || null });
   } catch (e) {
     return res.json({ mint: String(req.params.mint || ''), pool: null });
   }
+});
+
+// Warm the cache for a whole feed at once, so the chart is already in memory by
+// the time a user taps a token. The client posts every visible mint here when a
+// feed loads. Processed through a small queue at fixed concurrency so warming
+// "everything" is a steady drip, not a burst that trips the rate limit. Returns
+// immediately; the work happens in the background and fills _nxCache.
+const NX_WARM_CONC = 4;     // max simultaneous GeckoTerminal warmups
+const _nxQueue = [];
+let _nxActive = 0;
+function _nxDrain() {
+  while (_nxActive < NX_WARM_CONC && _nxQueue.length) {
+    const mint = _nxQueue.shift();
+    _nxActive++;
+    _nxRefresh(mint).finally(() => { _nxActive--; _nxDrain(); });
+  }
+}
+function _nxWarm(mints) {
+  const now = Date.now();
+  for (const m of mints) {
+    if (!NX_B58.test(m)) continue;
+    const hit = _nxCache.get(m);
+    if (hit && now - hit.at < NX_FRESH_MS) continue;  // already fresh
+    if (_nxInflight.has(m) || _nxQueue.includes(m)) continue;  // already loading/queued
+    _nxQueue.push(m);
+  }
+  _nxDrain();
+}
+
+app.post('/api/nx/warm', (req, res) => {
+  const body = req.body || {};
+  const mints = Array.isArray(body.mints)
+    ? body.mints.map(String).filter(m => NX_B58.test(m)).slice(0, 300)
+    : [];
+  _nxWarm(mints);
+  return res.json({ queued: mints.length, active: _nxActive, pending: _nxQueue.length });
 });
 
 /* ========================================================================
