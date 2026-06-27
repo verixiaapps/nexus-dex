@@ -279,7 +279,37 @@ bridge near to polygon
 bridge near to solana
 bridge optimism to aptos
 bridge optimism to arbitrum
+bridge optimism to avalanche
+bridge optimism to base
+bridge optimism to bnb
+bridge optimism to ethereum
+bridge optimism to polygon
+bridge optimism to solana
+bridge optimism to sui
+bridge optimism to tron
+bridge polygon to aptos
+bridge polygon to arbitrum
+bridge polygon to avalanche
+bridge polygon to base
+bridge polygon to bnb
+bridge polygon to ethereum
+bridge polygon to optimism
+bridge polygon to solana
+bridge polygon to sui
+bridge polygon to tron
+bridge sol
 bridge solana
+bridge solana to any chain
+bridge solana to aptos
+bridge solana to arbitrum
+bridge solana to avalanche
+bridge solana to base
+bridge solana to bnb
+bridge solana to optimism
+bridge solana to polygon
+bridge solana to sui
+bridge solana to tron
+bridge sui to aptos
 bridge to solana
 bridge tokens
 bridge ton to optimism
