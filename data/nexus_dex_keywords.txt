@@ -47,18 +47,8 @@ bridge usdt to optimism
 bridge usdt to polygon
 bridge xrp to optimism
 bridge xrp to polygon
-buy injective with solana
-buy jito with solana
-buy jupiter with solana
-buy kaspa with solana
-buy maker with solana
-buy melania with solana
 buy meme coins
 buy meme coins instantly
-buy meme coins with solana
-buy mog with solana
-buy near with solana
-buy op with solana
 buy orca with solana
 buy pengu with solana
 buy pepe with solana
