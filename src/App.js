@@ -299,6 +299,21 @@ function _spkSmoothPath(vals, w, h, pad) {
 // Two REAL endpoints from the token's own live price + real 24h change —
 // local copy so this file has no cross-module export dependency to break the
 // build. price(24h ago) = price / (1 + change/100), then price now.
+
+// Warm the whole feed's chart cache in one server call so a tap is instant (the
+// chart is already cached by the time the user clicks). Fire-and-forget.
+function nxWarm(mints) {
+  try {
+    const list = Array.from(new Set((mints || []).filter(Boolean)));
+    if (!list.length) return;
+    fetch('/api/nx/warm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mints: list.slice(0, 300) }),
+    }).catch(() => {});
+  } catch (e) {}
+}
+
 function endpointSeries(price, change) {
   const now = Number(price);
   if (!(now > 0)) return null;
@@ -469,8 +484,13 @@ function pickBestGeckoPool(pools, mint) {
   const hasAddr = p => !!p?.attributes?.address;
   // Contract MUST match: only pools where this mint is the BASE token (a pool
   // where the mint is the quote charts the WRONG token).
-  const pool = pools.filter(p => hasAddr(p) && baseId(p) === wanted);
-  if (!pool.length) return null;
+  // Prefer the pool where this mint is the BASE token (exact contract). If none
+  // is base-side, fall back to the deepest pool that HOLDS this token instead of
+  // giving up — that fallback is why charts load instead of "chart not available".
+  const withAddr = pools.filter(hasAddr);
+  if (!withAddr.length) return null;
+  const basePools = withAddr.filter(p => baseId(p) === wanted);
+  const pool = basePools.length ? basePools : withAddr;
   return pool.reduce(
     (best, p) => (Number(p?.attributes?.reserve_in_usd) || 0) > (Number(best?.attributes?.reserve_in_usd) || 0) ? p : best,
     pool[0],
@@ -1827,6 +1847,7 @@ function LiveTokenFeeds({ onSwitchTab, onOpenToken, onConnectWallet }) {
         const list = _uniqMint(raw.map(normalizeJup).filter(t => t.mint && t.mint !== SOL_MINT && t.sym !== 'WSOL' && t.sym !== 'SOL'));
         if (cancelled) return;
         setTrendToks(list);
+        nxWarm(list.map(t => t && t.mint));
         // Only the tokens we render: top 15 by volume (Trending) + top 15 by % (Gainers).
         const byVol = [...list].sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0)).slice(0, 15);
         const byChg = [...list].filter(t => Number.isFinite(t.change)).sort((a, b) => b.change - a.change).slice(0, 15);
