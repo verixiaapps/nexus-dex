@@ -21,7 +21,7 @@
 //          no unwrap step.
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { stkFetchSeries, stkBuildPath, stkSmoothPath, stkThrottle } from './Stocks.jsx';
+import { stkFetchSeries, stkBuildPath, stkSmoothPath, stkThrottle, stkEndpointSeries } from './Stocks.jsx';
 // Local copy of stkSeed so this file builds regardless of the Stocks.jsx version
 // shipped alongside it (older Stocks.jsx builds may not export stkSeed).
 function stkSeed(str) {
@@ -222,7 +222,7 @@ const LR_CSS = `
 .lr-confetti{display:none}
 .lr-confetti-piece{display:none}
 
-/* ── TOKEN DETAIL CHART (DexScreener embed, framed) ── */
+/* ── TOKEN DETAIL CHART (CoinGecko / GeckoTerminal embed, framed) ── */
 .lr-chart{margin:0 20px 14px;border:1px solid var(--hairline);border-radius:16px;overflow:hidden;background:#fff;box-shadow:0 1px 2px rgba(10,10,10,.04)}
 .lr-chart-bar{display:flex;align-items:center;justify-content:space-between;padding:9px 12px;border-bottom:1px solid var(--hairline)}
 .lr-chart-ca{display:flex;align-items:center;gap:7px;min-width:0}
@@ -509,6 +509,29 @@ export function _uniqMint(list) {
   const seen = new Set();
   return list.filter(t => t && t.mint && !seen.has(t.mint) && seen.add(t.mint));
 }
+// Robust 24h %: read every field name a Solana feed uses for it.
+function pickChange(t) {
+  const v = Number(
+    t?.priceChange24h ?? t?.priceChange?.h24 ?? t?.stats24h?.priceChange ??
+    t?.change24h ?? t?.change ?? t?.priceChangePercent24h ?? t?.h24 ?? 0,
+  );
+  return Number.isFinite(v) ? v : 0;
+}
+// Robust price: a new token ALWAYS has a price — read every field name the feed
+// might use, and if only market cap + supply came through, derive it (real, not
+// invented). Returns a positive number whenever ANY pricing data exists.
+function pickPrice(t) {
+  const direct = Number(
+    t?.price ?? t?.priceUsd ?? t?.usdPrice ?? t?.price_usd ??
+    t?.priceUSD ?? t?.usd ?? t?.priceNative ?? t?.lastPrice ??
+    t?.stats24h?.price ?? t?.firstPool?.price ?? 0,
+  );
+  if (direct > 0) return direct;
+  const mc = Number(t?.mcap ?? t?.marketCap ?? t?.fdv ?? t?.marketCapUsd ?? 0);
+  const supply = Number(t?.supply ?? t?.totalSupply ?? t?.circulatingSupply ?? t?.circSupply ?? 0);
+  if (mc > 0 && supply > 0) return mc / supply;
+  return 0;
+}
 function normalize(t) {
   const rawMint = t?.mint;
   if (!rawMint || typeof rawMint !== 'string' || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(rawMint)) {
@@ -521,8 +544,8 @@ function normalize(t) {
     name:      t.name || t.sym || 'Unknown',
     emoji:     emojiFor(t.sym || ''),
     icon:      t.icon || null,
-    price:     Number(t.price || 0),
-    change:    Number(t.priceChange24h || 0),
+    price:     pickPrice(t),
+    change:    pickChange(t),
     age:       ageStr(am),
     ageMs:     am,
     mcap:      Number(t.mcap || t.fdv || 0),
@@ -532,7 +555,8 @@ function normalize(t) {
     decimals:  Number(t.decimals ?? 6),
     pumpPool:  t.pumpPool || 'auto',
     dexId:     t.dexId || null,
-    source:    'dexscreener',
+    pool:      t.pairAddress || t.poolAddress || t.pool || t.poolId || t.pairId || (t.firstPool && (t.firstPool.id || t.firstPool.address)) || null,
+    source:    'launches',
   };
 }
 
@@ -709,19 +733,16 @@ function useTokenIcon(token) {
 // ── Token detail chart ──────────────────────────────────────────────
 // Resolves a mint → its best pool and embeds a candlestick chart.
 //
-// Provider order:
-//   1. GeckoTerminal — indexes pump.fun BONDING-CURVE pools (the …pump
-//      tokens that DexScreener has no pair for until graduation). This is
-//      why fresh pump.fun launches now chart instead of showing blank.
-//   2. DexScreener — fallback for graduated / older pairs.
+// Provider: CoinGecko (GeckoTerminal) ONLY — it indexes pump.fun
+// BONDING-CURVE pools as well as graduated pairs. No DexScreener.
 //
-// In BOTH providers we enforce the same two rules:
-//   • Contract match: only accept a pool whose BASE token is exactly this
-//     mint (quote-side-only matches are a last resort, never preferred), so
-//     the chart can never be for a look-alike token.
-//   • Highest liquidity: among valid pools, pick the deepest by USD
-//     liquidity. The reduce is seeded with the first candidate so a single
-//     pool with 0 / unknown liquidity (brand-new tokens) still charts.
+// Two hard rules:
+//   • Contract match: ONLY accept a pool whose BASE token is exactly this
+//     mint. A pool where the mint is the quote charts the WRONG token, so
+//     there is no quote-side fallback — no match means no chart.
+//   • Highest liquidity: among matching pools, pick the deepest by USD
+//     liquidity (reduce seeded with the first so a brand-new 0-liquidity
+//     pool still charts).
 
 // GeckoTerminal: pools come back with relationships.base_token.data.id of
 // the form "solana_<mint>" and attributes.{address, reserve_in_usd}.
@@ -729,13 +750,10 @@ function pickBestGeckoPool(pools, mint) {
   if (!Array.isArray(pools) || !pools.length) return null;
   const wanted = 'solana_' + mint;                        // EXACT — Solana base58 is case-sensitive
   const baseId  = p => String(p?.relationships?.base_token?.data?.id || '');
-  const quoteId = p => String(p?.relationships?.quote_token?.data?.id || '');
   const hasAddr = p => !!p?.attributes?.address;
 
-  const baseMatches = pools.filter(p => hasAddr(p) && baseId(p) === wanted);
-  const pool = baseMatches.length
-    ? baseMatches
-    : pools.filter(p => hasAddr(p) && (baseId(p) === wanted || quoteId(p) === wanted));
+  // Contract MUST match: only pools where this mint is the BASE token.
+  const pool = pools.filter(p => hasAddr(p) && baseId(p) === wanted);
   if (!pool.length) return null;
   return pool.reduce(
     (best, p) =>
@@ -744,32 +762,10 @@ function pickBestGeckoPool(pools, mint) {
   );
 }
 
-// DexScreener: pairs have chainId, pairAddress, baseToken.address,
-// quoteToken.address, liquidity.usd.
-function pickBestPair(pairs, mint) {
-  if (!Array.isArray(pairs) || !pairs.length) return null;
-  const baseMatches = pairs.filter(
-    p => p && p.chainId === 'solana' && p.pairAddress &&
-         p.baseToken?.address === mint,                    // EXACT, case-sensitive
-  );
-  const pool = baseMatches.length
-    ? baseMatches
-    : pairs.filter(
-        p => p && p.chainId === 'solana' && p.pairAddress &&
-             (p.baseToken?.address === mint ||
-              p.quoteToken?.address === mint),
-      );
-  if (!pool.length) return null;
-  return pool.reduce(
-    (best, p) => (Number(p.liquidity?.usd) || 0) > (Number(best.liquidity?.usd) || 0) ? p : best,
-    pool[0],
-  );
-}
 
 /* ════════════════════════════════════════════════════════════════════
-   EMBEDDED CHART  (matches Ape: GeckoTerminal → DexScreener, base-token
-   pool match, resolution pills, 1s default, bigger frame). Resolution map
-   is centralized in LR_CHART_RES so a provider tweak is one edit.
+   EMBEDDED CHART — CoinGecko (GeckoTerminal) ONLY. Base-token pool match
+   (contract MUST match), resolution pills, 1s default. No DexScreener.
    ════════════════════════════════════════════════════════════════════ */
 const LR_CHART_RES = [
   { key: '1s',  label: '1s', gecko: '1s',  dex: '1S'  },
@@ -783,15 +779,12 @@ const LR_RES_DEFAULT = '1s';
 function lrBuildEmbedSrc(pool, resKey) {
   if (!pool) return null;
   const r = LR_CHART_RES.find(x => x.key === resKey) || LR_CHART_RES[0];
-  if (pool.provider === 'GECKOTERMINAL') {
-    return 'https://www.geckoterminal.com/solana/pools/' + pool.addr +
-      '?embed=1&info=0&swaps=0&grayscale=0&light_chart=1&bg_color=ffffff&resolution=' + r.gecko;
-  }
-  return 'https://dexscreener.com/solana/' + pool.addr +
-    '?embed=1&theme=light&info=0&trades=0&interval=' + r.dex;
+  if (pool.provider !== 'GECKOTERMINAL') return null;
+  return 'https://www.geckoterminal.com/solana/pools/' + pool.addr +
+    '?embed=1&info=0&swaps=0&grayscale=0&light_chart=1&bg_color=ffffff&resolution=' + r.gecko;
 }
 
-function LrTokenChart({ mint, symbol = '' }) {
+function LrTokenChart({ mint, symbol = '', poolHint = null }) {
   const [status, setStatus] = useState('loading'); // loading | ok | none | fail
   const [pool, setPool]     = useState(null);       // { provider, addr }
   const [res, setRes]       = useState(LR_RES_DEFAULT);
@@ -804,6 +797,10 @@ function LrTokenChart({ mint, symbol = '' }) {
   useEffect(() => {
     if (!mint) { setStatus('none'); setPool(null); return; }
     const id = ++reqRef.current;
+    // Feed already gave us a contract-matched pool → chart immediately.
+    if (poolHint && typeof poolHint === 'string') {
+      setPool({ provider: 'GECKOTERMINAL', addr: poolHint }); setStatus('ok'); return;
+    }
     setStatus('loading'); setPool(null);
 
     (async () => {
@@ -830,7 +827,7 @@ function LrTokenChart({ mint, symbol = '' }) {
       // (typical for a seconds-old bonding curve); otherwise it's a network failure.
       setStatus(networkOk ? 'none' : 'fail');
     })();
-  }, [mint]);
+  }, [mint, poolHint]);
 
   const src = useMemo(() => lrBuildEmbedSrc(pool, res), [pool, res]);
   const shortCa = mint ? mint.slice(0, 4) + '…' + mint.slice(-4) : '';
@@ -1150,7 +1147,7 @@ function TradeModal({
           </div>
         </div>
 
-        <LrTokenChart mint={token.mint} symbol={token.sym} />
+        <LrTokenChart mint={token.mint} symbol={token.sym} poolHint={token.pool} />
 
         <div className={'lr-trade-mode-tabs' + (mode === 'sell' ? ' lr-mode-sell' : '')}>
           <div className="lr-trade-mode-indicator" />
@@ -1323,22 +1320,26 @@ function lrRecordSpark(mint, price) {
   if (pts[pts.length - 1] !== price) { pts.push(price); if (pts.length > 32) pts.shift(); }
   return pts;
 }
-function LrSparkline({ mint, price, w = 280, h = 40, full = true }) {
+function LrSparkline({ mint, price, change, pool, w = 280, h = 40, full = true }) {
   const [series, setSeries] = useState(null);
   useEffect(() => {
     if (!mint) return;
     let cancelled = false;
-    stkThrottle(() => stkFetchSeries(mint, '1D'))
+    stkThrottle(() => stkFetchSeries(mint, '1D', pool))
       .then(s => { if (!cancelled && Array.isArray(s) && s.length >= 2) setSeries(s); })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [mint]);
+  }, [mint, pool]);
   const hist = lrRecordSpark(mint, Number(price));
   const obs = hist.length >= 2 ? hist.map(c => ({ c })) : null;
-  const pts = (series && series.length >= 2) ? series : obs;
+  // REAL data, in priority: GeckoTerminal OHLCV → live observed ticks → the two
+  // real endpoints from price + 24h change. Always a line the moment a price
+  // exists; OHLCV upgrades it in place. Never synthetic, never blank.
+  const pts = (series && series.length >= 2) ? series
+            : (obs || stkEndpointSeries(price, change));
   if (!pts) return null;
   const path = stkSmoothPath(pts, w, h, 2, stkSeed(mint));
-  const up = path.up;
+  const up = Number.isFinite(change) ? change >= 0 : path.up;
   const col = up ? 'var(--green)' : 'var(--red)';
   const id = 'lrs' + (up ? 'u' : 'd') + (mint ? String(mint).slice(0, 8) : '');
   return (
@@ -1376,7 +1377,7 @@ function LaunchCard({ token, owned, onBuy, onSell, isFresh, tintIndex = 0 }) {
         </div>
         <div className="lr-card-right">
           <div className="lr-card-price">
-            {token.price > 0 ? formatPrice(token.price) : '—'}
+            {formatPrice(token.price)}
           </div>
           {Number.isFinite(token.change) && token.change !== 0 ? (
             <div className={'lr-card-change' + (token.change < 0 ? ' lr-down' : '')}>{formatPct(token.change)}</div>
@@ -1384,7 +1385,7 @@ function LaunchCard({ token, owned, onBuy, onSell, isFresh, tintIndex = 0 }) {
         </div>
       </div>
 
-      <LrSparkline mint={token.mint} price={token.price} />
+      <LrSparkline mint={token.mint} price={token.price} change={token.change} pool={token.pool} />
 
       <div className="lr-metrics">
         <div className="lr-metric"><div className="lr-metric-l">Liq</div>
@@ -1454,7 +1455,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
   const [recentLoading, setRecentLoading] = useState(true);
   const [recentError, setRecentError] = useState(null);
   // Chart-window % from the same 1D series the sparkline draws, so the displayed
-  // % matches the chart (DexScreener priceChange24h is unreliable for thin/fresh pools).
+  // % matches the chart (derived from the same GeckoTerminal OHLCV the sparkline draws).
   const [chartChg, setChartChg] = useState({});   // mint -> %
   const chgTsRef = useRef(new Map());              // mint -> last fetch ts
   useEffect(() => {
@@ -1464,7 +1465,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
         const r = await fetch('/api/dex/launches');
         if (!r.ok) {
           if (!cancelled) {
-            setRecentError('DexScreener feed unreachable (HTTP ' + r.status + ')');
+            setRecentError('Launch feed unreachable (HTTP ' + r.status + ')');
             setRecentLoading(false);
           }
           return;
@@ -1478,7 +1479,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
         }
       } catch (e) {
         if (!cancelled) {
-          setRecentError(String(e?.message || 'DexScreener feed unreachable').slice(0, 120));
+          setRecentError(String(e?.message || 'Launch feed unreachable').slice(0, 120));
           setRecentLoading(false);
         }
       }
@@ -1498,7 +1499,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
       const last = chgTsRef.current.get(mint) || 0;
       if (now - last < 45000) return;
       chgTsRef.current.set(mint, now);
-      stkThrottle(() => stkFetchSeries(mint, '1D'))
+      stkThrottle(() => stkFetchSeries(mint, '1D', t.pool))
         .then(s => {
           if (cancelled || !Array.isArray(s) || s.length < 2) return;
           const first = Number(s[0]?.c), lastC = Number(s[s.length - 1]?.c);
@@ -2053,7 +2054,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
             {lane === 'fresh' && recentLoading ? (
               <>
                 <b>Warming up the launch stream…</b>
-                <div className="lr-empty-sub">Pulling fresh pump.fun launches from DexScreener any second now.</div>
+                <div className="lr-empty-sub">Pulling fresh pump.fun launches any second now.</div>
               </>
             ) : lane === 'recent' && recentError ? (
               <>
