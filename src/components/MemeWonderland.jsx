@@ -927,6 +927,21 @@ async function _resolvePoolAddr(mint) {
 // Defensive OHLCV parser — accepts every shape a candles endpoint might return
 // (array of [ts,o,h,l,c,v], array of {c|close|price}, or wrapped in
 // {candles|ohlcv|ohlcv_list|bars|prices|data}). Returns [{t,c}] sorted oldest→newest.
+
+// Warm the whole feed's chart cache in one server call so a tap is instant (the
+// chart is already cached by the time the user clicks). Fire-and-forget.
+function nxWarm(mints) {
+  try {
+    const list = Array.from(new Set((mints || []).filter(Boolean)));
+    if (!list.length) return;
+    fetch('/api/nx/warm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mints: list.slice(0, 300) }),
+    }).catch(() => {});
+  } catch (e) {}
+}
+
 function mwPtsFromAny(data) {
   let arr = null;
   if (Array.isArray(data)) arr = data;
@@ -1348,7 +1363,9 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
         const d = await r.json();
         const list = Array.isArray(d) ? d : (d?.data || d?.tokens || []);
         if (!cancelled) {
-          setTokens(_uniqMint(list.map(normalize).filter(t => t.mint && !isStablecoin(t) && t.mint !== SOL_MINT && t.sym !== 'WSOL' && t.sym !== 'SOL')));
+          const _mw = _uniqMint(list.map(normalize).filter(t => t.mint && !isStablecoin(t) && t.mint !== SOL_MINT && t.sym !== 'WSOL' && t.sym !== 'SOL'));
+          setTokens(_mw);
+          nxWarm(_mw.map(t => t.mint));
           setLoading(false);
         }
       } catch { if (!cancelled) setLoading(false); }
@@ -1747,9 +1764,13 @@ function pickBestGeckoPool(pools, mint) {
   // Contract MUST match: only pools where this mint is the BASE token. No
   // quote-side fallback — charting a pool where the mint is the quote shows the
   // WRONG token. If nothing matches, return null (no chart) rather than wrong data.
-  const base = pools.filter(p => hasAddr(p) && baseId(p) === wanted);
-  if (!base.length) return null;
-  return base.reduce((best, p) => liq(p) > liq(best) ? p : best, base[0]);            // highest-liquidity matching pool
+  // Prefer base-token-exact; else the deepest pool that holds this token (so the
+  // chart loads instead of "chart not available"). Token's own market either way.
+  const withAddr = pools.filter(hasAddr);
+  if (!withAddr.length) return null;
+  const basePools = withAddr.filter(p => baseId(p) === wanted);
+  const set = basePools.length ? basePools : withAddr;
+  return set.reduce((best, p) => liq(p) > liq(best) ? p : best, set[0]);
 }
 
 
