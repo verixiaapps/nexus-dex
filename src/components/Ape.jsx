@@ -851,6 +851,7 @@ const AP_CSS = `
 .ap-chart-src{flex-shrink:0;font-family:inherit;font-size:9px;font-weight:800;letter-spacing:.06em;color:var(--ink3);text-transform:uppercase}
 .ap-chart-embed{position:relative;width:100%;height:clamp(320px,44dvh,460px);border:1px solid var(--hairline);border-radius:16px;overflow:hidden;background:#fff}
 .ap-chart-frame{width:100%;height:100%;border:0;display:block}
+.ap-candle-svg{width:100%;height:100%;display:block;background:#0a0b0e}
 .ap-chart-state{display:grid;place-items:center;width:100%;height:clamp(320px,44dvh,460px);border:1px solid var(--hairline);border-radius:16px;background:var(--fill2);color:var(--ink2);font-family:inherit;font-size:12.5px;font-weight:600;line-height:1.5;text-align:center;padding:24px}
 .ap-chart-state .sp{width:24px;height:24px;border-radius:50%;border:2.5px solid var(--border);border-top-color:#0b0b0c;animation:ap-spin .8s linear infinite}
 .ap-tf:disabled{opacity:.4;cursor:default}
@@ -1496,7 +1497,14 @@ const CHART_RES = [
   { key: '5m',  label: '5m', gecko: '5m',  dex: '5'   },
   { key: '1h',  label: '1H', gecko: '1h',  dex: '60'  },
 ];
-const CHART_RES_DEFAULT = '1s';
+// 1m by default: GeckoTerminal's 1s embed renders blank on fresh / low-volume
+// pools, which was a major cause of "chart won't load". 1s is still a tap away.
+const CHART_RES_DEFAULT = '1m';
+// Map a resolution pill to the nearest pump.fun candle timeframe (MINUTES).
+// pump.fun's smallest candle is 1m, so 1s/15s collapse to 1m for native render.
+function pumpTfMin(resKey) {
+  return resKey === '1h' ? 60 : resKey === '5m' ? 5 : 1;
+}
 
 // GeckoTerminal: pools come back with relationships.base_token.data.id of
 // the form "solana_<mint>" and attributes.{address, reserve_in_usd}. Accept
@@ -1567,43 +1575,83 @@ function buildEmbedSrc(pool, resKey) {
     '?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&bg_color=0a0b0e&resolution=' + r.gecko;
 }
 
+// Native candlestick renderer for REAL pump.fun bonding-curve candles. Used for
+// fresh tokens that GeckoTerminal hasn't indexed (so there's no pool to embed).
+// Pure SVG, no iframe, themes to the app — and it's real data, not a guess.
+function PumpCandleChart({ candles }) {
+  if (!Array.isArray(candles) || candles.length < 2) {
+    return <div className="ap-chart-state">No candle history yet.</div>;
+  }
+  const W = 1000, H = 400, padY = 16;
+  const data = candles.slice(-90);
+  const n = data.length;
+  let min = Infinity, max = -Infinity;
+  for (const k of data) { if (k.l < min) min = k.l; if (k.h > max) max = k.h; }
+  if (!(max > min)) { max = min + (Math.abs(min) * 0.001 || 1e-9); }
+  const rng = max - min;
+  const slot = W / n;
+  const bw = Math.max(1, slot * 0.6);
+  const yOf = (v) => padY + (1 - (v - min) / rng) * (H - 2 * padY);
+  const UP = '#11b87f', DN = '#f0425a';
+  return (
+    <svg className="ap-candle-svg" viewBox={'0 0 ' + W + ' ' + H} preserveAspectRatio="none" aria-hidden="true">
+      {data.map((k, i) => {
+        const cx = i * slot + slot / 2;
+        const isUp = Number(k.c) >= Number(k.o);
+        const col = isUp ? UP : DN;
+        const top = Math.min(yOf(k.o), yOf(k.c));
+        const bh = Math.max(1, Math.abs(yOf(k.c) - yOf(k.o)));
+        return (
+          <g key={i}>
+            <line x1={cx} x2={cx} y1={yOf(k.h).toFixed(1)} y2={yOf(k.l).toFixed(1)} stroke={col} strokeWidth="1.3" />
+            <rect x={(cx - bw / 2).toFixed(1)} y={top.toFixed(1)} width={bw.toFixed(1)} height={bh.toFixed(1)} fill={col} />
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 function TokenChart({ token, solPrice }) {
   const mint = token && token.mint;
-  const [status, setStatus] = useState('loading'); // loading | ok | none | fail
+  // Tokens still on the bonding curve (bond known and < 100) almost never have a
+  // GeckoTerminal pool yet — render their REAL pump.fun candles natively instead
+  // of embedding a pool that doesn't exist. Migrated/unknown → GeckoTerminal.
+  const onCurve = !!(token && token.bond != null && Number(token.bond) < 100);
+  const [status, setStatus] = useState('loading'); // loading | gecko | pump | none | fail
   const [pool, setPool]     = useState(null);       // { provider, addr }
+  const [candles, setCandles] = useState(null);
   const [res, setRes]       = useState(CHART_RES_DEFAULT);
   const [copied, setCopied] = useState(false);
   const reqRef = useRef(0);
+  const frameOkRef = useRef(false);
 
-  // Reset to the live 1s view each time a different token opens, so every
-  // detail sheet starts moving immediately.
+  // Reset to the default view each time a different token opens.
   useEffect(() => { setRes(CHART_RES_DEFAULT); }, [mint]);
 
   useEffect(() => {
-    if (!mint) { setStatus('none'); setPool(null); return; }
+    if (!mint) { setStatus('none'); setPool(null); setCandles(null); return; }
     const id = ++reqRef.current;
-
-    // 0) Server-resolved pool (from /api/ape/curve · /api/ape/enrich → GeckoTerminal).
-    //    Skips the browser's cross-origin GeckoTerminal call when we already have it.
-    const poolHint = token && token.pool;
-    if (poolHint && typeof poolHint === 'string') {
-      setPool({ provider: 'GECKOTERMINAL', addr: poolHint }); setStatus('ok'); return;
-    }
-
-    setStatus('loading'); setPool(null);
+    setStatus('loading'); setPool(null); setCandles(null); frameOkRef.current = false;
 
     (async () => {
-      let networkOk = false;
+      // A) Still on the bonding curve → real pump.fun candles, rendered natively.
+      if (onCurve) {
+        const ks = await loadPumpCandles(mint, { limit: 200, timeframeMin: pumpTfMin(res) });
+        if (id !== reqRef.current) return;
+        if (ks) { setCandles(ks); setStatus('pump'); return; }
+      }
 
-      // 0) Server-side pool resolution — reliable, not rate-limited.
+      // B) Migrated/indexed → GeckoTerminal embed. Server-resolved pool first
+      //    (reliable, base-token matched); we no longer blindly trust token.pool,
+      //    which was often a non-GeckoTerminal id that embedded a dead page.
+      let networkOk = false;
       try {
         const sAddr = await apeServerPool(mint);
         if (id !== reqRef.current) return;
-        if (sAddr) { networkOk = true; setPool({ provider: 'GECKOTERMINAL', addr: sAddr }); setStatus('ok'); return; }
+        if (sAddr) { networkOk = true; setPool({ provider: 'GECKOTERMINAL', addr: sAddr }); setStatus('gecko'); return; }
       } catch (e) {}
       if (id !== reqRef.current) return;
-
-      // 1) GeckoTerminal — covers pump.fun bonding-curve pools.
       try {
         const r = await fetch(
           'https://api.geckoterminal.com/api/v2/networks/solana/tokens/' + mint + '/pools',
@@ -1615,30 +1663,57 @@ function TokenChart({ token, solPrice }) {
           if (id !== reqRef.current) return;
           const best = pickBestGeckoPool(j?.data, mint);
           const addr = best?.attributes?.address;
-          if (addr) { setPool({ provider: 'GECKOTERMINAL', addr }); setStatus('ok'); return; }
+          if (addr) { setPool({ provider: 'GECKOTERMINAL', addr }); setStatus('gecko'); return; }
         }
       } catch (e) {}
       if (id !== reqRef.current) return;
 
-      // CoinGecko (GeckoTerminal) only — no DexScreener fallback.
+      // C) Last resort — real pump candles even for a token we thought migrated.
+      const ks = await loadPumpCandles(mint, { limit: 200, timeframeMin: pumpTfMin(res) });
+      if (id !== reqRef.current) return;
+      if (ks) { setCandles(ks); setStatus('pump'); return; }
+
       setStatus(networkOk ? 'none' : 'fail');
     })();
-  }, [mint, token && token.pool]);
+  }, [mint, onCurve]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Resolution pill change in native (pump) mode → refetch at the new timeframe.
+  useEffect(() => {
+    if (status !== 'pump' || !mint) return;
+    let alive = true;
+    loadPumpCandles(mint, { limit: 200, timeframeMin: pumpTfMin(res) }).then(ks => { if (alive && ks) setCandles(ks); });
+    return () => { alive = false; };
+  }, [res]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Watchdog: if the GeckoTerminal iframe never signals load (stall), fall back
+  // to real pump candles instead of an endless blank frame.
+  useEffect(() => {
+    if (status !== 'gecko') return;
+    frameOkRef.current = false;
+    const t = setTimeout(async () => {
+      if (frameOkRef.current) return;
+      const ks = await loadPumpCandles(mint, { limit: 200, timeframeMin: pumpTfMin(res) });
+      if (ks) { setCandles(ks); setStatus('pump'); } else { setStatus('none'); }
+    }, 6000);
+    return () => clearTimeout(t);
+  }, [status, pool]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const src = useMemo(() => buildEmbedSrc(pool, res), [pool, res]);
+  const live = status === 'gecko' || status === 'pump';
   const shortCa = mint ? mint.slice(0, 4) + '…' + mint.slice(-4) : '';
   const copyCa = async () => {
     try { await navigator.clipboard.writeText(mint); setCopied(true); setTimeout(() => setCopied(false), 1400); } catch (e) {}
   };
+  const srcLabel = status === 'pump' ? 'PUMP.FUN' : (pool?.provider || 'CHART');
   const resPills = (
     <div className="ap-tf-pills">
       {CHART_RES.map(r => (
         <button key={r.key} type="button"
           className={'ap-tf' + (r.key === res ? ' on' : '')}
-          disabled={status !== 'ok'}
+          disabled={!live}
           onClick={() => setRes(r.key)}>{r.label}</button>
       ))}
-      <span className="ap-tf-meta">{status === 'ok' ? '● Live · ' + (CHART_RES.find(x => x.key === res) || {}).label : 'Live'}</span>
+      <span className="ap-tf-meta">{live ? '● Live · ' + (CHART_RES.find(x => x.key === res) || {}).label : 'Live'}</span>
     </div>
   );
 
@@ -1650,19 +1725,22 @@ function TokenChart({ token, solPrice }) {
           <span className="val">{shortCa}</span>
           <button type="button" className="cp" onClick={copyCa}>{copied ? 'COPIED' : 'COPY'}</button>
         </div>
-        <span className="ap-chart-src">{pool?.provider || 'CHART'}</span>
+        <span className="ap-chart-src">{srcLabel}</span>
       </div>
-      {status === 'ok' && src ? (
+      {status === 'gecko' && src ? (
         <div className="ap-chart-embed">
           <iframe key={pool.provider + ':' + pool.addr + ':' + res}
             className="ap-chart-frame" src={src}
             title={(token?.sym || 'Token') + ' price chart'}
-            loading="lazy" allow="clipboard-write" />
+            loading="lazy" allow="clipboard-write"
+            onLoad={() => { frameOkRef.current = true; }} />
         </div>
+      ) : status === 'pump' ? (
+        <div className="ap-chart-embed"><PumpCandleChart candles={candles} /></div>
       ) : status === 'loading' ? (
         <div className="ap-chart-state"><span className="sp" /></div>
       ) : status === 'none' ? (
-        <div className="ap-chart-state">Live chart unavailable right now.</div>
+        <div className="ap-chart-state">No live chart yet — this token has no trade history to draw.</div>
       ) : (
         <div className="ap-chart-state">Couldn’t load the chart. Try again shortly.</div>
       )}
@@ -1748,6 +1826,29 @@ function nxWarm(mints) {
       body: JSON.stringify({ mints: list.slice(0, 300) }),
     }).catch(() => {});
   } catch (e) {}
+}
+
+// Real pump.fun bonding-curve candles via our server proxy (/api/ape/pump-candles).
+// This is the source that covers FRESH launches GeckoTerminal hasn't indexed yet.
+// Cached per (mint, timeframe). Returns [{t,o,h,l,c,v}] oldest→newest, or null.
+const _pumpCandleCache = new Map();
+async function loadPumpCandles(mint, opts) {
+  const o = opts || {};
+  const tf = Number(o.timeframeMin) > 0 ? Number(o.timeframeMin) : 1;
+  const limit = Number(o.limit) > 0 ? Number(o.limit) : 200;
+  if (!mint) return null;
+  const key = mint + ':' + tf;
+  if (_pumpCandleCache.has(key)) return _pumpCandleCache.get(key);
+  try {
+    const r = await fetch('/api/ape/pump-candles/' + encodeURIComponent(mint) + '?tf=' + tf + '&limit=' + limit,
+      { headers: { Accept: 'application/json' } });
+    if (!r.ok) return null;
+    const d = await r.json();
+    const candles = Array.isArray(d && d.candles) ? d.candles : null;
+    if (!candles || candles.length < 2) return null;
+    _pumpCandleCache.set(key, candles);
+    return candles;
+  } catch (e) { return null; }
 }
 
 async function loadSparkSeries(token) {
@@ -1839,6 +1940,15 @@ function apePtsFromAny(data) {
         if (series) { _sparkCache.set(mint, series); return series; }
       }
     } catch (e) {}
+      // 3) pump.fun bonding-curve candles — REAL closes for the fresh launches
+      //    GeckoTerminal hasn't indexed yet. Per-token, varied, never synthetic.
+      try {
+        const candles = await loadPumpCandles(mint, { limit: 80, timeframeMin: 1 });
+        if (candles && candles.length >= 2) {
+          const closes = candles.map(k => Number(k.c)).filter(n => n > 0);
+          if (closes.length >= 2) { const s = _downsample(closes, N); _sparkCache.set(mint, s); return s; }
+        }
+      } catch (e) {}
     // No real data — draw nothing. Never fabricate a line.
     return null;
   })().finally(() => { _sparkPending.delete(mint); });
@@ -1863,12 +1973,10 @@ function MiniSparkline({ token, change }) {
     return () => { alive = false; };
   }, [mint]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Always a REAL line: GeckoTerminal OHLCV when fetched, otherwise the two real
-  // endpoints from the token's own price + 24h change. Never blank when a price
-  // exists; OHLCV upgrades it in place.
-  const drawSeries = (series && series.length >= 2)
-    ? series
-    : _endpointSeries(token && token.price, change);
+  // REAL series only: GeckoTerminal OHLCV or pump.fun bonding-curve candles.
+  // No synthetic 2-point curve — a row with no real data draws no line (which is
+  // why every token no longer shares the same shape).
+  const drawSeries = (series && series.length >= 2) ? series : null;
   if (!drawSeries || drawSeries.length < 2) {
     return <div className="ap-spark" aria-hidden="true"><svg viewBox={'0 0 ' + W + ' ' + H} preserveAspectRatio="none" /></div>;
   }
