@@ -1945,6 +1945,247 @@ require('./ape-pump-trade').mountRoutes(app);
  * ===================================================================== */
 require('./admin')(app);
 
+/* ========================================================================
+ * NEXUS CHARTS — added section (self-contained; nothing else is modified).
+ *
+ * Registered HERE, immediately before app.all('/api/*'), so it is not
+ * shadowed by that 404 catch-all.
+ *
+ *   GET /api/nx/chart/:mint -> { mint, pool, closes, change, price }
+ *   GET /api/nx/pool/:mint  -> { mint, pool }
+ *
+ * Contract-matched, server-side, cached chart/sparkline data:
+ *   - pool   : GeckoTerminal pool whose BASE token is EXACTLY this mint
+ *              (a quote-side pool charts the WRONG token, so it is never used;
+ *              if no base-matched pool exists, pool is null).
+ *   - closes : last 60 one-minute closes (the 1-hour window), oldest -> newest.
+ *   - change : the 1-hour % from those same closes (matches the sparkline).
+ *   - price  : latest close.
+ *
+ * Self-contained: own cache + own helpers, all names prefixed nx/NX_ to avoid
+ * collision. Reuses only fetchWithTimeout (defined far above). No swap / RPC /
+ * trade / signing code. Touches no existing route.
+ * ===================================================================== */
+const NX_GT       = 'https://api.geckoterminal.com/api/v2';
+const NX_B58      = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const NX_TTL      = 15_000;
+const NX_POOL_TTL = 5 * 60_000;
+const _nxCache     = new Map();
+const _nxPoolCache = new Map();
+
+function _nxPickPool(pools, mint) {
+  if (!Array.isArray(pools) || !pools.length) return null;
+  const wanted = 'solana_' + mint;
+  const baseId = p => String(p?.relationships?.base_token?.data?.id || '');
+  const addrOf = p => p?.attributes?.address || null;
+  const liqOf  = p => Number(p?.attributes?.reserve_in_usd || 0);
+  const matched = pools.filter(p => addrOf(p) && baseId(p) === wanted);
+  if (!matched.length) return null;
+  return matched.reduce((b, p) => (liqOf(p) > liqOf(b) ? p : b), matched[0]);
+}
+
+async function _nxResolvePool(mint) {
+  const hit = _nxPoolCache.get(mint);
+  if (hit && Date.now() - hit.at < NX_POOL_TTL) return hit.pool;
+  let pool = null;
+  try {
+    const r = await fetchWithTimeout(
+      NX_GT + '/networks/solana/tokens/' + encodeURIComponent(mint) + '/pools',
+      { headers: { Accept: 'application/json' } },
+      7_000,
+    );
+    if (r.ok) {
+      const j = await r.json();
+      pool = _nxPickPool(j && j.data, mint)?.attributes?.address || null;
+    }
+  } catch (e) { /* leave null */ }
+  _nxPoolCache.set(mint, { at: Date.now(), pool });
+  return pool;
+}
+
+async function _nxCloses1h(pool) {
+  try {
+    const r = await fetchWithTimeout(
+      NX_GT + '/networks/solana/pools/' + pool + '/ohlcv/minute?aggregate=1&limit=60&currency=usd',
+      { headers: { Accept: 'application/json' } },
+      7_000,
+    );
+    if (!r.ok) return null;
+    const j = await r.json();
+    const list = j?.data?.attributes?.ohlcv_list;
+    if (!Array.isArray(list) || list.length < 2) return null;
+    const closes = list
+      .map(row => Number(row[4]))
+      .filter(n => Number.isFinite(n) && n > 0)
+      .reverse();
+    return closes.length >= 2 ? closes : null;
+  } catch (e) { return null; }
+}
+
+async function _nxBuild(mint) {
+  const hit = _nxCache.get(mint);
+  if (hit && Date.now() - hit.at < NX_TTL) return hit.payload;
+  const pool = await _nxResolvePool(mint);
+  let closes = null;
+  if (pool) closes = await _nxCloses1h(pool);
+  let change = null, price = null;
+  if (Array.isArray(closes) && closes.length >= 2) {
+    const a = closes[0], b = closes[closes.length - 1];
+    price = b;
+    if (a > 0) change = ((b - a) / a) * 100;
+  }
+  const payload = { mint, pool: pool || null, closes: closes || null, change, price };
+  _nxCache.set(mint, { at: Date.now(), payload });
+  if (_nxCache.size > 600) { const k = _nxCache.keys().next().value; if (k) _nxCache.delete(k); }
+  return payload;
+}
+
+app.get('/api/nx/chart/:mint', async (req, res) => {
+  try {
+    const mint = String(req.params.mint || '');
+    if (!NX_B58.test(mint)) return res.status(400).json({ error: 'Invalid mint' });
+    return res.json(await _nxBuild(mint));
+  } catch (e) {
+    return res.json({ mint: String(req.params.mint || ''), pool: null, closes: null, change: null, price: null });
+  }
+});
+
+app.get('/api/nx/pool/:mint', async (req, res) => {
+  try {
+    const mint = String(req.params.mint || '');
+    if (!NX_B58.test(mint)) return res.status(400).json({ error: 'Invalid mint' });
+    return res.json({ mint, pool: await _nxResolvePool(mint) });
+  } catch (e) {
+    return res.json({ mint: String(req.params.mint || ''), pool: null });
+  }
+});
+
+/* ========================================================================
+ * APE ENRICH — moved ABOVE app.all('/api/*') so these routes are not shadowed
+ * by the 404 catch-all (previously they sat below it and returned 404).
+ *
+ *   GET  /api/ape/curve/:mint   -> { found, mcap, price, volume24h, liquidity, pool }
+ *   POST /api/ape/enrich        -> body { mints:[...] }
+ *                                  => { tokens: { <mint>: { mcap, price, volume24h, liquidity, pool } } }
+ *
+ * Source: GeckoTerminal's free public API (api.geckoterminal.com/api/v2),
+ * the same charts the token sheet embeds. Verified token fields:
+ *   market_cap_usd, fdv_usd, price_usd, volume_usd.h24, total_reserve_in_usd,
+ *   and relationships.top_pools (used to resolve the pool for the chart embed).
+ * No pump.fun curve math, no estimated constants — every number is a field
+ * GeckoTerminal returns. `pool` lets the client embed the GeckoTerminal chart.
+ *
+ * Own cache + own helpers. Reuses only fetchWithTimeout (defined far above).
+ * Fails soft: returns { found:false } / {} rather than an error status, so the
+ * client simply keeps whatever it already has. No existing route is touched.
+ * ===================================================================== */
+const GT_BASE        = 'https://api.geckoterminal.com/api/v2';
+const APE_BASE58_RE  = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const APE_TTL_MS     = 20_000;
+const GT_MULTI_MAX   = 30; // GeckoTerminal's per-call address limit
+const _apeCache = new Map(); // mint -> { at, v }
+
+function _apeShapeGt(d) {
+  if (!d || !d.attributes) return null;
+  const a = d.attributes;
+  const num = (...vals) => { for (const v of vals) { const n = Number(v); if (Number.isFinite(n) && n > 0) return n; } return 0; };
+  let pool = null;
+  const tp = d.relationships && d.relationships.top_pools && d.relationships.top_pools.data;
+  if (Array.isArray(tp) && tp[0] && typeof tp[0].id === 'string') pool = tp[0].id.replace(/^solana_/, '');
+  return {
+    mcap:      num(a.market_cap_usd, a.fdv_usd),
+    price:     num(a.price_usd),
+    volume24h: num(a.volume_usd && a.volume_usd.h24),
+    liquidity: num(a.total_reserve_in_usd),
+    pool:      pool,
+  };
+}
+
+function _apeGetCached(mint) { const h = _apeCache.get(mint); return (h && (Date.now() - h.at) < APE_TTL_MS) ? h.v : null; }
+function _apeSet(mint, v) { _apeCache.set(mint, { at: Date.now(), v }); }
+
+async function _apeFetchToken(mint) {
+  try {
+    const r = await fetchWithTimeout(
+      GT_BASE + '/networks/solana/tokens/' + encodeURIComponent(mint),
+      { headers: { Accept: 'application/json' } },
+      7_000,
+    );
+    if (!r.ok) return null;
+    const j = await r.json().catch(() => null);
+    return _apeShapeGt(j && j.data);
+  } catch (e) { return null; }
+}
+
+async function _apeFetchMulti(mints) {
+  const out = {};
+  for (let i = 0; i < mints.length; i += GT_MULTI_MAX) {
+    const chunk = mints.slice(i, i + GT_MULTI_MAX);
+    try {
+      const r = await fetchWithTimeout(
+        GT_BASE + '/networks/solana/tokens/multi/' + chunk.map(encodeURIComponent).join(','),
+        { headers: { Accept: 'application/json' } },
+        9_000,
+      );
+      if (!r.ok) continue;
+      const j = await r.json().catch(() => null);
+      const arr = (j && Array.isArray(j.data)) ? j.data : [];
+      for (const d of arr) {
+        const addr = d && d.attributes && d.attributes.address;
+        const shaped = _apeShapeGt(d);
+        if (addr && shaped) out[addr] = shaped;
+      }
+    } catch (e) { /* skip this chunk */ }
+  }
+  return out;
+}
+
+async function _apeCurve(mint) {
+  const c = _apeGetCached(mint);
+  if (c) return c;
+  const shaped = await _apeFetchToken(mint);
+  const v = shaped ? { found: true, ...shaped } : { found: false };
+  _apeSet(mint, v);
+  return v;
+}
+
+app.get('/api/ape/curve/:mint', async (req, res) => {
+  try {
+    const mint = String(req.params.mint || '');
+    if (!APE_BASE58_RE.test(mint)) return res.status(400).json({ error: 'Invalid mint' });
+    return res.json({ mint, ...(await _apeCurve(mint)) });
+  } catch (e) {
+    return res.json({ mint: String(req.params.mint || ''), found: false });
+  }
+});
+
+app.post('/api/ape/enrich', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const list = Array.isArray(body.mints) ? body.mints : [];
+    const mints = [...new Set(list.map(String).filter(m => APE_BASE58_RE.test(m)))].slice(0, 90);
+    const tokens = {};
+    const misses = [];
+    for (const m of mints) {
+      const c = _apeGetCached(m);
+      if (c) { if (c.found) tokens[m] = { mcap: c.mcap, price: c.price, volume24h: c.volume24h, liquidity: c.liquidity, pool: c.pool }; }
+      else misses.push(m);
+    }
+    if (misses.length) {
+      const fetched = await _apeFetchMulti(misses);
+      for (const m of misses) {
+        const shaped = fetched[m] || null;
+        const v = shaped ? { found: true, ...shaped } : { found: false };
+        _apeSet(m, v);
+        if (v.found) tokens[m] = { mcap: v.mcap, price: v.price, volume24h: v.volume24h, liquidity: v.liquidity, pool: v.pool };
+      }
+    }
+    return res.json({ tokens });
+  } catch (e) {
+    return res.json({ tokens: {} });
+  }
+});
+
 app.all('/api/*', (req, res) => res.status(404).json({ error: 'API route not found: ' + req.path }));
 
 /* ========================================================================
@@ -2113,131 +2354,6 @@ app.use((err, req, res, next) => {
   logError('unhandled', err);
   if (res.headersSent) return next(err);
   return res.status(500).json({ error: 'Internal server error' });
-});
-
-/* ========================================================================
- * APE ENRICH — added section (self-contained; nothing above is modified).
- *
- *   GET  /api/ape/curve/:mint   -> { found, mcap, price, volume24h, liquidity, pool }
- *   POST /api/ape/enrich        -> body { mints:[...] }
- *                                  => { tokens: { <mint>: { mcap, price, volume24h, liquidity, pool } } }
- *
- * Source: GeckoTerminal's free public API (api.geckoterminal.com/api/v2),
- * the same charts the token sheet embeds. Verified token fields:
- *   market_cap_usd, fdv_usd, price_usd, volume_usd.h24, total_reserve_in_usd,
- *   and relationships.top_pools (used to resolve the pool for the chart embed).
- * No pump.fun curve math, no estimated constants — every number is a field
- * GeckoTerminal returns. `pool` lets the client embed the GeckoTerminal chart.
- *
- * Own cache + own helpers. Reuses only fetchWithTimeout (defined far above).
- * Fails soft: returns { found:false } / {} rather than an error status, so the
- * client simply keeps whatever it already has. No existing route is touched.
- * ===================================================================== */
-const GT_BASE        = 'https://api.geckoterminal.com/api/v2';
-const APE_BASE58_RE  = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-const APE_TTL_MS     = 20_000;
-const GT_MULTI_MAX   = 30; // GeckoTerminal's per-call address limit
-const _apeCache = new Map(); // mint -> { at, v }
-
-function _apeShapeGt(d) {
-  if (!d || !d.attributes) return null;
-  const a = d.attributes;
-  const num = (...vals) => { for (const v of vals) { const n = Number(v); if (Number.isFinite(n) && n > 0) return n; } return 0; };
-  let pool = null;
-  const tp = d.relationships && d.relationships.top_pools && d.relationships.top_pools.data;
-  if (Array.isArray(tp) && tp[0] && typeof tp[0].id === 'string') pool = tp[0].id.replace(/^solana_/, '');
-  return {
-    mcap:      num(a.market_cap_usd, a.fdv_usd),
-    price:     num(a.price_usd),
-    volume24h: num(a.volume_usd && a.volume_usd.h24),
-    liquidity: num(a.total_reserve_in_usd),
-    pool:      pool,
-  };
-}
-
-function _apeGetCached(mint) { const h = _apeCache.get(mint); return (h && (Date.now() - h.at) < APE_TTL_MS) ? h.v : null; }
-function _apeSet(mint, v) { _apeCache.set(mint, { at: Date.now(), v }); }
-
-async function _apeFetchToken(mint) {
-  try {
-    const r = await fetchWithTimeout(
-      GT_BASE + '/networks/solana/tokens/' + encodeURIComponent(mint),
-      { headers: { Accept: 'application/json' } },
-      7_000,
-    );
-    if (!r.ok) return null;
-    const j = await r.json().catch(() => null);
-    return _apeShapeGt(j && j.data);
-  } catch (e) { return null; }
-}
-
-async function _apeFetchMulti(mints) {
-  const out = {};
-  for (let i = 0; i < mints.length; i += GT_MULTI_MAX) {
-    const chunk = mints.slice(i, i + GT_MULTI_MAX);
-    try {
-      const r = await fetchWithTimeout(
-        GT_BASE + '/networks/solana/tokens/multi/' + chunk.map(encodeURIComponent).join(','),
-        { headers: { Accept: 'application/json' } },
-        9_000,
-      );
-      if (!r.ok) continue;
-      const j = await r.json().catch(() => null);
-      const arr = (j && Array.isArray(j.data)) ? j.data : [];
-      for (const d of arr) {
-        const addr = d && d.attributes && d.attributes.address;
-        const shaped = _apeShapeGt(d);
-        if (addr && shaped) out[addr] = shaped;
-      }
-    } catch (e) { /* skip this chunk */ }
-  }
-  return out;
-}
-
-async function _apeCurve(mint) {
-  const c = _apeGetCached(mint);
-  if (c) return c;
-  const shaped = await _apeFetchToken(mint);
-  const v = shaped ? { found: true, ...shaped } : { found: false };
-  _apeSet(mint, v);
-  return v;
-}
-
-app.get('/api/ape/curve/:mint', async (req, res) => {
-  try {
-    const mint = String(req.params.mint || '');
-    if (!APE_BASE58_RE.test(mint)) return res.status(400).json({ error: 'Invalid mint' });
-    return res.json({ mint, ...(await _apeCurve(mint)) });
-  } catch (e) {
-    return res.json({ mint: String(req.params.mint || ''), found: false });
-  }
-});
-
-app.post('/api/ape/enrich', async (req, res) => {
-  try {
-    const body = req.body || {};
-    const list = Array.isArray(body.mints) ? body.mints : [];
-    const mints = [...new Set(list.map(String).filter(m => APE_BASE58_RE.test(m)))].slice(0, 90);
-    const tokens = {};
-    const misses = [];
-    for (const m of mints) {
-      const c = _apeGetCached(m);
-      if (c) { if (c.found) tokens[m] = { mcap: c.mcap, price: c.price, volume24h: c.volume24h, liquidity: c.liquidity, pool: c.pool }; }
-      else misses.push(m);
-    }
-    if (misses.length) {
-      const fetched = await _apeFetchMulti(misses);
-      for (const m of misses) {
-        const shaped = fetched[m] || null;
-        const v = shaped ? { found: true, ...shaped } : { found: false };
-        _apeSet(m, v);
-        if (v.found) tokens[m] = { mcap: v.mcap, price: v.price, volume24h: v.volume24h, liquidity: v.liquidity, pool: v.pool };
-      }
-    }
-    return res.json({ tokens });
-  } catch (e) {
-    return res.json({ tokens: {} });
-  }
 });
 
 /* ========================================================================
