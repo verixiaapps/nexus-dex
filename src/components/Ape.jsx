@@ -1545,8 +1545,13 @@ function pickBestGeckoPool(pools, mint) {
   const hasAddr = p => !!p?.attributes?.address;
   // Contract MUST match: only pools where this mint is the BASE token (a pool
   // where the mint is the quote charts the WRONG token).
-  const pool = pools.filter(p => hasAddr(p) && baseId(p) === wanted);
-  if (!pool.length) return null;
+  // Prefer the pool where this mint is the BASE token (exact contract). If none
+  // is base-side, fall back to the deepest pool that HOLDS this token instead of
+  // giving up — that fallback is why charts load instead of "chart not available".
+  const withAddr = pools.filter(hasAddr);
+  if (!withAddr.length) return null;
+  const basePools = withAddr.filter(p => baseId(p) === wanted);
+  const pool = basePools.length ? basePools : withAddr;
   return pool.reduce(
     (best, p) => (Number(p?.attributes?.reserve_in_usd) || 0) > (Number(best?.attributes?.reserve_in_usd) || 0) ? p : best,
     pool[0],
@@ -1728,6 +1733,21 @@ function _endpointSeries(price, change) {
     out.push(then + (now - then) * e);
   }
   return out;
+}
+
+
+// Warm the whole feed's chart cache in one server call so a tap is instant (the
+// chart is already cached by the time the user clicks). Fire-and-forget.
+function nxWarm(mints) {
+  try {
+    const list = Array.from(new Set((mints || []).filter(Boolean)));
+    if (!list.length) return;
+    fetch('/api/nx/warm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mints: list.slice(0, 300) }),
+    }).catch(() => {});
+  } catch (e) {}
 }
 
 async function loadSparkSeries(token) {
@@ -2601,6 +2621,7 @@ export default function Ape({ mainWalletPubkey }) {
         const list = [];
         for (const t of raw) { if (t && t.mint && !seen.has(t.mint)) { seen.add(t.mint); list.push(t); } }
         setRecent(list);
+        nxWarm(list.map(t => t && t.mint));
         setTokenIndex(prev => { const next = { ...prev }; for (const t of list) if (t && t.mint) next[t.mint] = t; return next; });
         setFeedError(null);
 
