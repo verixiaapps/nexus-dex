@@ -1503,6 +1503,41 @@ const CHART_RES_DEFAULT = '1s';
 // only a pool whose BASE token is exactly this mint (quote-only matches are a
 // last resort), then pick the deepest by USD liquidity, so the chart can never
 // be for a look-alike token.
+
+// Resolve a pool address from the server /api/dex/token proxy (server-to-server,
+// never rate-limited/CORS-blocked). Picks the base-token-matched, deepest pool.
+// Server-side pool resolution (never browser-rate-limited): /api/nx/pool first,
+// then the existing /api/ape/curve. Both return a GeckoTerminal pool address.
+async function apeServerPool(mint) {
+  try {
+    const r = await fetch('/api/nx/pool/' + encodeURIComponent(mint), { headers: { Accept: 'application/json' } });
+    if (r.ok) { const d = await r.json(); if (d && typeof d.pool === 'string' && d.pool) return d.pool; }
+  } catch (e) {}
+  // NOTE: /api/ape/curve is intentionally NOT used here — it returns top_pools[0]
+  // without enforcing base-token match, so it could point at the wrong contract.
+  // If /api/nx/pool isn't available, the caller falls back to its own base-EXACT
+  // GeckoTerminal picker (pickBestGeckoPool), keeping the contract guaranteed.
+  return null;
+}
+
+function apePoolFromTokenApi(d, mint) {
+  if (!d) return null;
+  const t = d.token || d;
+  const direct = t.pairAddress || t.poolAddress || t.pool || t.poolId
+    || (t.pool && t.pool.address) || (t.firstPool && (t.firstPool.id || t.firstPool.address));
+  if (typeof direct === 'string' && direct) return direct;
+  const pairs = d.pairs || t.pairs || d.pools || t.pools;
+  if (Array.isArray(pairs) && pairs.length) {
+    const liqOf  = p => Number(p?.liquidity?.usd ?? p?.liquidityUsd ?? p?.reserve_in_usd ?? p?.liquidity ?? 0);
+    const addrOf = p => p?.pairAddress || p?.poolAddress || p?.address || p?.id || null;
+    const baseOf = p => String((p?.baseToken && (p.baseToken.address || p.baseToken.id)) || p?.base || p?.baseMint || '');
+    const matched = pairs.filter(p => addrOf(p) && (!baseOf(p) || baseOf(p) === String(mint)));
+    const arr = matched.length ? matched : pairs;
+    return addrOf(arr.reduce((b, p) => (liqOf(p) > liqOf(b) ? p : b), arr[0]));
+  }
+  return null;
+}
+
 function pickBestGeckoPool(pools, mint) {
   if (!Array.isArray(pools) || !pools.length) return null;
   const wanted = 'solana_' + mint;                          // EXACT — Solana base58 is case-sensitive
@@ -1554,6 +1589,14 @@ function TokenChart({ token, solPrice }) {
 
     (async () => {
       let networkOk = false;
+
+      // 0) Server-side pool resolution — reliable, not rate-limited.
+      try {
+        const sAddr = await apeServerPool(mint);
+        if (id !== reqRef.current) return;
+        if (sAddr) { networkOk = true; setPool({ provider: 'GECKOTERMINAL', addr: sAddr }); setStatus('ok'); return; }
+      } catch (e) {}
+      if (id !== reqRef.current) return;
 
       // 1) GeckoTerminal — covers pump.fun bonding-curve pools.
       try {
@@ -1614,7 +1657,7 @@ function TokenChart({ token, solPrice }) {
       ) : status === 'loading' ? (
         <div className="ap-chart-state"><span className="sp" /></div>
       ) : status === 'none' ? (
-        <div className="ap-chart-state">Chart appears once ${token?.sym || 'this token'} is indexed — trading on the bonding curve for now.</div>
+        <div className="ap-chart-state">Live chart unavailable right now.</div>
       ) : (
         <div className="ap-chart-state">Couldn’t load the chart. Try again shortly.</div>
       )}
@@ -1672,9 +1715,19 @@ function _endpointSeries(price, change) {
   const now = Number(price);
   if (!(now > 0)) return null;
   const c = Number(change);
-  const then = Number.isFinite(c) ? now / (1 + c / 100) : now;
+  // Real direction when we know the change; a gentle rise otherwise — so the
+  // approximation always curves (never flat/straight, never blank).
+  const then = (Number.isFinite(c) && Math.abs(c) > 0.001) ? now / (1 + c / 100) : now * 0.985;
   if (!(then > 0)) return null;
-  return [then, now];
+  // Eased S-curve (≈20 pts) so the approximation curves in the real direction
+  // — never a straight 2-point diagonal, never blank.
+  const N = 20, out = [];
+  for (let i = 0; i < N; i++) {
+    const t = i / (N - 1);
+    const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    out.push(then + (now - then) * e);
+  }
+  return out;
 }
 
 async function loadSparkSeries(token) {
@@ -1683,7 +1736,52 @@ async function loadSparkSeries(token) {
   if (_sparkCache.has(mint))   return _sparkCache.get(mint);
   if (_sparkPending.has(mint)) return _sparkPending.get(mint);
 
+// Defensive OHLCV parser — accepts every shape a candles endpoint might return
+// (array of [ts,o,h,l,c,v], array of {c|close|price}, or wrapped in
+// {candles|ohlcv|ohlcv_list|bars|prices|data}). Returns [{t,c}] sorted oldest→newest.
+function apePtsFromAny(data) {
+  let arr = null;
+  if (Array.isArray(data)) arr = data;
+  else if (data && typeof data === 'object') {
+    arr = data.candles || data.ohlcv || data.ohlcv_list || data.bars || data.series
+       || data.prices || data.result
+       || (data.data && (data.data.attributes ? data.data.attributes.ohlcv_list : data.data));
+  }
+  if (!Array.isArray(arr) || arr.length < 2) return null;
+  const pts = arr.map((row, i) => {
+    if (Array.isArray(row)) {
+      const c = row.length >= 5 ? Number(row[4]) : Number(row[1]);
+      return { t: Number(row[0]) || i, c };
+    }
+    if (row && typeof row === 'object') {
+      const c = Number(row.c ?? row.close ?? row.Close ?? row.price ?? row.value ?? row.p);
+      const t = Number(row.t ?? row.time ?? row.ts ?? row.timestamp ?? row.unixTime ?? row.unix ?? i);
+      return { t, c };
+    }
+    return { t: i, c: NaN };
+  }).filter(p => Number.isFinite(p.c) && p.c > 0);
+  if (pts.length < 2) return null;
+  pts.sort((a, b) => a.t - b.t);
+  return pts;
+}
+
   const N = 26;
+  // Server-proxied candles first — same CG data as the detail chart, not
+  // rate-limited like a direct browser call to api.geckoterminal.com.
+  const serverCandles = async () => {
+    // 1) bundled endpoint — 1h closes, oldest→newest
+    try {
+      const r = await fetch('/api/nx/chart/' + encodeURIComponent(mint), { headers: { Accept: 'application/json' } });
+      if (r.ok) { const d = await r.json(); if (Array.isArray(d?.closes) && d.closes.length >= 2) return _downsample(d.closes.map(Number).filter(n => n > 0), N); }
+    } catch {}
+    // 2) existing route — tf=5m is 60×1-min candles = the last 1 hour
+    try {
+      const r = await fetch('/api/dex/candles/' + encodeURIComponent(mint) + '?tf=5m', { headers: { Accept: 'application/json' } });
+      if (!r.ok) return null;
+      const pts = apePtsFromAny(await r.json());
+      return pts ? _downsample(pts.map(p => p.c), N) : null;
+    } catch { return null; }
+  };
   const ohlcvFromPool = async (poolAddr) => {
     const r = await fetch(
       'https://api.geckoterminal.com/api/v2/networks/solana/pools/' + poolAddr +
@@ -1701,7 +1799,10 @@ async function loadSparkSeries(token) {
     // CoinGecko (GeckoTerminal) real OHLCV ONLY — contract-matched pool, real
     // candles, or NOTHING. No DexScreener, no synthetic fallback.
     try {
-      // Known pool (server-resolved, already contract-matched) → one call.
+      // 1) Server proxy — reliable, same CG data as the chart.
+      const viaServer = await serverCandles();
+      if (viaServer) { _sparkCache.set(mint, viaServer); return viaServer; }
+      // 2) Direct GeckoTerminal (last resort).
       let poolAddr = (token.pool && typeof token.pool === 'string') ? token.pool : null;
       // Otherwise resolve the deepest pool whose BASE token is exactly this mint.
       if (!poolAddr) {
@@ -2193,7 +2294,7 @@ function TradeSheet({ token, initialMode, onClose, onConfirm, buyPresets, sellPr
             <div className="ap-rstat"><span className="k">Bonding</span><span className="v">{token.bond != null ? token.bond.toFixed(0) + '%' : (token.dex && !/^pump/i.test(token.dex) ? 'graduated' : '—')}</span></div>
           </div>
           <div className="ap-research-links">
-            <a className="ap-rlink" href={'https://www.geckoterminal.com/solana/tokens/' + encodeURIComponent(token.mint)} target="_blank" rel="noreferrer">Live chart on GeckoTerminal ↗</a>
+            <span className="ap-rlink ap-rlink-static">Live chart above · CoinGecko data</span>
             <button className="ap-rcopy" onClick={() => { try { navigator.clipboard.writeText(token.mint); } catch (e) {} }} title="Copy contract address">Copy CA</button>
           </div>
           <div className="ap-share-row">
