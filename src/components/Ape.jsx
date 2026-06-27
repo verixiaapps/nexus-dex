@@ -1506,6 +1506,16 @@ function pumpTfMin(resKey) {
   return resKey === '1h' ? 60 : resKey === '5m' ? 5 : 1;
 }
 
+// Race any promise against a timeout so a slow/hung call can never leave the
+// chart stuck on its loading spinner. Resolves to `fallback` (default null) on
+// timeout instead of pending forever.
+function pTimeout(promise, ms, fallback = null) {
+  return Promise.race([
+    Promise.resolve(promise).catch(() => fallback),
+    new Promise(res => setTimeout(() => res(fallback), ms)),
+  ]);
+}
+
 // GeckoTerminal: pools come back with relationships.base_token.data.id of
 // the form "solana_<mint>" and attributes.{address, reserve_in_usd}. Accept
 // only a pool whose BASE token is exactly this mint (quote-only matches are a
@@ -1647,17 +1657,17 @@ function TokenChart({ token, solPrice }) {
       //    which was often a non-GeckoTerminal id that embedded a dead page.
       let networkOk = false;
       try {
-        const sAddr = await apeServerPool(mint);
+        const sAddr = await pTimeout(apeServerPool(mint), 4000);
         if (id !== reqRef.current) return;
         if (sAddr) { networkOk = true; setPool({ provider: 'GECKOTERMINAL', addr: sAddr }); setStatus('gecko'); return; }
       } catch (e) {}
       if (id !== reqRef.current) return;
       try {
-        const r = await fetch(
+        const r = await pTimeout(fetch(
           'https://api.geckoterminal.com/api/v2/networks/solana/tokens/' + mint + '/pools',
-          { headers: { Accept: 'application/json' } });
+          { headers: { Accept: 'application/json' } }), 4500);
         if (id !== reqRef.current) return;
-        if (r.ok) {
+        if (r && r.ok) {
           networkOk = true;
           const j = await r.json();
           if (id !== reqRef.current) return;
@@ -1949,7 +1959,16 @@ function apePtsFromAny(data) {
           if (closes.length >= 2) { const s = _downsample(closes, N); _sparkCache.set(mint, s); return s; }
         }
       } catch (e) {}
-    // No real data — draw nothing. Never fabricate a line.
+    // 4) FINAL fallback — APPROXIMATED from the token's own live price + real
+    //    24h change (the same numbers shown in the row): an eased curve between
+    //    price(24h ago) = price/(1+chg/100) and price(now). Built from real feed
+    //    values, not random. Guarantees every priced token draws a directional
+    //    line; OHLCV upgrades it in place on mints that have candles.
+    try {
+      const approx = _endpointSeries(pickPrice(token), pickChange(token));
+      if (approx && approx.length >= 2) { _sparkCache.set(mint, approx); return approx; }
+    } catch (e) {}
+    // Truly no price anywhere — draw nothing.
     return null;
   })().finally(() => { _sparkPending.delete(mint); });
 
