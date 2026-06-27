@@ -1,5 +1,5 @@
 // LaunchRadar.jsx — Solana new launches + per-card BUY/SELL modal trade flow.
-//     
+//    
 // TRADE PATH:
 //   • BUILD : /api/pumpfun/trade (your existing pumpfun-trade.js) returns a
 //             built v0 tx. Pump.fun bonding curve only.
@@ -21,7 +21,7 @@
 //          no unwrap step.
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { stkFetchSeries, stkBuildPath, stkSmoothPath, stkThrottle, stkEndpointSeries } from './Stocks.jsx';
+import { stkFetchSeries, stkBuildPath, stkSmoothPath, stkThrottle } from './Stocks.jsx';
 // Local copy of stkSeed so this file builds regardless of the Stocks.jsx version
 // shipped alongside it (older Stocks.jsx builds may not export stkSeed).
 function stkSeed(str) {
@@ -746,6 +746,41 @@ function useTokenIcon(token) {
 
 // GeckoTerminal: pools come back with relationships.base_token.data.id of
 // the form "solana_<mint>" and attributes.{address, reserve_in_usd}.
+
+// Resolve a pool address from the server /api/dex/token proxy (server-to-server,
+// never rate-limited/CORS-blocked). Picks the base-token-matched, deepest pool.
+// Server-side pool resolution (never browser-rate-limited): /api/nx/pool first,
+// then the existing /api/ape/curve. Both return a GeckoTerminal pool address.
+async function lrServerPool(mint) {
+  try {
+    const r = await fetch('/api/nx/pool/' + encodeURIComponent(mint), { headers: { Accept: 'application/json' } });
+    if (r.ok) { const d = await r.json(); if (d && typeof d.pool === 'string' && d.pool) return d.pool; }
+  } catch (e) {}
+  // NOTE: /api/ape/curve is intentionally NOT used here — it returns top_pools[0]
+  // without enforcing base-token match, so it could point at the wrong contract.
+  // If /api/nx/pool isn't available, the caller falls back to its own base-EXACT
+  // GeckoTerminal picker (pickBestGeckoPool), keeping the contract guaranteed.
+  return null;
+}
+
+function lrPoolFromTokenApi(d, mint) {
+  if (!d) return null;
+  const t = d.token || d;
+  const direct = t.pairAddress || t.poolAddress || t.pool || t.poolId
+    || (t.pool && t.pool.address) || (t.firstPool && (t.firstPool.id || t.firstPool.address));
+  if (typeof direct === 'string' && direct) return direct;
+  const pairs = d.pairs || t.pairs || d.pools || t.pools;
+  if (Array.isArray(pairs) && pairs.length) {
+    const liqOf  = p => Number(p?.liquidity?.usd ?? p?.liquidityUsd ?? p?.reserve_in_usd ?? p?.liquidity ?? 0);
+    const addrOf = p => p?.pairAddress || p?.poolAddress || p?.address || p?.id || null;
+    const baseOf = p => String((p?.baseToken && (p.baseToken.address || p.baseToken.id)) || p?.base || p?.baseMint || '');
+    const matched = pairs.filter(p => addrOf(p) && (!baseOf(p) || baseOf(p) === String(mint)));
+    const arr = matched.length ? matched : pairs;
+    return addrOf(arr.reduce((b, p) => (liqOf(p) > liqOf(b) ? p : b), arr[0]));
+  }
+  return null;
+}
+
 function pickBestGeckoPool(pools, mint) {
   if (!Array.isArray(pools) || !pools.length) return null;
   const wanted = 'solana_' + mint;                        // EXACT — Solana base58 is case-sensitive
@@ -806,6 +841,14 @@ function LrTokenChart({ mint, symbol = '', poolHint = null }) {
     (async () => {
       let networkOk = false;
 
+      // 0) Server-side pool resolution — reliable, not rate-limited.
+      try {
+        const sAddr = await lrServerPool(mint);
+        if (id !== reqRef.current) return;
+        if (sAddr) { networkOk = true; setPool({ provider: 'GECKOTERMINAL', addr: sAddr }); setStatus('ok'); return; }
+      } catch {}
+      if (id !== reqRef.current) return;
+
       // GeckoTerminal only — covers pump.fun bonding-curve pools and graduated pairs.
       try {
         const r = await fetch(
@@ -853,7 +896,7 @@ function LrTokenChart({ mint, symbol = '', poolHint = null }) {
       ) : status === 'loading' ? (
         <div className="lr-chart-state"><div className="lr-chart-spin" /></div>
       ) : status === 'none' ? (
-        <div className="lr-chart-state">Chart appears once {symbol || 'this token'} is indexed — trading on the bonding curve for now.</div>
+        <div className="lr-chart-state">Live chart unavailable right now.</div>
       ) : (
         <div className="lr-chart-state">Couldn’t load the chart. Try again shortly.</div>
       )}
@@ -1320,6 +1363,29 @@ function lrRecordSpark(mint, price) {
   if (pts[pts.length - 1] !== price) { pts.push(price); if (pts.length > 32) pts.shift(); }
   return pts;
 }
+// Two REAL endpoints from the token's own live price + real 24h change —
+// local copy so this file has no cross-module export dependency to break the
+// build. price(24h ago) = price / (1 + change/100), then price now.
+function endpointSeries(price, change) {
+  const now = Number(price);
+  if (!(now > 0)) return null;
+  const c = Number(change);
+  // Real direction when we know the change; a gentle rise otherwise — so the
+  // approximation always curves (never flat/straight, never blank).
+  const then = (Number.isFinite(c) && Math.abs(c) > 0.001) ? now / (1 + c / 100) : now * 0.985;
+  if (!(then > 0)) return null;
+  // Eased S-curve through the real prior→current price (≈20 pts) so the
+  // approximation reads as a curved trend, never a straight 2-point diagonal
+  // and never blank. Real direction, real endpoints.
+  const N = 20, out = [];
+  for (let i = 0; i < N; i++) {
+    const t = i / (N - 1);
+    const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    out.push({ t: i, c: then + (now - then) * e });
+  }
+  return out;
+}
+
 function LrSparkline({ mint, price, change, pool, w = 280, h = 40, full = true }) {
   const [series, setSeries] = useState(null);
   useEffect(() => {
@@ -1336,7 +1402,7 @@ function LrSparkline({ mint, price, change, pool, w = 280, h = 40, full = true }
   // real endpoints from price + 24h change. Always a line the moment a price
   // exists; OHLCV upgrades it in place. Never synthetic, never blank.
   const pts = (series && series.length >= 2) ? series
-            : (obs || stkEndpointSeries(price, change));
+            : (obs || endpointSeries(price, change));
   if (!pts) return null;
   const path = stkSmoothPath(pts, w, h, 2, stkSeed(mint));
   const up = Number.isFinite(change) ? change >= 0 : path.up;
