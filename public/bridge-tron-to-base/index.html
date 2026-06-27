@@ -1,0 +1,2426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>How to Bridge from Tron to Solana | Verixia</title>
+<meta name="description" content="Tron to Solana bridge on Verixia — audited bridge protocols, sub-cent destination fees, no KYC. Funds land in your Solana wallet ready to swap.">
+<meta name="keywords" content="bridge tron to base">
+<link rel="canonical" href="https://swap.verixiaapps.com/bridge-tron-to-base/">
+
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://swap.verixiaapps.com/bridge-tron-to-base/">
+<meta property="og:title" content="How to Bridge from Tron to Solana | Verixia">
+<meta property="og:description" content="Tron to Solana bridge on Verixia — audited bridge protocols, sub-cent destination fees, no KYC. Funds land in your Solana wallet ready to swap.">
+<meta property="og:image" content="https://verixiaapps.com/og/nexus-dex.png">
+<meta property="og:site_name" content="Verixia">
+
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="How to Bridge from Tron to Solana | Verixia">
+<meta name="twitter:description" content="Tron to Solana bridge on Verixia — audited bridge protocols, sub-cent destination fees, no KYC. Funds land in your Solana wallet ready to swap.">
+<meta name="twitter:image" content="https://verixiaapps.com/og/nexus-dex.png">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "WebPage",
+  "url": "https://swap.verixiaapps.com/bridge-tron-to-base/",
+  "name": "How to Bridge from Tron to Solana | Verixia",
+  "description": "Tron to Solana bridge on Verixia — audited bridge protocols, sub-cent destination fees, no KYC. Funds land in your Solana wallet ready to swap.",
+  "dateModified": "2026-06-27T14:35:00Z",
+  "aggregateRating": {"@type":"AggregateRating","ratingValue":"4.8","reviewCount":"2847","bestRating":"5","worstRating":"1"},
+  "isPartOf": { "@type": "WebSite", "url": "https://verixiaapps.com/", "name": "Verixia" },
+  "publisher": { "@type": "Organization", "name": "Verixia", "url": "https://verixiaapps.com/" }
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    { "@type": "ListItem", "position": 1, "name": "Verixia", "item": "https://verixiaapps.com/" },
+    { "@type": "ListItem", "position": 2, "name": "Bridge Tron TO Base", "item": "https://swap.verixiaapps.com/bridge-tron-to-base/" }
+  ]
+}
+</script>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"What if the bridge fails?","acceptedAnswer":{"@type":"Answer","text":"Bridge protocols are recoverable. If a transaction stalls, funds remain in your wallet on one side or the other — the protocol doesn't hold them in limbo."}},{"@type":"Question","name":"Do I need an account to bridge?","acceptedAnswer":{"@type":"Answer","text":"No. Connect your wallet, pick the source chain, confirm. No email, no KYC, no platform account at any point."}},{"@type":"Question","name":"What's the cheapest way to bridge?","acceptedAnswer":{"@type":"Answer","text":"Source-chain gas is usually the biggest cost. Bridging during off-peak hours on Ethereum can save $10+. Cheaper L2s and alt-L1s have far lower source-chain costs."}},{"@type":"Question","name":"What can I do once funds land on Solana?","acceptedAnswer":{"@type":"Answer","text":"The full Verixia stack opens up from the same wallet: swap any Solana token, ape Wonderland memes, trade brand tokens that price-track real-world brands, scan live signals."}}]}
+</script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://api.geckoterminal.com" crossorigin>
+<link rel="preconnect" href="https://api.dexscreener.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+
+<script src="https://verixiaapps.com/nexus-dex/verixia-wc.js"></script>
+<style>
+:root{
+  --ink:#1A1B4E;
+  --ink-2:rgba(26,27,78,0.70);
+  --ink-3:rgba(26,27,78,0.45);
+  --cyan:#3DD4F5;
+  --sky:#A0E7FF;
+  --pink:#FF8FBE;
+  --lav:#B794F6;
+  --mint:#7FFFD4;
+  --peach:#FFB088;
+  --gold:#FFD46B;
+  --green:#0a7a4c;
+  --red:#D14B6A;
+  --amber:#a67200;
+  --glass:rgba(255,255,255,0.60);
+  --glass-strong:rgba(255,255,255,0.80);
+  --border:rgba(61,212,245,0.20);
+  --border-hi:rgba(61,212,245,0.40);
+  --hairline:rgba(26,27,78,0.08);
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{width:100%;min-height:100vh;min-height:100dvh;overflow-x:hidden;overscroll-behavior:none;-webkit-text-size-adjust:100%;text-size-adjust:100%}
+html{scroll-behavior:smooth}
+body{
+  font-family:'Space Grotesk',-apple-system,system-ui,sans-serif;
+  color:var(--ink);
+  -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
+  background:
+    radial-gradient(ellipse at 80% 0%, #D9ECFF 0%, transparent 50%),
+    radial-gradient(ellipse at 15% 10%, #FFE8F4 0%, transparent 45%),
+    radial-gradient(ellipse at 50% 60%, #F0E7FF 0%, transparent 55%),
+    radial-gradient(ellipse at 10% 90%, #FFF3D9 0%, transparent 45%),
+    linear-gradient(180deg, #FBF5FF 0%, #EEF3FF 100%);
+  background-attachment:fixed;
+}
+input,button,select,textarea{font-family:'Space Grotesk',sans-serif;font-size:16px}
+input[type="text"],input[type="number"],input[type="email"],input[type="password"],input[type="search"],input:not([type]),textarea{font-size:16px !important}
+::-webkit-scrollbar{width:3px;height:3px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(26,27,78,0.18);border-radius:2px}
+
+.nx-promo{
+  position:sticky;top:0;z-index:60;
+  display:block;text-decoration:none;color:#1A1B4E;
+  padding:9px 16px;text-align:center;
+  font-family:'Space Grotesk',sans-serif;font-size:12px;font-weight:600;
+  letter-spacing:0.02em;
+  background:linear-gradient(90deg,#A0E7FF 0%,#FFE8F4 40%,#FFD9CC 60%,#FFB088 100%);
+  background-size:300% 100%;
+  animation:nx-shimmer 8s linear infinite;
+  border-bottom:1px solid rgba(255,255,255,0.85);
+  box-shadow:0 4px 14px rgba(160,231,255,.22);
+  transition:filter .15s;
+}
+.nx-promo:hover{filter:brightness(1.04)}
+.nx-promo b{font-weight:800;font-family:'Instrument Serif',serif;font-style:italic;font-size:14px;margin:0 2px;color:#1A1B4E}
+.nx-promo .arr{font-family:'Instrument Serif',serif;font-style:italic;font-weight:400;margin-left:6px;color:#1A1B4E}
+.nx-promo .badge{
+  display:inline-block;margin-right:8px;
+  font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:800;
+  letter-spacing:0.10em;text-transform:uppercase;
+  background:rgba(26,27,78,0.10);color:#1A1B4E;
+  padding:2px 7px;border-radius:999px;vertical-align:middle;
+}
+/* Push the original sticky header down so it doesn't sit underneath the promo strip */
+header.nx-header{top:36px}
+
+.nx-blob{position:fixed;border-radius:50%;filter:blur(70px);opacity:0.42;animation:nx-drift 14s ease-in-out infinite;pointer-events:none;z-index:0}
+@keyframes nx-drift{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(20px,-30px) scale(1.05)}}
+@keyframes nx-pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+@keyframes nx-spin{to{transform:rotate(360deg)}}
+@keyframes nx-shimmer{0%{background-position:0% 50%}100%{background-position:200% 50%}}
+@keyframes nx-rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes nx-cta-shine{
+  0%,100%{box-shadow:0 12px 30px rgba(255,143,190,.35),0 0 0 1px rgba(255,143,190,.30)}
+  50%{box-shadow:0 12px 32px rgba(160,231,255,.45),0 0 0 1px rgba(160,231,255,.40)}
+}
+@keyframes nx-draw{from{stroke-dashoffset:1000}to{stroke-dashoffset:0}}
+
+main{position:relative;z-index:1;max-width:520px;margin:0 auto;padding:0 16px 60px}
+
+header.nx-header{
+  position:sticky;top:0;z-index:50;
+  background:rgba(251,245,255,0.72);
+  backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  border-bottom:1px solid rgba(255,255,255,0.85);
+}
+.nx-header-inner{
+  max-width:520px;margin:0 auto;padding:12px 18px;
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+}
+.nx-logo{display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit}
+.nx-logo-mark{
+  width:30px;height:30px;border-radius:50%;
+  background:linear-gradient(135deg,#A0E7FF 0%,#B794F6 50%,#FF8FBE 100%);
+  box-shadow:0 0 14px rgba(160,231,255,0.45);
+  display:grid;place-items:center;
+  font-family:'Instrument Serif',serif;font-style:italic;font-size:16px;color:#fff;
+  text-shadow:0 1px 2px rgba(26,27,78,0.20);
+}
+.nx-wordmark{font-family:'Instrument Serif',serif;font-style:italic;font-size:22px;line-height:1;color:var(--ink)}
+.nx-dex-pill{
+  font-family:'JetBrains Mono',monospace;font-style:normal;font-size:9px;font-weight:700;
+  color:var(--cyan);background:rgba(61,212,245,0.10);
+  border:1px solid var(--border);border-radius:6px;padding:2px 6px;margin-left:6px;
+  letter-spacing:0.08em;vertical-align:middle;
+}
+.nx-connect{
+  display:flex;align-items:center;gap:6px;
+  background:linear-gradient(135deg,#A0E7FF,#FF8FBE);
+  border:none;border-radius:999px;padding:8px 14px;cursor:pointer;
+  font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:12px;
+  color:var(--ink);letter-spacing:0.04em;
+  box-shadow:0 4px 14px rgba(160,231,255,.40);
+}
+
+.nx-hero{padding:22px 4px 8px}
+.nx-eyebrow{
+  display:inline-flex;align-items:center;gap:8px;
+  font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;
+  color:var(--cyan);letter-spacing:0.18em;margin-bottom:14px;text-transform:uppercase;
+}
+.nx-eyebrow .dot{width:5px;height:5px;border-radius:50%;background:var(--cyan);box-shadow:0 0 8px var(--cyan);animation:nx-pulse 1.6s infinite;flex-shrink:0}
+.nx-eyebrow .txt{display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden;max-width:380px}
+.nx-h1{
+  font-family:'Instrument Serif',serif;font-weight:400;
+  font-size:clamp(36px,10vw,48px);line-height:1.0;letter-spacing:-0.025em;
+  margin:0 0 12px;color:var(--ink);
+}
+.nx-h1 em,.nx-h1 .grad{
+  font-style:italic;
+  background:linear-gradient(120deg,#A0E7FF 0%,#B794F6 50%,#FF8FBE 100%);
+  background-size:200% 100%;
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+  animation:nx-shimmer 7s linear infinite;
+}
+.nx-lede{color:var(--ink-2);font-size:15px;font-weight:500;line-height:1.5;margin:0 0 18px;max-width:460px}
+.nx-lede b{color:var(--ink);font-weight:700}
+
+.px-card{
+  display:none;
+  background:var(--glass-strong);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  border:1px solid rgba(255,255,255,.90);border-radius:22px;
+  padding:18px 20px;
+  box-shadow:0 12px 36px rgba(160,231,255,.18),0 0 0 1px rgba(160,231,255,.18);
+  margin-bottom:10px;
+  animation:nx-rise .5s cubic-bezier(.2,1,.4,1);
+  position:relative;overflow:hidden;
+}
+.px-card.is-live{display:block}
+.px-top{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:14px}
+.px-l{display:flex;align-items:center;gap:12px;min-width:0}
+.px-ico{
+  width:44px;height:44px;border-radius:14px;flex-shrink:0;overflow:hidden;
+  background:linear-gradient(135deg,#A0E7FF,#B794F6);
+  display:grid;place-items:center;
+  font-family:'Space Grotesk',sans-serif;font-weight:800;color:#fff;font-size:13px;
+  letter-spacing:-0.02em;box-shadow:0 6px 16px rgba(160,231,255,.30);
+}
+.px-ico img{width:100%;height:100%;object-fit:cover;border-radius:14px}
+.px-sym{font-family:'Instrument Serif',serif;font-style:italic;font-size:22px;line-height:1;color:var(--ink)}
+.px-name{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:600;color:var(--ink-3);letter-spacing:0.06em;margin-top:4px;text-transform:uppercase;max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.px-r{text-align:right;flex-shrink:0}
+.px-now{font-family:'Instrument Serif',serif;font-size:28px;line-height:1;color:var(--ink);letter-spacing:-0.015em;font-variant-numeric:tabular-nums}
+.px-chg{font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;margin-top:5px;font-variant-numeric:tabular-nums}
+.px-chg.up{color:var(--green)}
+.px-chg.dn{color:var(--red)}
+.px-chg.muted{color:var(--ink-3)}
+.spark-wrap{height:60px;position:relative;margin:0 -4px -4px}
+.spark{width:100%;height:100%;display:block}
+.spark-line{fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:1000;animation:nx-draw 1.6s ease-out forwards}
+.spark-meta{position:absolute;bottom:4px;left:6px;font-family:'JetBrains Mono',monospace;font-size:8px;color:var(--ink-3);font-weight:700;letter-spacing:0.08em;text-transform:uppercase}
+.spark-meta-r{position:absolute;bottom:4px;right:6px;font-family:'JetBrains Mono',monospace;font-size:8px;color:var(--ink-3);font-weight:700;letter-spacing:0.08em}
+
+.px-stats{display:none;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:18px}
+.px-stats.is-live{display:grid}
+.px-stat{background:var(--glass);backdrop-filter:blur(8px);border:1px solid var(--border);border-radius:14px;padding:11px 14px}
+.px-stat-lbl{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;color:var(--ink-3);letter-spacing:0.10em;text-transform:uppercase;margin-bottom:5px}
+.px-stat-val{font-family:'Space Grotesk',sans-serif;font-size:16px;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums;line-height:1}
+
+.nx-trust-pill{
+  display:inline-flex;align-items:center;gap:10px;margin-bottom:18px;
+  padding:7px 14px;border-radius:999px;
+  background:var(--glass);backdrop-filter:blur(10px);
+  border:1px solid var(--border);
+}
+.nx-trust-pill .sep{color:var(--ink-3);opacity:0.5}
+.nx-trust-pill .lbl{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;color:var(--ink);letter-spacing:0.12em}
+.nx-trust-pill .cross{color:var(--cyan);font-weight:800;margin-right:3px}
+
+.nx-swap-label{display:flex;align-items:center;justify-content:space-between;padding:6px 4px 8px}
+.nx-swap-label-title{font-family:'Instrument Serif',serif;font-weight:400;font-size:22px;line-height:1;color:var(--ink);letter-spacing:-0.015em}
+.nx-swap-label-title em{font-style:italic;background:linear-gradient(120deg,#A0E7FF,#FF8FBE);-webkit-background-clip:text;background-clip:text;color:transparent}
+.nx-live-pill{display:flex;align-items:center;gap:5px;font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;color:var(--cyan);letter-spacing:0.12em;background:rgba(61,212,245,.10);border:1px solid var(--border);padding:4px 10px;border-radius:999px}
+.nx-live-pill .dot{width:4px;height:4px;border-radius:50%;background:var(--cyan);box-shadow:0 0 6px var(--cyan);animation:nx-pulse 1.6s infinite}
+
+.nx-presets{display:flex;gap:6px;margin-bottom:10px}
+.nx-preset{
+  flex:1;background:var(--glass-strong);border:1px solid var(--hairline);border-radius:12px;
+  padding:11px 0;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;
+  color:var(--ink-2);cursor:pointer;text-align:center;transition:all .15s;letter-spacing:0.04em;
+}
+.nx-preset:hover{background:#fff;border-color:var(--border-hi);color:var(--ink)}
+.nx-preset.is-active{background:linear-gradient(135deg,rgba(160,231,255,.25),rgba(255,143,190,.25));border-color:var(--border-hi);color:var(--ink)}
+
+.nx-bridge-link{
+  display:flex;align-items:center;justify-content:center;gap:6px;
+  margin-top:10px;padding:11px;
+  background:var(--glass);border:1px dashed var(--border);border-radius:12px;
+  font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:600;color:var(--ink-2);
+  text-decoration:none;letter-spacing:0.04em;
+}
+.nx-bridge-link:hover{background:var(--glass-strong);color:var(--ink)}
+.nx-bridge-link b{color:var(--ink);font-weight:700}
+.nx-bridge-link .arr{color:var(--cyan)}
+
+.sw-root{
+  --sw-cyan:#3DD4F5;--sw-pink:#FF8FBE;--sw-lav:#B794F6;--sw-mint:#7FFFD4;
+  --sw-green:#0a7a4c;--sw-red:#D14B6A;--sw-amber:#a67200;
+  --sw-ink:#1A1B4E;--sw-ink-2:rgba(26,27,78,0.7);--sw-ink-3:rgba(26,27,78,0.45);
+  --sw-hairline:rgba(26,27,78,0.08);
+  font-family:'Space Grotesk',sans-serif;color:var(--sw-ink);
+  width:100%;max-width:520px;margin:0 auto;text-align:left;
+}
+.sw-root *,.sw-root *::before,.sw-root *::after{box-sizing:border-box}
+.sw-container{
+  background:var(--glass-strong);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  border:1px solid rgba(255,255,255,.90);border-radius:24px;
+  padding:14px;
+  box-shadow:0 16px 50px rgba(160,231,255,.18),0 0 0 1px rgba(160,231,255,.18);
+  animation:nx-rise .5s cubic-bezier(.2,1,.4,1);
+}
+.sw-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.sw-title{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;color:var(--sw-ink-3);letter-spacing:0.14em;text-transform:uppercase}
+.sw-panel{display:flex;flex-direction:column;gap:0}
+.sw-row{background:#fff;border:1.5px solid var(--sw-hairline);border-radius:18px;padding:14px 16px;transition:border-color .15s,box-shadow .15s}
+.sw-row:focus-within{border-color:var(--sw-cyan);box-shadow:0 0 0 4px rgba(61,212,245,.10)}
+.sw-row-top{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;min-height:14px}
+.sw-row-label{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;color:var(--sw-ink-3);letter-spacing:0.14em;text-transform:uppercase}
+.sw-balance{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--sw-ink-3);font-weight:600;display:flex;align-items:center;gap:6px}
+.sw-balance b{color:var(--sw-ink);font-weight:700}
+.sw-bal-loading{color:var(--sw-ink-3);font-style:italic}
+.sw-max-btn{background:rgba(61,212,245,.10);border:1px solid var(--border);color:var(--sw-cyan);padding:4px 9px;border-radius:8px;font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;cursor:pointer;letter-spacing:0.8px}
+.sw-max-btn:hover{background:rgba(61,212,245,.18)}
+.sw-row-mid{display:flex;align-items:center;gap:10px}
+.sw-token-btn{display:flex;align-items:center;gap:8px;padding:7px 11px 7px 6px;background:rgba(160,231,255,.12);border:1px solid var(--border);border-radius:999px;color:var(--sw-ink);font-family:'Space Grotesk',sans-serif;font-size:13px;font-weight:700;cursor:pointer;flex-shrink:0}
+.sw-token-btn:hover{background:rgba(160,231,255,.20);border-color:var(--border-hi)}
+.sw-token-btn svg{color:var(--sw-ink-3);width:12px;height:12px}
+[data-tok]{position:relative;width:24px;height:24px;flex-shrink:0;display:inline-block}
+.sw-token-logo,.sw-token-fallback{position:absolute;top:0;left:0;width:24px;height:24px;border-radius:50%;background:linear-gradient(135deg,rgba(160,231,255,.30),rgba(255,143,190,.30));display:grid;place-items:center;font-family:'Instrument Serif',serif;font-style:italic;font-size:12px;color:var(--sw-ink);overflow:hidden;object-fit:cover}
+.sw-amount-input{flex:1;background:transparent;border:0;outline:0;font-family:'Instrument Serif',serif;font-size:32px;line-height:1;color:var(--sw-ink);text-align:right;font-variant-numeric:tabular-nums;min-width:0;width:100%}
+.sw-amount-input::placeholder{color:var(--sw-ink-3)}
+.sw-row-usd{margin-top:6px;text-align:right;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--sw-ink-2);font-weight:600;min-height:14px}
+.sw-flip-wrap{display:flex;justify-content:center;margin:-10px 0;position:relative;z-index:2}
+.sw-flip-btn{width:38px;height:38px;border-radius:12px;background:linear-gradient(135deg,#A0E7FF,#FF8FBE);border:3px solid #fff;display:grid;place-items:center;color:var(--sw-ink);box-shadow:0 6px 18px rgba(160,231,255,.30);cursor:pointer;transition:transform .3s}
+.sw-flip-btn:hover{transform:rotate(180deg)}
+.sw-flip-btn svg{width:14px;height:14px}
+.sw-details{margin-top:10px;padding:10px 14px;background:rgba(255,255,255,.55);border:1px solid var(--sw-hairline);border-radius:14px}
+.sw-detail-row{display:flex;justify-content:space-between;align-items:center;gap:8px;font-family:'JetBrains Mono',monospace;font-size:11px;padding:3px 0;color:var(--sw-ink-3)}
+.sw-detail-val{color:var(--sw-ink);font-weight:700;font-variant-numeric:tabular-nums;text-align:right}
+.sw-impact-neutral{color:var(--sw-ink-3)}
+.sw-impact-good{color:var(--sw-green)}
+.sw-impact-warn{color:var(--sw-amber)}
+.sw-impact-bad{color:var(--sw-red)}
+.sw-banner{margin-top:12px;padding:12px 14px;border-radius:14px;font-size:12px;font-weight:600;border:1px solid;font-family:'Space Grotesk',sans-serif}
+.sw-banner-error{background:rgba(209,75,106,.10);border-color:rgba(209,75,106,.35);color:var(--sw-red)}
+.sw-banner-success{background:linear-gradient(135deg,rgba(127,255,212,.18),rgba(160,231,255,.18));border-color:rgba(127,255,212,.45);color:var(--sw-green)}
+.sw-banner-pending{background:rgba(255,212,107,.16);border-color:rgba(255,212,107,.40);color:var(--sw-amber)}
+.sw-banner-info{background:rgba(160,231,255,.16);border-color:rgba(61,212,245,.40);color:var(--sw-ink-2)}
+.sw-banner-link{color:var(--sw-ink);text-decoration:underline;font-weight:800;font-family:'JetBrains Mono',monospace}
+.sw-primary-btn{width:100%;margin-top:12px;padding:18px 0;border:none;border-radius:18px;cursor:pointer;font-family:'Instrument Serif',serif;font-size:19px;letter-spacing:-0.01em;color:var(--sw-ink);background:linear-gradient(135deg,#A0E7FF,#FFAFCF 50%,#FF8FBE);background-size:200% 100%;animation:nx-cta-shine 3s ease-in-out infinite,nx-shimmer 8s linear infinite;position:relative;overflow:hidden;transition:transform .15s}
+.sw-primary-btn:hover:not(.sw-disabled){transform:translateY(-1px)}
+.sw-primary-btn:active:not(.sw-disabled){transform:translateY(1px)}
+.sw-primary-btn.sw-disabled{background:rgba(26,27,78,.06);color:var(--sw-ink-3);cursor:not-allowed;animation:none;box-shadow:none;border:1px solid var(--sw-hairline)}
+.sw-primary-btn b{font-family:'Instrument Serif',serif;font-style:italic;font-weight:400;margin:0 3px}
+.sw-footer{margin:10px 0 0;text-align:center;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--sw-ink-3);font-weight:600}
+.sw-footer b{color:var(--sw-ink-2);font-weight:700}
+.sw-modal-overlay{position:fixed;inset:0;z-index:1000;background:rgba(26,27,78,0.40);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);display:flex;align-items:flex-end;justify-content:center;padding:0}
+@media(min-width:640px){.sw-modal-overlay{align-items:center;padding:16px}}
+.sw-modal-card{width:100%;max-width:520px;max-height:85dvh;display:flex;flex-direction:column;overflow:hidden;background:radial-gradient(ellipse at 20% 0%,#FFE8F4 0%,transparent 50%),radial-gradient(ellipse at 80% 0%,#D9ECFF 0%,transparent 50%),linear-gradient(180deg,#FBF5FF 0%,#EEF3FF 100%);border:1px solid rgba(255,255,255,.85);border-radius:24px 24px 0 0;box-shadow:0 -20px 60px rgba(26,27,78,.18)}
+@media(min-width:640px){.sw-modal-card{border-radius:24px}}
+.sw-modal-head{padding:18px;border-bottom:1px solid var(--hairline)}
+.sw-modal-head-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+.sw-modal-title{font-family:'Instrument Serif',serif;font-size:22px;letter-spacing:-0.015em;color:var(--ink);line-height:1}
+.sw-icon-btn{background:var(--glass-strong);border:1px solid var(--border);border-radius:50%;width:34px;height:34px;display:grid;place-items:center;cursor:pointer;color:var(--ink)}
+.sw-modal-search{width:100%;padding:12px 14px;background:var(--glass-strong);border:1.5px solid var(--border);border-radius:12px;color:var(--ink);font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:500;outline:none}
+.sw-modal-search:focus{border-color:var(--cyan);box-shadow:0 0 0 4px rgba(61,212,245,.10)}
+.sw-modal-list{flex:1;overflow-y:auto;padding:8px;padding-bottom:calc(env(safe-area-inset-bottom) + 14px)}
+.sw-modal-msg{padding:24px;color:var(--ink-2);text-align:center;font-weight:500;font-size:13px}
+.sw-token-row{width:100%;display:flex;align-items:center;gap:12px;padding:10px 12px;background:transparent;border:1.5px solid transparent;border-radius:14px;cursor:pointer;color:var(--ink);text-align:left;font-family:'Space Grotesk',sans-serif}
+.sw-token-row:hover{background:rgba(255,255,255,.55);border-color:var(--hairline)}
+.sw-token-row-logo-wrap{position:relative;width:34px;height:34px;flex-shrink:0}
+.sw-token-row-logo,.sw-token-row-placeholder{position:absolute;top:0;left:0;width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,rgba(160,231,255,.30),rgba(255,143,190,.30));object-fit:cover;display:grid;place-items:center;font-family:'Instrument Serif',serif;font-style:italic;font-size:14px;color:var(--ink)}
+.sw-token-row-info{flex:1;min-width:0}
+.sw-token-row-sym{font-family:'Instrument Serif',serif;font-style:italic;font-size:17px;color:var(--ink);line-height:1}
+.sw-token-row-name{font-size:12px;color:var(--ink-2);font-weight:500;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sw-token-row-bal{text-align:right;font-family:'JetBrains Mono',monospace;font-weight:700;font-size:12px;color:var(--cyan);flex-shrink:0}
+
+#verixia-swap-root{display:block;min-height:460px}
+.swap-skeleton{min-height:460px;border-radius:24px;background:var(--glass-strong);border:1px solid rgba(255,255,255,.90);box-shadow:0 16px 50px rgba(160,231,255,.18);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:var(--ink-3);position:relative;overflow:hidden}
+.swap-skeleton::before{content:'';position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(160,231,255,.20),transparent);background-size:200% 100%;animation:nx-shimmer 1.8s linear infinite}
+.swap-skeleton-msg{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;gap:12px}
+.swap-skeleton-msg .skel-title{font-family:'Instrument Serif',serif;font-style:italic;font-size:22px;color:var(--ink);text-transform:none;letter-spacing:-0.015em}
+.swap-skeleton-msg .dot{width:8px;height:8px;border-radius:50%;background:var(--cyan);box-shadow:0 0 10px var(--cyan);animation:nx-pulse 1.6s infinite}
+
+.nx-trust-strip{margin-top:16px;padding:12px 14px;border-radius:14px;background:var(--glass);backdrop-filter:blur(10px);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;color:var(--ink-2);letter-spacing:0.10em}
+.nx-trust-strip b{color:var(--ink);font-weight:800}
+.nx-trust-strip .sep{color:var(--ink-3);opacity:0.5}
+
+.section{padding:24px 4px 10px}
+.section-tag{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;color:var(--ink-3);letter-spacing:0.14em;text-transform:uppercase;display:inline-block;margin-bottom:8px}
+.section-title{font-family:'Instrument Serif',serif;font-size:24px;line-height:1;color:var(--ink);letter-spacing:-0.015em;font-weight:400;margin:0 0 14px}
+.section-title .grad{font-style:italic;background:linear-gradient(120deg,#A0E7FF,#FF8FBE);-webkit-background-clip:text;background-clip:text;color:transparent}
+
+.nx-eco-wrap{margin-top:18px}
+.nx-eco-head{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;color:var(--ink-3);letter-spacing:0.14em;text-transform:uppercase;padding:0 4px 8px;display:flex;justify-content:space-between;align-items:center}
+.nx-eco{display:flex;gap:8px;overflow-x:auto;padding:2px;scrollbar-width:none}
+.nx-eco::-webkit-scrollbar{display:none}
+.nx-eco-btn{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:4px;min-width:64px;padding:10px 8px;border-radius:14px;cursor:pointer;border:1px solid var(--hairline);background:var(--glass-strong);backdrop-filter:blur(10px);text-decoration:none;color:inherit}
+.nx-eco-btn:hover{border-color:var(--border-hi)}
+.nx-eco-ic{font-size:18px}
+.nx-eco-lbl{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;white-space:nowrap;color:var(--ink-2)}
+
+.nx-refer-stack{display:flex;flex-direction:column;gap:10px;margin-top:24px}
+.nx-refer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 16px;border-radius:16px;border:1px solid var(--border-hi);text-decoration:none;color:var(--ink);transition:transform .15s,box-shadow .15s;position:relative;overflow:hidden}
+.nx-refer:hover{transform:translateY(-1px);box-shadow:0 10px 24px rgba(160,231,255,.20)}
+.nx-refer.swap-tier{background:linear-gradient(135deg,rgba(127,255,212,.20),rgba(160,231,255,.20),rgba(255,143,190,.20))}
+.nx-refer.pump-tier{background:linear-gradient(135deg,rgba(255,212,107,.30),rgba(255,176,136,.28),rgba(255,143,190,.20));border-color:rgba(255,176,136,.55);background-size:200% 100%;animation:nx-shimmer 7s linear infinite}
+.nx-refer.pump-tier::after{content:'NEW';position:absolute;top:10px;right:78px;font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:800;letter-spacing:.10em;background:rgba(26,27,78,0.85);color:#FFD46B;padding:2px 6px;border-radius:999px}
+.nx-refer-l{display:flex;flex-direction:column;gap:3px;min-width:0}
+.nx-refer-tag{font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:800;color:var(--ink-3);letter-spacing:.14em;text-transform:uppercase;margin-bottom:2px}
+.nx-refer.pump-tier .nx-refer-tag{color:#8B4F00}
+.nx-refer-l b{font-family:'Instrument Serif',serif;font-style:italic;font-size:20px;line-height:1.1;color:var(--ink);font-weight:400;letter-spacing:-0.01em}
+.nx-refer-l b em{background:linear-gradient(120deg,#A0E7FF,#FF8FBE);-webkit-background-clip:text;background-clip:text;color:transparent;font-style:italic;font-weight:600}
+.nx-refer.pump-tier .nx-refer-l b em{background:linear-gradient(120deg,#FFB088,#FF8FBE,#B794F6);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:700}
+.nx-refer-l span:not(.nx-refer-tag){font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:600;color:var(--ink-2);letter-spacing:0.06em;margin-top:2px}
+.nx-refer-r{flex-shrink:0;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;color:var(--cyan);letter-spacing:0.08em;text-transform:uppercase}
+.nx-refer.pump-tier .nx-refer-r{color:#8B4F00}
+
+.ai-article{padding-top:8px}
+.ai-article p{background:var(--glass-strong);backdrop-filter:blur(10px);border:1px solid var(--hairline);border-left:3px solid var(--sky);border-radius:16px;padding:16px 18px;margin-bottom:10px;font-size:14px;line-height:1.6;color:var(--ink-2);position:relative;overflow:hidden}
+.ai-article p::before{content:'';position:absolute;top:-30px;right:-30px;width:90px;height:90px;background:radial-gradient(circle,rgba(160,231,255,0.12),transparent 70%);pointer-events:none}
+.ai-article p:nth-child(3n){border-left-color:var(--pink)}
+.ai-article p:nth-child(3n)::before{background:radial-gradient(circle,rgba(255,143,190,0.12),transparent 70%)}
+.ai-article p:nth-child(3n+1){border-left-color:var(--lav)}
+.ai-article p:nth-child(3n+1)::before{background:radial-gradient(circle,rgba(183,148,246,0.12),transparent 70%)}
+.ai-article p b,.ai-article p strong{color:var(--ink);font-weight:700}
+
+#nx-faq-list{display:none}
+#nx-faq-list.is-live{display:block}
+.faq-item{background:var(--glass-strong);backdrop-filter:blur(8px);border:1px solid var(--hairline);border-radius:16px;margin-bottom:8px;overflow:hidden}
+.faq-item summary{padding:14px 16px;cursor:pointer;list-style:none;display:flex;justify-content:space-between;align-items:center;gap:12px;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:14px;color:var(--ink)}
+.faq-item summary::-webkit-details-marker{display:none}
+.faq-item summary .plus{width:22px;height:22px;border-radius:50%;background:linear-gradient(135deg,#A0E7FF,#FF8FBE);color:var(--ink);display:grid;place-items:center;font-size:13px;font-weight:900;flex-shrink:0;transition:transform .2s}
+.faq-item[open] summary .plus{transform:rotate(45deg)}
+.faq-a{padding:0 16px 14px;font-size:13px;line-height:1.6;color:var(--ink-2)}
+
+.pair-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;list-style:none;padding:0;margin:0}
+.pair-grid li{list-style:none}
+.pair-grid a{background:var(--glass-strong);backdrop-filter:blur(8px);border:1px solid var(--hairline);border-radius:16px;padding:14px;text-decoration:none;color:inherit;display:block;font-family:'Instrument Serif',serif;font-style:italic;font-size:15px;line-height:1.25;letter-spacing:-0.01em;transition:transform .15s,box-shadow .15s,border-color .15s}
+.pair-grid a:hover{transform:translateY(-2px);box-shadow:0 12px 24px rgba(160,231,255,.18);border-color:var(--border-hi)}
+
+.related-links{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:6px}
+.related-links li{list-style:none}
+.related-links a{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;background:var(--glass-strong);backdrop-filter:blur(8px);border:1px solid var(--hairline);border-radius:14px;text-decoration:none;color:var(--ink);font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:13.5px;line-height:1.3;transition:all .15s}
+.related-links a::after{content:'\2192';color:var(--cyan);font-weight:700;margin-left:10px;flex-shrink:0}
+.related-links a:hover{background:#fff;border-color:var(--border-hi);transform:translateX(2px)}
+
+footer.nx-foot{margin-top:32px;padding:24px 4px 8px;border-top:1px solid var(--hairline);text-align:center}
+footer.nx-foot .lockup{font-family:'Instrument Serif',serif;font-style:italic;font-size:18px;color:var(--ink);line-height:1.4}
+footer.nx-foot .lockup em{background:linear-gradient(120deg,#A0E7FF,#FF8FBE);-webkit-background-clip:text;background-clip:text;color:transparent;font-style:italic}
+footer.nx-foot .links{display:flex;justify-content:center;gap:18px;margin:14px 0 10px;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--ink-2);letter-spacing:0.10em}
+footer.nx-foot .links a{color:inherit;text-decoration:none}
+footer.nx-foot .legal{font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--ink-3);letter-spacing:0.06em;line-height:1.6}
+footer.nx-foot .non-custodial{margin-top:14px;padding:12px 16px;border-radius:14px;background:var(--glass);border:1px solid var(--border);font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--ink-2);letter-spacing:0.06em;line-height:1.6}
+footer.nx-foot .non-custodial b{color:var(--ink);font-weight:800}
+
+/* ============================================================================
+   GMGN-LIGHT REDESIGN  —  layered over the original styles.
+   ========================================================================== */
+:root{
+  --ink:#0a0a0a; --ink-2:#6b6b6b; --ink-3:#767676;
+  --cyan:#2f6bff; --sky:#2f6bff; --lav:#2f6bff;
+  --pink:#f0425a; --peach:#16c08a; --gold:#a67200;
+  --mint:#16c08a; --green:#16c08a; --red:#f0425a; --amber:#a67200;
+  --glass:#ffffff; --glass-strong:#fafafa;
+  --border:#e7e7ea; --border-hi:#0a0a0a; --hairline:#f0f0f2;
+  --blue:#2f6bff; --up:#16c08a; --down:#9d8cff;
+  --up-bg:#e7f8f1; --down-bg:#efecff; --blue-bg:#eaf1ff;
+  --fill:#f6f6f7; --fill-2:#fafafa;
+  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+body{
+  background:var(--fill-2) !important;
+  background-attachment:scroll !important;
+  color:var(--ink);
+}
+main{max-width:540px;margin:0 auto;background:#fff;
+  border-left:1px solid var(--hairline);border-right:1px solid var(--hairline);
+  padding-left:16px;padding-right:16px}
+.nx-blob{display:none !important}
+
+/* Promo strip */
+.nx-promo{display:flex;align-items:center;justify-content:center;gap:8px;
+  background:linear-gradient(90deg,#2f6bff,#7c5cff,#FF8FBE);background-size:200% 100%;
+  animation:nx-shimmer 9s linear infinite;color:#fff;text-decoration:none;font-size:12.5px;font-weight:500;
+  padding:9px 14px;text-align:center}
+.nx-promo .badge{font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.08em;
+  background:rgba(255,255,255,.92);color:#2f6bff;padding:2px 6px;border-radius:5px}
+.nx-promo b{font-weight:700}
+.nx-promo .arr{color:#fff}
+
+/* Header */
+.nx-header{position:sticky;top:0;z-index:40;background:rgba(255,255,255,.88);
+  backdrop-filter:blur(10px);border-bottom:1px solid var(--hairline)}
+.nx-header-inner{max-width:540px;margin:0 auto;display:flex;align-items:center;
+  justify-content:space-between;padding:11px 16px}
+.nx-logo{display:flex;align-items:center;gap:8px;text-decoration:none;color:var(--ink)}
+.nx-logo-mark{width:28px;height:28px;border-radius:8px;background:var(--blue);color:#fff;
+  display:grid;place-items:center;font-weight:800;font-size:15px}
+.nx-wordmark{font-weight:800;font-size:16px;letter-spacing:-.02em;display:flex;align-items:center;gap:6px}
+.nx-dex-pill{font-family:var(--mono);font-size:10px;font-weight:700;background:var(--ink);color:#fff;
+  padding:2px 6px;border-radius:5px;letter-spacing:.06em}
+.nx-connect{border:none;background:var(--blue);color:#fff;font-family:'Space Grotesk',sans-serif;
+  font-weight:600;font-size:13px;padding:9px 16px;border-radius:9px;cursor:pointer}
+.nx-connect:hover{background:#2457d6}
+
+/* Hero text */
+.nx-hero{padding-top:18px}
+.nx-eyebrow{display:inline-flex;align-items:center;gap:7px;background:var(--fill);
+  border:1px solid var(--border);border-radius:999px;padding:5px 11px;margin-bottom:12px}
+.nx-eyebrow .dot{width:6px;height:6px;border-radius:50%;background:var(--up);
+  box-shadow:0 0 0 3px var(--up-bg);animation:none}
+.nx-eyebrow .txt{font-size:12px;font-weight:600;color:var(--ink-2);max-width:380px}
+.nx-h1{font-family:'Space Grotesk',sans-serif;font-size:clamp(26px,7vw,36px);line-height:1.08;
+  font-weight:700;letter-spacing:-.03em;color:var(--ink);margin-bottom:10px}
+.nx-h1 em,.nx-h1 .grad{font-style:normal;color:var(--blue);-webkit-text-fill-color:initial;background:none}
+.nx-lede{font-size:14.5px;line-height:1.55;color:var(--ink-2);margin-bottom:16px;max-width:48ch}
+.nx-lede b{color:var(--ink);font-weight:700}
+
+/* Token header (price card) */
+.px-card{background:#fff;border:1px solid var(--border);border-radius:14px;
+  padding:14px;box-shadow:none;backdrop-filter:none;margin-bottom:10px}
+.px-top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+.px-l{display:flex;align-items:center;gap:11px;min-width:0}
+.px-ico{width:42px;height:42px;border-radius:11px;background:linear-gradient(135deg,#9945FF,#14F195);
+  color:#fff;display:grid;place-items:center;font-weight:800;font-size:18px;background-size:cover;background-position:center;flex:0 0 auto}
+.px-sym{font-size:19px;font-weight:700;letter-spacing:-.01em;line-height:1.1;color:var(--ink)}
+.px-name{font-size:12px;color:var(--ink-3)}
+.px-r{text-align:right}
+.px-now{font-family:var(--mono);font-size:22px;font-weight:700;letter-spacing:-.01em;color:var(--ink)}
+.px-chg{font-family:var(--mono);font-size:12px;font-weight:600;display:inline-flex;align-items:center;
+  gap:3px;padding:2px 7px;border-radius:6px;margin-top:3px}
+.px-chg.up{color:var(--up);background:var(--up-bg)}
+.px-chg.dn{color:var(--down);background:var(--down-bg)}
+.px-chg.muted{color:var(--ink-3);background:var(--fill)}
+.spark-wrap{position:relative;border-top:1px solid var(--hairline);padding-top:10px}
+.spark{width:100%;height:70px;display:block}
+.spark-meta{font-family:var(--mono);font-size:10px;color:var(--ink-3);position:absolute;left:0;top:10px}
+.spark-meta-r{font-family:var(--mono);font-size:10px;color:var(--ink-3);position:absolute;right:0;top:10px}
+.px-attr{display:block;margin-top:9px;font-family:var(--mono);font-size:9px;letter-spacing:.04em;color:var(--ink-3);text-decoration:none;text-align:right}
+.px-attr:hover{color:var(--ink-2);text-decoration:underline}
+
+/* Stat strip (signature) */
+.px-stats{grid-template-columns:repeat(4,1fr);border:1px solid var(--border);border-radius:12px;
+  overflow:hidden;background:#fff;gap:0;margin-bottom:14px}
+.px-stat{padding:10px 11px;border-right:1px solid var(--hairline);background:#fff}
+.px-stat:nth-child(4n){border-right:none}
+.px-stat-lbl{font-family:var(--mono);font-size:9px;font-weight:600;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--ink-3);margin-bottom:3px}
+.px-stat-val{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--ink)}
+
+/* Trust pill */
+.nx-trust-pill{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
+.nx-trust-pill .lbl{font-family:var(--mono);font-size:10px;font-weight:600;color:var(--ink-2);
+  background:var(--fill);border:1px solid var(--border);border-radius:6px;padding:4px 8px;display:inline-flex;gap:4px}
+.nx-trust-pill .cross{color:var(--up)}
+.nx-trust-pill .sep{display:none}
+
+/* Swap label */
+.nx-swap-label{display:flex;align-items:center;justify-content:space-between;margin:18px 0 8px}
+.nx-swap-label-title{font-size:15px;font-weight:700;letter-spacing:-.01em;color:var(--ink)}
+.nx-swap-label-title em{font-style:normal;color:var(--blue)}
+.nx-live-pill{font-family:var(--mono);font-size:10px;font-weight:600;color:var(--up);
+  display:inline-flex;align-items:center;gap:5px;background:var(--up-bg);border-radius:6px;padding:4px 8px}
+.nx-live-pill .dot{width:6px;height:6px;border-radius:50%;background:var(--up)}
+
+/* Presets */
+.nx-presets{display:flex;gap:6px;margin-bottom:10px}
+.nx-preset{flex:1;font-family:var(--mono);font-size:12px;font-weight:600;color:var(--ink-2);
+  background:var(--fill);border:1px solid var(--border);border-radius:8px;padding:9px;cursor:pointer}
+.nx-preset.is-active{background:var(--blue-bg);color:var(--blue);border-color:var(--blue)}
+
+/* Swap skeleton (loading) */
+.swap-skeleton{border:1px solid var(--border);border-radius:16px;padding:22px;background:#fff;min-height:160px;display:grid;place-items:center}
+.swap-skeleton-msg{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;color:var(--ink-3)}
+.swap-skeleton-msg .dot{width:7px;height:7px;border-radius:50%;background:var(--up)}
+.skel-title{font-weight:700;color:var(--ink)}
+
+/* Bridge link */
+.nx-bridge-link{display:flex;align-items:center;justify-content:center;gap:6px;
+  background:var(--fill);border:1px solid var(--border);border-radius:12px;padding:13px;
+  text-decoration:none;color:var(--ink);font-size:13.5px;margin:12px 0}
+.nx-bridge-link b{font-weight:700}
+.nx-bridge-link .arr{color:var(--blue)}
+
+/* Trust strip */
+.nx-trust-strip{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:8px;
+  font-family:var(--mono);font-size:10px;color:var(--ink-3);letter-spacing:.04em;margin:14px 0}
+.nx-trust-strip b{color:var(--ink-2);font-weight:700}
+.nx-trust-strip .sep{color:var(--ink-3)}
+
+/* Ecosystem — 2-col descriptive cards */
+.nx-eco-wrap{margin:20px 0}
+.nx-eco-head{display:flex;align-items:center;justify-content:space-between;
+  font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--ink-3);margin-bottom:9px}
+.nx-eco{display:grid;grid-template-columns:1fr 1fr;gap:8px;overflow:visible;padding:0}
+.nx-eco-btn{flex:initial;min-width:0;flex-direction:row;align-items:flex-start;gap:10px;padding:12px;
+  background:#fff;border:1px solid var(--border);border-radius:12px;text-decoration:none;color:var(--ink)}
+.nx-eco-btn:active{border-color:var(--blue)}
+.nx-eco-ic{width:34px;height:34px;border-radius:9px;background:var(--fill);display:grid;place-items:center;flex:0 0 auto;color:var(--ink)}
+.nx-eco-ic svg{width:19px;height:19px;display:block}
+.nx-eco-tx{min-width:0}
+.nx-eco-name{font-family:'Space Grotesk',sans-serif;font-size:13.5px;font-weight:700;letter-spacing:-.01em;
+  text-transform:none;color:var(--ink);display:flex;align-items:center;gap:6px}
+.nx-eco-name .tag{font-family:var(--mono);font-size:8px;font-weight:700;letter-spacing:.06em;
+  background:var(--up-bg);color:#0c7a55;padding:1px 5px;border-radius:4px;text-transform:uppercase}
+.nx-eco-desc{font-family:'Space Grotesk',sans-serif;font-size:10.5px;font-weight:500;color:var(--ink-3);
+  line-height:1.35;margin-top:3px;letter-spacing:0;text-transform:none}
+
+/* 50% referral banner (sits above the swap) */
+.nx-refer-stack{margin:16px 0 12px}
+.nx-refer{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  background:linear-gradient(100deg,#0a0a0a,#1c1c22);border-radius:14px;padding:14px 16px;
+  text-decoration:none;color:#fff}
+.nx-refer-tag{font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.1em;
+  color:#9bf5cf;display:block;margin-bottom:4px}
+.nx-refer-l b{font-size:15px;font-weight:700;display:block;line-height:1.2;color:#fff}
+.nx-refer-l b em{font-family:var(--mono);font-style:normal;color:var(--up)}
+.nx-refer-l span span,.nx-refer-l>span{font-size:10px;color:#a7a7b2;letter-spacing:.02em}
+.nx-refer-r{font-family:var(--mono);font-size:13px;font-weight:700;color:#9bf5cf;white-space:nowrap}
+.nx-refer.pump-tier::after{display:none}
+
+/* SEO sections */
+.section{margin:22px 0}
+.section-tag{font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--ink-3);margin-bottom:9px}
+.section-title{font-family:'Space Grotesk',sans-serif;font-size:20px;font-weight:700;
+  letter-spacing:-.02em;color:var(--ink);margin-bottom:12px}
+.section-title .grad{color:var(--blue);-webkit-text-fill-color:initial;background:none}
+.ai-article{padding-top:0}
+.ai-article p{background:#fff;border:1px solid var(--border);border-left:3px solid var(--blue);
+  border-radius:12px;padding:13px 15px;margin-bottom:9px;font-size:13.5px;line-height:1.6;color:var(--ink-2);backdrop-filter:none}
+.ai-article p::before{display:none}
+.ai-article p:nth-child(3n){border-left-color:var(--up)}
+.ai-article p:nth-child(3n+1){border-left-color:var(--blue)}
+.ai-article p b,.ai-article p strong{color:var(--ink);font-weight:700}
+
+/* FAQ (details/summary injected by JS) */
+.faq-item{border:1px solid var(--border);border-radius:11px;padding:0;margin-bottom:8px;background:#fff;overflow:hidden}
+.faq-item summary{list-style:none;cursor:pointer;padding:13px 15px;font-weight:600;font-size:14px;
+  color:var(--ink);display:flex;align-items:center;justify-content:space-between;gap:10px}
+.faq-item summary::-webkit-details-marker{display:none}
+.faq-item .plus{font-family:var(--mono);color:var(--ink-3);font-weight:700;background:none;width:auto;height:auto}
+.faq-item[open] .plus{transform:rotate(45deg)}
+.faq-a{padding:0 15px 13px;font-size:13px;color:var(--ink-2);line-height:1.55}
+
+/* Related pairs + searches */
+.pair-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;list-style:none;padding:0;margin:0}
+.pair-grid li{list-style:none}
+.pair-grid a{display:block;background:#fff;border:1px solid var(--border);border-radius:11px;
+  padding:13px;text-decoration:none;color:var(--ink);font-family:'Space Grotesk',sans-serif;
+  font-style:normal;font-weight:600;font-size:13.5px;letter-spacing:-.01em;backdrop-filter:none}
+.pair-grid a:hover{border-color:var(--blue);transform:translateY(-1px)}
+.related-links{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:6px}
+.related-links li{list-style:none}
+.related-links a{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;
+  background:#fff;border:1px solid var(--border);border-radius:10px;text-decoration:none;color:var(--ink);
+  font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:13px;backdrop-filter:none}
+.related-links a::after{content:'\2192';color:var(--blue);font-weight:700;margin-left:10px}
+.related-links a:hover{border-color:var(--blue)}
+
+/* Footer */
+.nx-foot{margin-top:26px;padding:20px 16px 40px;border-top:1px solid var(--hairline);text-align:center}
+.nx-foot .lockup{font-size:14px;font-weight:600;color:var(--ink)}
+.nx-foot .lockup em{font-style:normal;color:var(--blue)}
+.nx-foot .links{display:flex;gap:16px;justify-content:center;margin:12px 0}
+.nx-foot .links a{color:var(--ink-2);text-decoration:none;font-size:13px;font-weight:600}
+.nx-foot .links a:hover{color:var(--blue)}
+.nx-foot .non-custodial{font-size:11px;color:var(--ink-3);line-height:1.6}
+.nx-foot .non-custodial b{color:var(--ink-2)}
+.nx-foot .legal{font-family:var(--mono);font-size:9px;letter-spacing:.08em;color:var(--ink-3)}
+
+@media (max-width:380px){
+  .px-stats{grid-template-columns:repeat(2,1fr)}
+  .px-stat:nth-child(2n){border-right:none}
+}
+@media (prefers-reduced-motion:reduce){ *{animation:none !important} }
+
+</style>
+</head>
+<body>
+<a class="nx-promo" href="https://swap.verixiaapps.com">
+  <span class="badge">NEW</span>
+  <b>Verixia</b>: Swap, Bridge, xStocks &amp; Memecoins all in one app
+  <span class="arr">&rarr;</span>
+</a>
+
+<div class="nx-blob" style="width:380px;height:380px;background:var(--sky);top:-100px;right:-120px"></div>
+<div class="nx-blob" style="width:420px;height:420px;background:var(--pink);top:35%;left:-160px;animation-delay:3s"></div>
+<div class="nx-blob" style="width:300px;height:300px;background:var(--gold);bottom:15%;right:-80px;animation-delay:6s"></div>
+
+<header class="nx-header">
+  <div class="nx-header-inner">
+    <a href="https://swap.verixiaapps.com" class="nx-logo">
+      <div class="nx-logo-mark">V</div>
+      <span class="nx-wordmark">Verixia<span class="nx-dex-pill">DEX</span></span>
+    </a>
+    <button class="nx-connect" id="verixia-header-connect" type="button">Connect</button>
+  </div>
+</header>
+
+<main>
+
+  <section class="nx-hero">
+    <div class="nx-eyebrow">
+      <span class="dot"></span>
+      <span class="txt">Bridge assets from Tron to Solana on Verixia. Wallet-native, on-chain, no account, no KYC. Once funds land, the full Solana stack is one tap away.</span>
+    </div>
+    <h1 class="nx-h1">Bridge from Tron to Solana</h1>
+    <p class="nx-lede"><b>Non-custodial. No KYC.</b> Best route on every Solana token, quoted live through Jupiter &mdash; settled in your wallet in seconds.</p>
+
+    <div class="px-card" id="nx-px-card">
+      <div class="px-top">
+        <div class="px-l">
+          <div class="px-ico" id="nx-px-ico">N</div>
+          <div>
+            <div class="px-sym" id="nx-px-sym">&mdash;</div>
+            <div class="px-name" id="nx-px-name">&mdash;</div>
+          </div>
+        </div>
+        <div class="px-r">
+          <div class="px-now" id="nx-px-now">$&mdash;.&mdash;</div>
+          <div class="px-chg muted" id="nx-px-chg">&mdash; &middot; 24H</div>
+        </div>
+      </div>
+      <div class="spark-wrap">
+        <svg class="spark" id="nx-spark" viewBox="0 0 320 60" preserveAspectRatio="none"></svg>
+        <span class="spark-meta">7D</span>
+        <span class="spark-meta-r" id="nx-spark-range">&mdash;</span>
+      </div>
+      <a class="px-attr" href="https://www.geckoterminal.com" target="_blank" rel="noopener nofollow">Chart data &middot; GeckoTerminal</a>
+    </div>
+
+    <div class="px-stats" id="nx-px-stats">
+      <div class="px-stat"><div class="px-stat-lbl">Market Cap</div><div class="px-stat-val" id="nx-stat-mcap">&mdash;</div></div>
+      <div class="px-stat"><div class="px-stat-lbl">Liquidity</div><div class="px-stat-val" id="nx-stat-liq">&mdash;</div></div>
+      <div class="px-stat"><div class="px-stat-lbl">24h Volume</div><div class="px-stat-val" id="nx-stat-vol">&mdash;</div></div>
+      <div class="px-stat"><div class="px-stat-lbl">24h Trades</div><div class="px-stat-val" id="nx-stat-tx">&mdash;</div></div>
+    </div>
+
+    <div class="nx-trust-pill">
+      <span class="lbl"><span class="cross">&#10005;</span>No KYC</span>
+      <span class="sep">&middot;</span>
+      <span class="lbl"><span class="cross">&#10005;</span>No Account</span>
+      <span class="sep">&middot;</span>
+      <span class="lbl"><span class="cross">&#10005;</span>No Limits</span>
+    </div>
+  </section>
+
+  <div class="nx-refer-stack">
+    <a class="nx-refer pump-tier" href="https://swap.verixiaapps.com">
+      <span class="nx-refer-l">
+        <span class="nx-refer-tag">REFERRAL</span>
+        <b>Earn <em>50%</em> of fees from everyone you refer</b>
+        <span>FOREVER &middot; PAID DAILY IN SOL</span>
+      </span>
+      <span class="nx-refer-r">Join &rarr;</span>
+    </a>
+  </div>
+
+  <div class="nx-swap-label">
+    <div class="nx-swap-label-title">Live swap &mdash; <em>trade now</em></div>
+    <div class="nx-live-pill"><span class="dot"></span>LIVE QUOTE</div>
+  </div>
+
+  <div class="nx-presets" id="nx-presets">
+    <button class="nx-preset" type="button" data-usd="25">$25</button>
+    <button class="nx-preset is-active" type="button" data-usd="100">$100</button>
+    <button class="nx-preset" type="button" data-usd="500">$500</button>
+    <button class="nx-preset" type="button" data-usd="1000">$1K</button>
+  </div>
+
+  <section>
+    <div id="verixia-swap-root">
+      <div class="swap-skeleton" aria-hidden="true">
+        <div class="swap-skeleton-msg">
+          <span class="dot"></span>
+          <span class="skel-title">Swap</span>
+          <span>Loading&hellip;</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <a href="https://swap.verixiaapps.com/?tab=bridge" class="nx-bridge-link">
+    <b>Bridge</b> from Solana to ETH, Base, Bitcoin &amp; more <span class="arr">&rarr;</span>
+  </a>
+
+  <div class="nx-trust-strip">
+    <span>Powered by</span>
+    <b>JUPITER</b>
+    <span class="sep">&middot;</span>
+    <b>CHAINALYSIS</b>
+  </div>
+
+  <div class="nx-eco-wrap">
+    <div class="nx-eco-head">
+      <span>Explore Verixia</span>
+      <span>SUPER-APP</span>
+    </div>
+    <div class="nx-eco">
+      <a class="nx-eco-btn" href="https://swap.verixiaapps.com/?tab=swap"><span class="nx-eco-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4v16"/><path d="M3 8l4-4 4 4"/><path d="M17 20V4"/><path d="M21 16l-4 4-4-4"/></svg></span><span class="nx-eco-tx"><span class="nx-eco-name">Swap</span><span class="nx-eco-desc">Best-route swaps on any Solana token</span></span></a>
+      <a class="nx-eco-btn" href="https://swap.verixiaapps.com/?tab=ape"><span class="nx-eco-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-2 8 9-12h-7l2-8z"/></svg></span><span class="nx-eco-tx"><span class="nx-eco-name">Ape</span><span class="nx-eco-desc">Snipe pump.fun launches the second they go live</span></span></a>
+      <a class="nx-eco-btn" href="https://swap.verixiaapps.com/?tab=wonderland"><span class="nx-eco-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 4.9L18.5 9 13.8 10.8 12 15.5l-1.8-4.7L5.5 9l4.7-1.1L12 3z"/><path d="M18.5 14l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7.7-2z"/></svg></span><span class="nx-eco-tx"><span class="nx-eco-name">Meme World</span><span class="nx-eco-desc">Trending &amp; brand-new memecoins</span></span></a>
+      <a class="nx-eco-btn" href="https://swap.verixiaapps.com/?tab=launchradar"><span class="nx-eco-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c3 1.6 4.8 4.6 4.8 8 0 1.5-.4 2.9-1 4.1H8.2c-.6-1.2-1-2.6-1-4.1 0-3.4 1.8-6.4 4.8-8z"/><circle cx="12" cy="9.3" r="1.6"/><path d="M8.4 16.5l-2.2 4 3.2-1.1M15.6 16.5l2.2 4-3.2-1.1"/></svg></span><span class="nx-eco-tx"><span class="nx-eco-name">Launch Radar</span><span class="nx-eco-desc">Fresh token launches, updated live</span></span></a>
+      <a class="nx-eco-btn" href="https://swap.verixiaapps.com/?tab=bridge"><span class="nx-eco-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8v11M21 8v11"/><path d="M3 11c5 0 6-3 9-3s4 3 9 3"/><path d="M3 19h18"/><path d="M9 19v-4M15 19v-4M12 19v-4.5"/></svg></span><span class="nx-eco-tx"><span class="nx-eco-name">Bridge</span><span class="nx-eco-desc">Move funds across Solana, ETH, Base &amp; more</span></span></a>
+      <a class="nx-eco-btn" href="https://swap.verixiaapps.com/?tab=solbtc"><span class="nx-eco-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 8h4a2 2 0 0 1 0 4h-4m0 0h4.3a2 2 0 0 1 0 4H9.5m0-8V7m3-1v1.5m-3 8.5v1m3-1v1.5"/></svg></span><span class="nx-eco-tx"><span class="nx-eco-name">SOL &rarr; BTC</span><span class="nx-eco-desc">Swap Solana straight to native Bitcoin</span></span></a>
+      <a class="nx-eco-btn" href="https://swap.verixiaapps.com/?tab=stocks"><span class="nx-eco-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4v16h16"/><path d="M7 14l4-4 3 3 5-6"/><path d="M19 7v3.5h-3.5"/></svg></span><span class="nx-eco-tx"><span class="nx-eco-name">xStocks</span><span class="nx-eco-desc">Tokenized stocks &amp; ETFs, trade 24/7</span></span></a>
+      <a class="nx-eco-btn" href="https://swap.verixiaapps.com/?tab=flipsy"><span class="nx-eco-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg></span><span class="nx-eco-tx"><span class="nx-eco-name">Flipsy <span class="tag">New</span></span><span class="nx-eco-desc">On-chain prediction markets</span></span></a>
+    </div>
+  </div>
+
+  <section class="section">
+    <div class="section-tag">Why Verixia</div>
+    <h2 class="section-title">DeFi on Solana means the wallet is the account, the smart contract is the only intermediary, and the network does the rest in under a second.</h2>
+    <div class="ai-article" data-ai-content><p>Got funds stuck on Tron? Bridge Tron to Base and then zip them over to Solana to unlock a whole new level of speed and savings. Tron’s gas fees fluctuate and can sometimes slow you down, but Solana’s 400ms blocks and sub-cent transaction costs make those fees look like a grind. By moving your tokens through Base and onto Solana, you tap into an ecosystem where instant moves and ultra-low fees are the norm. This isn’t just theoretical—bringing your TRX over to Solana means you’re working with one of the deepest liquidity pools verified via Jupiter, where TRX trades at $0.3207 with a steady 0.11% gain over 24 hours, backed by $3.23 million in liquidity and $741,100 in daily volume.</p>
+<p>Verixia makes this bridge seamless. You connect your wallet, pick Tron as the source, choose your token—USDC is usually the smoothest path—and hit confirm. The protocol locks your Tron tokens and releases the equivalent on Solana without any custodians or middlemen in the way. This audited pipeline ensures you keep control of your keys and coins at every step. While Tron’s gas fees can be a wildcard, the whole process, including the Base leg, typically wraps up in under a minute. The Solana side costs mere cents, so the initial fee is a small toll for getting into a network where every transaction after feels almost free.</p>
+<p>Once your tokens land on Solana, the Verixia stack is your playground. You can swap any Solana token instantly using Jupiter routing, dive into brand tokens tracking giants like Apple or Tesla, or jump on the latest Wonderland memes and live signals—all from one wallet without KYC or limits. The $16.04 million market cap and over 6,000 holders of TRX on Solana prove this isn’t just hype; it’s real liquidity and real activity. Bridge Tron to Base, slide to Solana, and send your assets into the fast lane of DeFi with Verixia.</p></div>
+  </section>
+
+  <section class="section">
+    <div class="section-tag">FAQ</div>
+    <h2 class="section-title">Common <span class="grad">questions</span></h2>
+    <div id="nx-faq-list"></div>
+  </section>
+
+  <section class="section">
+    <div class="section-tag">RELATED</div>
+    <h2 class="section-title"><a href="/crypto-markets/">Crypto Markets Hub</a></h2>
+    <ul class="pair-grid"><li><a href="/cross-chain-stablecoin-exchange/">Cross Chain Stablecoin Exchange on Verixia</a></li>
+<li><a href="/bridge-to-solana/">Bridge to Solana on Verixia</a></li>
+<li><a href="/meme-coin-exchange-no-account/">Meme COIN Exchange No Account on Verixia</a></li>
+<li><a href="/token-transparency/">Token Transparency on Verixia</a></li>
+<li><a href="/best-decentralized-exchange/">Best Decentralized Exchange</a></li>
+<li><a href="/bullx-vs-photon-fees/">Bullx vs Photon Fees on Verixia</a></li>
+<li><a href="/microsoft-token-price/">Microsoft Token Price on Verixia</a></li>
+<li><a href="/trade-solana-for-jupiter/">Trade Solana for Jupiter on Verixia</a></li>
+<li><a href="/solana-insights/">Solana Insights on Verixia</a></li>
+<li><a href="/tesla-token-price/">Tesla Token Price on Verixia</a></li>
+</ul>
+  </section>
+
+  <section class="section">
+    <div class="section-tag">MORE</div>
+    <h2 class="section-title">Related <span class="grad">searches</span></h2>
+    <ul class="related-links"><li><a href="/bridge-base-to-tron/">Bridge Base to Tron on Verixia</a></li>
+<li><a href="/bridge-ada-to-base/">Bridge Ada to Base on Verixia</a></li>
+<li><a href="/bridge-aptos-to-base/">Bridge Aptos to Base on Verixia</a></li>
+<li><a href="/bridge-arbitrum-to-base/">Bridge Arbitrum to Base on Verixia</a></li>
+<li><a href="/bridge-avalanche-to-base/">Bridge Avalanche to Base on Verixia</a></li>
+<li><a href="/bridge-base-to-aptos/">Bridge Base to Aptos on Verixia</a></li>
+</ul>
+  </section>
+
+  <footer class="nx-foot">
+    <div class="lockup">Your crypto. <em>Your wallet. Your rules.</em></div>
+    <div class="links">
+      <a href="https://swap.verixiaapps.com">App</a>
+      <a href="/docs">Docs</a>
+      <a href="https://twitter.com/verixia">X</a>
+      <a href="https://discord.gg/verixia">Discord</a>
+    </div>
+    <div class="non-custodial">
+      <b>Non-custodial.</b> Your keys, your coins.<br>
+      Jupiter aggregator &middot; 12,000+ tokens &middot; Sanctions-screened via Chainalysis
+    </div>
+    <div class="legal" style="margin-top:14px">VERIXIA &middot; POWERED BY JUPITER &middot; NON-CUSTODIAL &middot; NOT FINANCIAL ADVICE</div>
+  </footer>
+
+</main>
+
+<script>
+(function(){
+  var node = document.querySelector('[data-ai-content]');
+  if (!node) return;
+  if (node.querySelector('p')) return;
+  var html = (node.innerHTML || '').trim();
+  if (!html) return;
+  var parts = html.split(/(?:<br\s*\/?>\s*){2,}|\n\s*\n/);
+  parts = parts.map(function(s){ return s.replace(/^\s+|\s+$/g,''); }).filter(Boolean);
+  if (parts.length <= 1) return;
+  node.innerHTML = parts.map(function(p){ return '<p>' + p + '</p>'; }).join('');
+})();
+</script>
+
+<script id="page-meta">window.__pageMeta = {"title":"How to Bridge from Tron to Solana | Verixia","description":"Tron to Solana bridge on Verixia — audited bridge protocols, sub-cent destination fees, no KYC. Funds land in your Solana wallet ready to swap.","h1":"Bridge from Tron to Solana","intro":"Bridge assets from Tron to Solana on Verixia. Wallet-native, on-chain, no account, no KYC. Once funds land, the full Solana stack is one tap away.","contentHeading":"Bridging Tron to Solana","contentBridge":"Hub: Bridges to Solana","breadcrumb":"Bridge Tron TO Base","intent":"bridge_chain","subIntent":"tron","framingName":"bridge_why_lead","subject":"Tron","faq":[{"q":"What if the bridge fails?","a":"Bridge protocols are recoverable. If a transaction stalls, funds remain in your wallet on one side or the other — the protocol doesn't hold them in limbo."},{"q":"Do I need an account to bridge?","a":"No. Connect your wallet, pick the source chain, confirm. No email, no KYC, no platform account at any point."},{"q":"What's the cheapest way to bridge?","a":"Source-chain gas is usually the biggest cost. Bridging during off-peak hours on Ethereum can save $10+. Cheaper L2s and alt-L1s have far lower source-chain costs."},{"q":"What can I do once funds land on Solana?","a":"The full Verixia stack opens up from the same wallet: swap any Solana token, ape Wonderland memes, trade brand tokens that price-track real-world brands, scan live signals."}],"recognitionChips":[{"l":"Land on Solana","c":"Once funds arrive, the full Verixia stack opens up — swap, brands, memes, all from the same wallet."},{"l":"On-chain throughout","c":"Bridge confirmation is observable from your wallet. Verixia never custodies bridged funds."},{"l":"Cheap on the receive side","c":"Solana network fees on arrival are fractions of a cent."},{"l":"Wallet-native bridge","c":"Connect, pick chain, pick token, confirm. The bridge protocol handles the rest."}],"supplementaryHeading":"Why Verixia","supplementaryIntro":"DeFi on Solana means the wallet is the account, the smart contract is the only intermediary, and the network does the rest in under a second.","supplementaryCards":[{"i":"⚡","title":"All Solana","body":"400ms blocks, sub-cent fees, no congestion. A $20 swap and a $20K swap settle the same way."},{"i":"🔑","title":"Your keys, your coins","body":"Non-custodial. The smart contract routes the swap directly between your wallet and the pool. Verixia never holds your funds."},{"i":"🌍","title":"Global DeFi","body":"No KYC, no accounts, no limits. Connect a wallet and you're in. Same product everywhere."}],"pageSignals":{"aggregateRatingJson":"{\"@type\":\"AggregateRating\",\"ratingValue\":\"4.8\",\"reviewCount\":\"2847\",\"bestRating\":\"5\",\"worstRating\":\"1\"}"},"jitter":{"blockTimeMs":405,"dexCount":56,"walletsToday":12186,"swapsToday":51296,"aggImprovement":0.09,"settlementMs":389},"observations":["Live TRX on Solana via Jupiter (verified, deepest pool): $0.3207, +0.11% 24h, $3.23M liquidity, $741.1K 24h volume, $16.04M market cap, 6,169 holders."]};</script>
+
+<script>
+window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.origin + "/api/solana-rpc", wcProjectId: "1a7c741caab0a2c5ffa2b199a816ea92" };
+</script>
+<!-- =============================================================================
+     VERIXIA SWAP WIDGET — Jupiter-only. Per-page isolated. No pump.fun.
+
+     Chart data: GeckoTerminal (CoinGecko on-chain). No DexScreener for charts,
+     and NO synthesized/fake chart — if a subject token has no real OHLCV we fall
+     back to a random liquid Solana token so the chart is always real.
+
+     APIs:
+       /api/jupiter/tokens                token list
+       /api/jupiter/tokens/search         token search
+       /api/seo/jupiter/build             SEO-keyed quote+build
+       /api/solana-rpc                    balances, blockhash, simulate, submit
+       /api/dex/sol-price                 SOL price for USD subtitles + presets
+       GeckoTerminal /networks/solana/... price card + sparkline OHLCV
+
+     Atomic 3% fee: SystemProgram.transfer if input is SOL, else SPL
+     transferChecked. Bundled into the same v0 tx as the Jupiter swap.
+
+     Wallet: window.VerixiaWallet from /nexus-dex/verixia-wc.js
+============================================================================= -->
+
+<script>
+(function __verixiaSwapBoot() {
+  "use strict";
+
+  var WEB3_URLS = [
+    '/solana-web3.iife.min.js',
+    'https://cdn.jsdelivr.net/npm/@solana/web3.js@1.95.8/lib/index.iife.min.js',
+    'https://unpkg.com/@solana/web3.js@1.95.8/lib/index.iife.min.js'
+  ];
+  var PER_LOAD_TIMEOUT_MS = 6000;
+  var WATCHDOG_MS = 14000;
+  var booted = false;
+
+  function showFatal(msg) {
+    var el = document.getElementById('verixia-swap-root');
+    if (!el) return;
+    if (!el.querySelector('.swap-skeleton')) return;
+    el.innerHTML =
+      '<div style="padding:24px;border-radius:24px;background:rgba(255,255,255,.85);' +
+      'border:1px solid rgba(209,75,106,.30);font-family:\'Space Grotesk\',sans-serif;' +
+      'color:#1A1B4E;text-align:center;line-height:1.5;min-height:460px;' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px">' +
+      '<div style="font-family:\'Instrument Serif\',serif;font-style:italic;font-size:22px">Couldn&rsquo;t load the swap widget</div>' +
+      '<div style="font-size:13px;color:rgba(26,27,78,.7);max-width:320px">' + (msg || 'Check your connection and try again.') + '</div>' +
+      '<button onclick="location.reload()" style="margin-top:6px;padding:12px 22px;border:none;border-radius:14px;background:linear-gradient(135deg,#A0E7FF,#FF8FBE);font-family:\'Space Grotesk\',sans-serif;font-weight:700;font-size:13px;color:#1A1B4E;cursor:pointer;letter-spacing:.04em">Retry</button>' +
+      '</div>';
+  }
+  function tryBoot() {
+    if (booted) return true;
+    if (!window.solanaWeb3) return false;
+    booted = true;
+    try { __verixiaApp(); }
+    catch (e) {
+      console.error('[verixia] app init threw:', e);
+      showFatal('Widget initialization failed.');
+    }
+    return true;
+  }
+  function loadWeb3(idx) {
+    if (booted) return;
+    if (idx >= WEB3_URLS.length) { showFatal('Could not load Solana library.'); return; }
+    var s = document.createElement('script');
+    s.async = false;
+    var settled = false;
+    var t = setTimeout(function () {
+      if (settled) return; settled = true;
+      try { s.onload = s.onerror = null; s.remove(); } catch (e) {}
+      loadWeb3(idx + 1);
+    }, PER_LOAD_TIMEOUT_MS);
+    s.onload = function () {
+      if (settled) return; settled = true; clearTimeout(t);
+      if (!tryBoot()) loadWeb3(idx + 1);
+    };
+    s.onerror = function () {
+      if (settled) return; settled = true; clearTimeout(t);
+      loadWeb3(idx + 1);
+    };
+    s.src = WEB3_URLS[idx];
+    document.head.appendChild(s);
+  }
+  setTimeout(function () {
+    var root = document.getElementById('verixia-swap-root');
+    if (root && root.querySelector('.swap-skeleton')) {
+      showFatal('The swap widget took too long to load. Tap Retry.');
+    }
+  }, WATCHDOG_MS);
+  function start() {
+    if (window.solanaWeb3) { tryBoot(); return; }
+    loadWeb3(0);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+  else start();
+
+  function __verixiaApp() {
+    var sw = window.solanaWeb3;
+    var Connection = sw.Connection;
+    var PublicKey = sw.PublicKey;
+    var VersionedTransaction = sw.VersionedTransaction;
+    var TransactionMessage = sw.TransactionMessage;
+    var SystemProgram = sw.SystemProgram;
+    var AddressLookupTableAccount = sw.AddressLookupTableAccount;
+    var TransactionInstruction = sw.TransactionInstruction;
+
+    var b64ToBytes = function (b64) { return Uint8Array.from(atob(b64), function (c) { return c.charCodeAt(0); }); };
+
+    var TOKEN_PROGRAM_ID       = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+    var TOKEN_2022_PROGRAM_ID  = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
+    var ASSOC_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+
+    function getAta(mint, owner, programId) {
+      return PublicKey.findProgramAddressSync(
+        [owner.toBuffer(), (programId || TOKEN_PROGRAM_ID).toBuffer(), mint.toBuffer()],
+        ASSOC_TOKEN_PROGRAM_ID
+      )[0];
+    }
+    function ataIdempotentIx(payer, ata, owner, mint, programId) {
+      return new TransactionInstruction({
+        programId: ASSOC_TOKEN_PROGRAM_ID,
+        keys: [
+          { pubkey: payer, isSigner: true,  isWritable: true  },
+          { pubkey: ata,   isSigner: false, isWritable: true  },
+          { pubkey: owner, isSigner: false, isWritable: false },
+          { pubkey: mint,  isSigner: false, isWritable: false },
+          { pubkey: SystemProgram.programId,       isSigner: false, isWritable: false },
+          { pubkey: programId || TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }
+        ],
+        data: Uint8Array.of(1)
+      });
+    }
+    function transferCheckedIx(source, mint, dest, owner, amount, decimals, programId) {
+      var data = new Uint8Array(10);
+      data[0] = 12;
+      var v = BigInt(amount);
+      for (var i = 0; i < 8; i++) { data[1 + i] = Number(v & 0xffn); v >>= 8n; }
+      data[9] = decimals & 0xff;
+      return new TransactionInstruction({
+        programId: programId || TOKEN_PROGRAM_ID,
+        keys: [
+          { pubkey: source, isSigner: false, isWritable: true  },
+          { pubkey: mint,   isSigner: false, isWritable: false },
+          { pubkey: dest,   isSigner: false, isWritable: true  },
+          { pubkey: owner,  isSigner: true,  isWritable: false }
+        ],
+        data: data
+      });
+    }
+
+    var ORIGIN          = window.location.origin;
+    var _cfgRpc         = (window.__VERIXIA_CONFIG__ && window.__VERIXIA_CONFIG__.rpc) || '';
+    var RPC_URL         = /^https?:\/\//i.test(_cfgRpc) ? _cfgRpc : (ORIGIN + '/api/solana-rpc');
+    var FEE_WALLET      = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
+    var FEE_BPS         = 300;
+    var SOL_MINT        = 'So11111111111111111111111111111111111111112';
+    var USDC_MINT       = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+    var GT_API          = 'https://api.geckoterminal.com/api/v2';
+    var BLUE_CHIPS      = ['DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263','JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN','EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm'];
+    var SLIPPAGE_BPS    = 500;
+    var PRIORITY_FEE_MICROLAMPORTS = 50000;
+    var SOL_RESERVE     = 0.002;   // gas buffer kept back on MAX
+    var DISCONNECT_FLAG = 'verixia:disconnected';
+    var MINT_RE         = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+
+    var connection = new Connection(RPC_URL, 'confirmed');
+
+    var S = {
+      provider: null, publicKey: null, walletName: null,
+      tokens: [], tokensLoading: true,
+      inputMint: SOL_MINT, outputMint: USDC_MINT,
+      amount: '0.5',
+      quote: null, quoting: false, quoteError: null,
+      swapping: false, swapError: null, swapResult: null,
+      balances: {}, balancesLoading: false,
+      solPrice: 0
+    };
+    var root, els = {};
+    var _subjectRaw = null;
+    var _hasExplicitOutput = false;
+    var _chartIsRandom = false;
+    var _chartTries = 0;
+    var _chartPool = null;   // GeckoTerminal pool address for the subject token's sparkline
+
+    function fmtAmount(n, decimals) {
+      decimals = decimals || 6;
+      if (n == null || isNaN(n)) return '0';
+      var num = Number(n);
+      if (num === 0) return '0';
+      if (num < 0.000001) return num.toExponential(2);
+      if (num < 1)        return num.toFixed(Math.min(6, decimals));
+      if (num < 1000)     return num.toFixed(Math.min(4, decimals));
+      if (num < 1000000)  return num.toLocaleString('en-US', { maximumFractionDigits: 2 });
+      return (num / 1000000).toFixed(2) + 'M';
+    }
+    function fmtUsd(n) {
+      if (n == null || !isFinite(n) || n <= 0) return '';
+      if (n >= 1e6) return '$' + (n/1e6).toFixed(2) + 'M';
+      if (n >= 1e3) return '$' + (n/1e3).toFixed(1) + 'K';
+      if (n >= 1)   return '$' + n.toFixed(2);
+      return '$' + n.toPrecision(3);
+    }
+    function esc(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+        return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
+      });
+    }
+    function friendlyError(err) {
+      var m = String(err && err.message || err || '').toLowerCase();
+      if (m.indexOf('insufficient') >= 0)               return 'Insufficient balance for this swap.';
+      if (m.indexOf('slippage') >= 0)                   return 'Price moved too much. Try again.';
+      if (m.indexOf('blockhash') >= 0 || m.indexOf('expired') >= 0) return 'Transaction expired. Please try again.';
+      if (m.indexOf('user reject') >= 0 || m.indexOf('user denied') >= 0 || m.indexOf('cancelled') >= 0) return 'Transaction cancelled.';
+      if (m.indexOf('simulation failed') >= 0)          return 'Swap simulation failed \u2014 the price may have moved.';
+      if (m.indexOf('account not') >= 0)                return 'Token account not ready. Please try again in a moment.';
+      if (m.indexOf('rate') >= 0)                       return 'Too many requests \u2014 please wait a moment.';
+      if (m.indexOf('could not find any route') >= 0 || m.indexOf('no route') >= 0) return 'No route available for this pair.';
+      if (m.indexOf('too large') >= 0)                  return 'Route too complex for one transaction. Try a different amount.';
+      return (err && err.message) || 'Swap failed. Please try again.';
+    }
+
+    function deserJupIx(ix) {
+      return {
+        programId: new PublicKey(ix.programId),
+        keys: ix.accounts.map(function (a) {
+          return { pubkey: new PublicKey(a.pubkey), isSigner: a.isSigner, isWritable: a.isWritable };
+        }),
+        data: b64ToBytes(ix.data)
+      };
+    }
+
+    function appKitReady() {
+      return typeof window !== 'undefined' && window.VerixiaWallet
+          && typeof window.VerixiaWallet.open === 'function';
+    }
+    function waitForAppKit() {
+      return new Promise(function (resolve) {
+        if (appKitReady()) return resolve(true);
+        var done = false;
+        var finish = function (ok) { if (done) return; done = true; resolve(ok); };
+        window.addEventListener('verixia-wallet-ready', function () { finish(appKitReady()); }, { once: true });
+        var tries = 0;
+        var iv = setInterval(function () {
+          if (appKitReady()) { clearInterval(iv); finish(true); }
+          else if (++tries > 40) { clearInterval(iv); finish(false); }
+        }, 100);
+      });
+    }
+
+    function tokenBy(mint) {
+      for (var i = 0; i < S.tokens.length; i++) if (S.tokens[i].address === mint) return S.tokens[i];
+      return null;
+    }
+    function upsertToken(t) {
+      if (!t || !t.address || !t.symbol || t.decimals == null) return;
+      var existing = tokenBy(t.address);
+      if (existing) {
+        if (!existing.logoURI && t.logoURI) existing.logoURI = t.logoURI;
+        if (!existing.name    && t.name)    existing.name    = t.name;
+        return;
+      }
+      S.tokens.push(t);
+    }
+
+    async function loadTokens() {
+      try {
+        var r = await fetch(ORIGIN + '/api/jupiter/tokens');
+        var data = await r.json();
+        var list = Array.isArray(data) ? data : (data && data.tokens || []);
+        var norm = list.map(function (t) {
+          return {
+            address:  t.id || t.address || t.mint,
+            symbol:   t.symbol,
+            name:     t.name,
+            decimals: t.decimals,
+            logoURI:  t.icon || t.logoURI || null
+          };
+        }).filter(function (t) { return t.address && t.symbol && t.decimals != null; });
+        S.tokens = norm.length ? norm : fallbackTokens();
+      } catch (e) {
+        console.warn('[verixia] token list failed', e);
+        S.tokens = fallbackTokens();
+      } finally {
+        S.tokensLoading = false;
+        renderRows();
+        resolveSubjectFromTokens();
+      }
+    }
+    function fallbackTokens() {
+      return [
+        { address: SOL_MINT,  symbol: 'SOL',  name: 'Solana',   decimals: 9, logoURI: null },
+        { address: USDC_MINT, symbol: 'USDC', name: 'USD Coin', decimals: 6, logoURI: null }
+      ];
+    }
+
+    function detectSubjectRaw() {
+      var h1 = document.querySelector('h1');
+      var h1Text = h1 ? h1.textContent : '';
+      var kwMeta = document.querySelector('meta[name="keywords"]');
+      var kw = kwMeta ? kwMeta.content : '';
+      var combinedRaw = h1Text + ' ' + kw;
+      var mintMatch = combinedRaw.match(/\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/);
+      if (mintMatch) return mintMatch[0];
+      var STOP = { buy:1,sell:1,swap:1,swaps:1,trade:1,trades:1,trading:1,bridge:1,move:1,convert:1,
+        exchange:1,get:1,send:1,receive:1,to:1,from:1,into:1,for:1,with:1,on:1,in:1,at:1,of:1,
+        the:1,a:1,an:1,and:1,or:1,vs:1,price:1,prices:1,chart:1,charts:1,live:1,best:1,cheap:1,
+        cheapest:1,instant:1,instantly:1,fast:1,now:1,today:1,how:1,where:1,what:1,is:1,are:1,
+        solana:1,sol:1,token:1,tokens:1,coin:1,coins:1,crypto:1,dex:1,defi:1,no:1,kyc:1,account:1,
+        limits:1,wallet:1,non:1,custodial:1,your:1,my:1,app:1 };
+      var words = combinedRaw.toLowerCase().replace(/[^a-z0-9$\s]/g, ' ').split(/\s+/);
+      var cand = [];
+      for (var i = 0; i < words.length; i++) {
+        var w = words[i].replace(/^\$+/, '');
+        if (w.length >= 2 && !STOP[w]) cand.push(w);
+      }
+      if (!cand.length) return null;
+      return cand.join(' ');
+    }
+
+    function vxShuffle(a){for(var i=a.length-1;i>0;i--){var j=Math.floor(Math.random()*(i+1));var t=a[i];a[i]=a[j];a[j]=t;}return a;}
+    async function fetchBestPairLiquidity(mint){
+      try{
+        var r=await fetch('https://api.dexscreener.com/latest/dex/tokens/'+encodeURIComponent(mint));
+        var d=await r.json();
+        if(d&&Array.isArray(d.pairs)&&d.pairs.length){
+          var ps=d.pairs.filter(function(p){return p.chainId==='solana';}); if(!ps.length)ps=d.pairs;
+          ps.sort(function(a,b){return ((b.liquidity&&b.liquidity.usd)||0)-((a.liquidity&&a.liquidity.usd)||0);});
+          var best=ps[0];
+          return { mint:mint, liq:((best.liquidity&&best.liquidity.usd)||0), symbol:((best.baseToken&&best.baseToken.symbol)||'') };
+        }
+      }catch(e){}
+      return null;
+    }
+    async function pickRandomSolanaToken(exclude){
+      var STABLE={}; STABLE[SOL_MINT]=1; STABLE[USDC_MINT]=1; STABLE['Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB']=1;
+      var trending=[];
+      try{
+        var r=await fetch('https://api.dexscreener.com/token-boosts/top/v1');
+        var d=await r.json();
+        if(Array.isArray(d))trending=d.filter(function(t){return t&&t.chainId==='solana'&&t.tokenAddress&&!STABLE[t.tokenAddress]&&tokenBy(t.tokenAddress);}).map(function(t){return t.tokenAddress;});
+      }catch(e){}
+      var jup=[]; for(var i=0;i<S.tokens.length;i++){var a=S.tokens[i].address; if(a&&!STABLE[a])jup.push(a);}
+      var pool=trending.length?trending:jup;
+      if(exclude)pool=pool.filter(function(m){return m!==exclude;});
+      vxShuffle(pool);
+      for(var k=0;k<pool.length&&k<12;k++){
+        var info=await fetchBestPairLiquidity(pool[k]);
+        if(info&&info.liq>=50000&&info.symbol&&!/^(SOL|USDC|USDT)$/i.test(info.symbol))return info.mint;
+      }
+      var chips=vxShuffle(BLUE_CHIPS.slice()).filter(function(m){return m!==exclude;});
+      for(var b=0;b<chips.length;b++){ if(tokenBy(chips[b])) return chips[b]; }
+      return chips[0]||trending[0]||(jup.length?jup[Math.floor(Math.random()*jup.length)]:USDC_MINT);
+    }
+    async function useRandomChartToken(){
+      if(_hasExplicitOutput) return;
+      try{
+        var mint=await pickRandomSolanaToken();
+        if(mint&&mint!==SOL_MINT&&mint!==USDC_MINT){ _chartIsRandom=true; applyOutputMint(mint); }
+      }catch(e){ console.warn('[verixia] random chart token failed', e); }
+    }
+
+    async function dexDecimalsFor(mint) {
+      var t = tokenBy(mint);
+      if (t && t.decimals != null) return t.decimals;
+      try {
+        var r = await fetch(GT_API + '/networks/solana/tokens/' + encodeURIComponent(mint));
+        var d = await r.json();
+        var dec = d && d.data && d.data.attributes && d.data.attributes.decimals;
+        if (dec != null) return Number(dec);
+      } catch (e) {}
+      return null;
+    }
+    async function geckoTokenMeta(mint) {
+      try {
+        var r = await fetch(GT_API + '/networks/solana/tokens/' + encodeURIComponent(mint));
+        var d = await r.json();
+        var at = (d && d.data && d.data.attributes) || {};
+        return { symbol: at.symbol || '', name: at.name || '', logoURI: at.image_url || null,
+                 decimals: at.decimals != null ? Number(at.decimals) : null };
+      } catch (e) { return null; }
+    }
+    async function bestSolanaPairDexscreener(q) {
+      try {
+        var r = await fetch('https://api.dexscreener.com/latest/dex/search?q=' + encodeURIComponent(q));
+        var d = await r.json();
+        var pairs = (d && d.pairs) || [];
+        pairs = pairs.filter(function (p) {
+          return p && p.chainId === 'solana' && p.baseToken && p.baseToken.address
+              && p.baseToken.address !== SOL_MINT && p.baseToken.address !== USDC_MINT;
+        });
+        if (!pairs.length) return null;
+        pairs.sort(function (a, b) { return ((b.liquidity && b.liquidity.usd) || 0) - ((a.liquidity && a.liquidity.usd) || 0); });
+        var p = pairs[0];
+        return { address: p.baseToken.address, symbol: p.baseToken.symbol || '',
+                 name: p.baseToken.name || p.baseToken.symbol || '',
+                 logoURI: (p.info && p.info.imageUrl) || null };
+      } catch (e) { return null; }
+    }
+    async function bestSolanaPairGecko(q) {
+      try {
+        var r = await fetch(GT_API + '/search/pools?query=' + encodeURIComponent(q) + '&network=solana&page=1');
+        var d = await r.json();
+        var pools = (d && d.data) || [];
+        var best = null, bestLiq = -1;
+        for (var i = 0; i < pools.length; i++) {
+          var a = pools[i].attributes || {};
+          var rel = pools[i].relationships || {};
+          var bt = rel.base_token && rel.base_token.data && rel.base_token.data.id;
+          var liq = Number(a.reserve_in_usd || 0);
+          if (bt && liq > bestLiq) { bestLiq = liq; best = bt; }
+        }
+        if (!best) return null;
+        var mint = String(best).replace(/^solana_/, '');
+        if (!mint || mint === SOL_MINT || mint === USDC_MINT) return null;
+        return { address: mint, symbol: '', name: '', logoURI: null };
+      } catch (e) { return null; }
+    }
+    async function resolveTermToMint(term) {
+      if (!term) return null;
+      var hit = await bestSolanaPairDexscreener(term);
+      if (!hit) {
+        var parts = term.split(/\s+/);
+        if (parts.length > 1) hit = await bestSolanaPairDexscreener(parts[parts.length - 1]);
+      }
+      if (!hit) hit = await bestSolanaPairGecko(term);
+      if (!hit) return null;
+      var dec = await dexDecimalsFor(hit.address);
+      if (dec == null) return null;
+      if (!hit.symbol) {
+        var meta = await geckoTokenMeta(hit.address);
+        if (meta) { hit.symbol = meta.symbol || 'TOKEN'; hit.name = hit.name || meta.name || hit.symbol; hit.logoURI = hit.logoURI || meta.logoURI; }
+        else hit.symbol = 'TOKEN';
+      }
+      return { address: hit.address, symbol: hit.symbol, name: hit.name || hit.symbol, decimals: dec, logoURI: hit.logoURI || null };
+    }
+
+    async function resolveSubjectFromTokens() {
+      if (_hasExplicitOutput) return;
+      var raw = _subjectRaw;
+      if (!raw) { await useRandomChartToken(); return; }
+      if (MINT_RE.test(raw)) {
+        var dec0 = await dexDecimalsFor(raw);
+        if (dec0 != null) {
+          var ex = tokenBy(raw), m = ex || (await geckoTokenMeta(raw)) || {};
+          upsertToken({ address: raw, symbol: (ex && ex.symbol) || m.symbol || 'TOKEN',
+                        name: (ex && ex.name) || m.name || (ex && ex.symbol) || 'Token',
+                        decimals: dec0, logoURI: (ex && ex.logoURI) || m.logoURI || null });
+          applyOutputMint(raw); return;
+        }
+      }
+      var resolved = await resolveTermToMint(raw);
+      if (resolved) { upsertToken(resolved); applyOutputMint(resolved.address); return; }
+      await useRandomChartToken();
+    }
+
+    function applyOutputMint(mint) {
+      if (!mint || mint === S.outputMint) { renderAll(); scheduleQuote(); return; }
+      S.outputMint = mint;
+      S.quote = null;
+      S.quoteError = null;
+      renderAll();
+      scheduleQuote();
+      bootPriceCard();
+      if (S.publicKey) refreshBalances();
+    }
+
+    async function loadSolPrice() {
+      try {
+        var r = await fetch(ORIGIN + '/api/dex/sol-price');
+        if (!r.ok) return;
+        var d = await r.json();
+        if (d && d.price > 0) { S.solPrice = Number(d.price); renderRows(); }
+      } catch (e) {}
+    }
+
+    function mergeTokenAccounts(out, accs) {
+      if (!accs || !accs.value) return;
+      for (var i = 0; i < accs.value.length; i++) {
+        var acc = accs.value[i];
+        var info = acc.account && acc.account.data && acc.account.data.parsed && acc.account.data.parsed.info;
+        if (!info) continue;
+        var mint = info.mint;
+        var amt = info.tokenAmount && info.tokenAmount.amount;
+        var dec = info.tokenAmount && info.tokenAmount.decimals;
+        var uiAmt = info.tokenAmount && info.tokenAmount.uiAmount;
+        if (!mint || amt == null) continue;
+        out[mint] = { amount: Number(amt), decimals: dec, uiAmount: uiAmt };
+      }
+    }
+    async function refreshBalances() {
+      if (!S.publicKey) { S.balances = {}; S.balancesLoading = false; renderRows(); return; }
+      S.balancesLoading = true;
+      renderRows();
+      var owner = S.publicKey;
+      var out = {};
+      try {
+        var solBal = await connection.getBalance(owner, 'confirmed');
+        out[SOL_MINT] = { amount: solBal, decimals: 9, uiAmount: solBal / 1e9 };
+      } catch (e) { console.warn('[verixia] SOL balance failed:', e && e.message); }
+      try {
+        var tokAccs = await connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, 'confirmed');
+        mergeTokenAccounts(out, tokAccs);
+      } catch (e) { console.warn('[verixia] SPL accounts failed:', e && e.message); }
+      try {
+        var t22Accs = await connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, 'confirmed');
+        mergeTokenAccounts(out, t22Accs);
+      } catch (e) { console.warn('[verixia] Token-2022 accounts failed:', e && e.message); }
+      if (!out[SOL_MINT]) out[SOL_MINT] = { amount: 0, decimals: 9, uiAmount: 0 };
+      S.balances = out;
+      S.balancesLoading = false;
+      renderRows();
+    }
+
+    function rawAmount() {
+      var t = tokenBy(S.inputMint);
+      if (!S.amount || !t) return '';
+      var n = Number(S.amount);
+      if (!Number.isFinite(n) || n <= 0) return '';
+      return Math.floor(n * Math.pow(10, t.decimals)).toString();
+    }
+    var quoteAbort = null;
+    var quoteTimer = null;
+    function scheduleQuote() {
+      var raw = rawAmount();
+      if (!raw || S.inputMint === S.outputMint) {
+        S.quote = null; S.quoteError = null; S.quoting = false;
+        renderAll(); return;
+      }
+      if (quoteAbort) quoteAbort.abort();
+      if (quoteTimer) clearTimeout(quoteTimer);
+      var ac = new AbortController();
+      quoteAbort = ac;
+      S.quoting = true; S.quoteError = null;
+      renderButton(); renderRows();
+      quoteTimer = setTimeout(async function () {
+        try {
+          var net = (BigInt(raw) * BigInt(10000 - FEE_BPS)) / 10000n;
+          if (net <= 0n) { S.quote = null; S.quoting = false; renderAll(); return; }
+          var params = new URLSearchParams({
+            inputMint:  S.inputMint,
+            outputMint: S.outputMint,
+            amount:     net.toString(),
+            slippageBps: String(SLIPPAGE_BPS),
+            taker: S.publicKey ? S.publicKey.toBase58() : FEE_WALLET.toBase58(),
+            computeUnitPriceMicroLamports: String(PRIORITY_FEE_MICROLAMPORTS)
+          });
+          var r = await fetch(ORIGIN + '/api/seo/jupiter/build?' + params.toString(), { signal: ac.signal });
+          if (!r.ok) {
+            var body = await r.json().catch(function () { return {}; });
+            throw new Error(body.error || ('Quote failed (' + r.status + ')'));
+          }
+          var data = await r.json();
+          if (!ac.signal.aborted) { S.quote = data; S.quoteError = null; }
+        } catch (e) {
+          if (e && e.name === 'AbortError') return;
+          if (!ac.signal.aborted) { S.quote = null; S.quoteError = friendlyError(e); }
+        } finally {
+          if (!ac.signal.aborted) { S.quoting = false; renderAll(); }
+        }
+      }, 350);
+    }
+    function outAmountUi() {
+      var t = tokenBy(S.outputMint);
+      if (!S.quote || !t) return null;
+      return Number(S.quote.outAmount) / Math.pow(10, t.decimals);
+    }
+    function minReceived() {
+      var t = tokenBy(S.outputMint);
+      if (!S.quote || !t) return null;
+      return Number(S.quote.otherAmountThreshold) / Math.pow(10, t.decimals);
+    }
+    function priceImpact() {
+      if (!S.quote || S.quote.priceImpactPct == null) return null;
+      var n = Number(S.quote.priceImpactPct);
+      return Number.isFinite(n) ? n * (Math.abs(n) <= 1 ? 100 : 1) : null;
+    }
+    function feeUi() {
+      var t = tokenBy(S.inputMint);
+      if (!t) return null;
+      var n = Number(S.amount);
+      if (!Number.isFinite(n) || n <= 0) return null;
+      return n * (FEE_BPS / 10000);
+    }
+
+    async function handleSwap() {
+      var inputToken  = tokenBy(S.inputMint);
+      var outputToken = tokenBy(S.outputMint);
+      if (!S.publicKey || !S.provider || (!S.provider._supportsSignTx && !S.provider._supportsSignAndSend)) {
+        S.swapError = 'Please connect a wallet first.'; renderBanners(); return;
+      }
+      if (!S.quote || !outputToken || !inputToken) {
+        S.swapError = 'No quote available \u2014 try again.'; renderBanners(); return;
+      }
+      S.swapping = true; S.swapError = null; S.swapResult = null;
+      renderButton(); renderBanners();
+      try {
+        var raw = rawAmount();
+        var feeAmount = (BigInt(raw) * BigInt(FEE_BPS)) / 10000n;
+        if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero \u2014 amount too small.');
+
+        var feeIxs = [];
+        if (S.inputMint === SOL_MINT) {
+          feeIxs.push(SystemProgram.transfer({
+            fromPubkey: S.publicKey, toPubkey: FEE_WALLET, lamports: Number(feeAmount)
+          }));
+        } else {
+          var mintPk = new PublicKey(S.inputMint);
+          var mintInfo = await connection.getAccountInfo(mintPk);
+          if (!mintInfo) throw new Error('Input mint not found on-chain.');
+          var tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID) ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
+          var sourceAta = getAta(mintPk, S.publicKey, tokenProgram);
+          var destAta   = getAta(mintPk, FEE_WALLET,  tokenProgram);
+          feeIxs.push(ataIdempotentIx(S.publicKey, destAta, FEE_WALLET, mintPk, tokenProgram));
+          feeIxs.push(transferCheckedIx(sourceAta, mintPk, destAta, S.publicKey, feeAmount, inputToken.decimals, tokenProgram));
+        }
+
+        var build = S.quote;
+        var ixs = [];
+        if (Array.isArray(build.computeBudgetInstructions))
+          for (var ci = 0; ci < build.computeBudgetInstructions.length; ci++) ixs.push(deserJupIx(build.computeBudgetInstructions[ci]));
+        for (var fi = 0; fi < feeIxs.length; fi++) ixs.push(feeIxs[fi]);
+        if (Array.isArray(build.setupInstructions))
+          for (var si = 0; si < build.setupInstructions.length; si++) ixs.push(deserJupIx(build.setupInstructions[si]));
+        if (build.swapInstruction) ixs.push(deserJupIx(build.swapInstruction));
+        if (build.cleanupInstruction) ixs.push(deserJupIx(build.cleanupInstruction));
+        if (Array.isArray(build.otherInstructions))
+          for (var oi = 0; oi < build.otherInstructions.length; oi++) ixs.push(deserJupIx(build.otherInstructions[oi]));
+
+        var altKeys = Object.keys(build.addressesByLookupTableAddress || {});
+        var alts = [];
+        if (altKeys.length > 0) {
+          var infos = await connection.getMultipleAccountsInfo(altKeys.map(function (k) { return new PublicKey(k); }));
+          alts = altKeys.map(function (k, i) {
+            return infos[i] ? new AddressLookupTableAccount({
+              key: new PublicKey(k),
+              state: AddressLookupTableAccount.deserialize(infos[i].data)
+            }) : null;
+          }).filter(Boolean);
+        }
+        var latest = await connection.getLatestBlockhash('confirmed');
+        var message = new TransactionMessage({
+          payerKey: S.publicKey, recentBlockhash: latest.blockhash, instructions: ixs
+        }).compileToV0Message(alts);
+        var tx = new VersionedTransaction(message);
+
+        var mapSimErr = function (logs) {
+          var j = (logs || []).join('\n').toLowerCase();
+          if (j.indexOf('insufficient') >= 0 || j.indexOf('0x1') >= 0) return 'Insufficient balance for this swap.';
+          if (j.indexOf('slippage') >= 0 || j.indexOf('0x1771') >= 0) return 'Price moved \u2014 try a higher slippage or smaller amount.';
+          if (j.indexOf('account not') >= 0 || j.indexOf('uninitialized') >= 0) return 'Token account not ready. Try again in a moment.';
+          if (j.indexOf('blockhash') >= 0 || j.indexOf('expired') >= 0) return 'Quote expired. Please refresh and retry.';
+          return null;
+        };
+        try {
+          var sim = await connection.simulateTransaction(tx, { replaceRecentBlockhash: true, sigVerify: false });
+          if (sim.value.err) throw new Error(mapSimErr(sim.value.logs) || 'Swap simulation failed \u2014 the price may have moved.');
+        } catch (simErr) {
+          if (simErr && simErr.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) throw simErr;
+          console.warn('[verixia] sim non-fatal', simErr);
+        }
+
+        var sig = await signAndSend(tx, latest, connection);
+        var confirmed = await confirmSig(connection, sig, latest);
+
+        S.swapResult = { signature: sig, pending: !confirmed };
+        if (confirmed) {
+          S.amount = ''; S.quote = null;
+          if (els.amount) els.amount.value = '';
+          setTimeout(refreshBalances, 2000);
+        }
+      } catch (e) {
+        console.error('[verixia] swap', e);
+        S.swapError = friendlyError(e);
+      } finally {
+        S.swapping = false;
+        renderAll();
+      }
+    }
+
+    async function signAndSend(tx, latest, conn) {
+      var p = S.provider;
+      if (!p) throw new Error('No wallet connected.');
+      if (p._supportsSignTx) {
+        var signed = await p.signTransaction(tx);
+        return await conn.sendRawTransaction(signed.serialize(), { skipPreflight: false, maxRetries: 3 });
+      }
+      if (p._supportsSignAndSend) {
+        var res = await p.signAndSendTransaction(tx);
+        if (!res || typeof res !== 'string') throw new Error('Wallet did not return a transaction signature.');
+        return res;
+      }
+      throw new Error('Connected wallet exposes no signing method.');
+    }
+
+    async function confirmSig(conn, sig, latest) {
+      try {
+        var conf = await Promise.race([
+          conn.confirmTransaction({ signature: sig, blockhash: latest.blockhash, lastValidBlockHeight: latest.lastValidBlockHeight }, 'confirmed'),
+          new Promise(function (_, rej) { setTimeout(function () { rej(new Error('confirm-timeout')); }, 30000); })
+        ]);
+        if (conf && conf.value && conf.value.err) throw new Error('Swap tx failed on-chain.');
+        return true;
+      } catch (e) {
+        var deadline = Date.now() + 20000;
+        while (Date.now() < deadline) {
+          await new Promise(function (r) { setTimeout(r, 2000); });
+          try {
+            var st = await conn.getSignatureStatus(sig, { searchTransactionHistory: true });
+            var cs = st && st.value && st.value.confirmationStatus;
+            if (cs === 'confirmed' || cs === 'finalized') return true;
+            if (st && st.value && st.value.err) throw new Error('Swap tx failed on-chain.');
+          } catch (er) {
+            if (/failed on-chain/i.test(String(er.message))) throw er;
+          }
+        }
+        return false;
+      }
+    }
+
+    var CHEV  = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
+    var FLIP  = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4v16M7 4l-3 3M7 4l3 3M17 20V4M17 20l-3-3M17 20l3-3" transform="rotate(90 12 12)"/></svg>';
+    var CLOSE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+
+    function buildDom() {
+      root.innerHTML = '';
+      var wrap = document.createElement('div');
+      wrap.className = 'sw-root';
+      wrap.innerHTML =
+        '<div class="sw-container">' +
+          '<div class="sw-header">' +
+            '<h2 class="sw-title">Swap</h2>' +
+          '</div>' +
+          '<div class="sw-panel">' +
+            '<div class="sw-row" data-leg="input">' +
+              '<div class="sw-row-top">' +
+                '<span class="sw-row-label">You pay</span>' +
+                '<span class="sw-balance" data-bal="input"></span>' +
+              '</div>' +
+              '<div class="sw-row-mid">' +
+                '<button class="sw-token-btn" data-pick="input"><span data-tok="input"><span data-fallback="input" class="sw-token-fallback"></span></span><span data-sym="input">Select</span> ' + CHEV + '</button>' +
+                '<input class="sw-amount-input" data-amount inputmode="decimal" placeholder="0.00" />' +
+              '</div>' +
+              '<div class="sw-row-bot"><span class="sw-usd" data-usd="input"></span></div>' +
+            '</div>' +
+            '<div class="sw-flip-wrap"><button class="sw-flip-btn" data-flip aria-label="Flip tokens">' + FLIP + '</button></div>' +
+            '<div class="sw-row" data-leg="output">' +
+              '<div class="sw-row-top">' +
+                '<span class="sw-row-label">You receive</span>' +
+                '<span class="sw-balance" data-bal="output"></span>' +
+              '</div>' +
+              '<div class="sw-row-mid">' +
+                '<button class="sw-token-btn" data-pick="output"><span data-tok="output"><span data-fallback="output" class="sw-token-fallback"></span></span><span data-sym="output">Select</span> ' + CHEV + '</button>' +
+                '<input class="sw-amount-input" data-out readonly placeholder="0.00" />' +
+              '</div>' +
+              '<div class="sw-row-bot"><span class="sw-usd" data-usd="output"></span></div>' +
+            '</div>' +
+          '</div>' +
+          '<div class="sw-details" data-details style="display:none"></div>' +
+          '<div data-banners></div>' +
+          '<button class="sw-primary-btn" data-primary type="button">Connect Wallet</button>' +
+          '<p class="sw-footer" data-foot>Non-custodial \u00B7 Settles in seconds</p>' +
+        '</div>';
+      root.appendChild(wrap);
+      els.symInput   = wrap.querySelector('[data-sym="input"]');
+      els.symOutput  = wrap.querySelector('[data-sym="output"]');
+      els.tokInput   = wrap.querySelector('[data-tok="input"]');
+      els.tokOutput  = wrap.querySelector('[data-tok="output"]');
+      els.balInput   = wrap.querySelector('[data-bal="input"]');
+      els.balOutput  = wrap.querySelector('[data-bal="output"]');
+      els.amount     = wrap.querySelector('[data-amount]');
+      els.out        = wrap.querySelector('[data-out]');
+      els.usdInput   = wrap.querySelector('[data-usd="input"]');
+      els.usdOutput  = wrap.querySelector('[data-usd="output"]');
+      els.details    = wrap.querySelector('[data-details]');
+      els.banners    = wrap.querySelector('[data-banners]');
+      els.primary    = wrap.querySelector('[data-primary]');
+      els.foot       = wrap.querySelector('[data-foot]');
+
+      els.amount.addEventListener('input', function (e) {
+        var v = e.target.value.replace(/[^\d.]/g, '');
+        var parts = v.split('.'); if (parts.length > 2) v = parts[0] + '.' + parts.slice(1).join('');
+        e.target.value = v; S.amount = v; renderButton(); renderRows(); scheduleQuote();
+      });
+      wrap.querySelector('[data-flip]').addEventListener('click', function () {
+        var i = S.inputMint;
+        S.inputMint = S.outputMint; S.outputMint = i;
+        S.amount = ''; S.quote = null;
+        if (els.amount) els.amount.value = '';
+        renderAll(); scheduleQuote();
+      });
+      wrap.querySelector('[data-pick="input"]').addEventListener('click', function () { openPicker('input'); });
+      wrap.querySelector('[data-pick="output"]').addEventListener('click', function () { openPicker('output'); });
+      els.primary.addEventListener('click', function () {
+        if (!S.publicKey) openConnect();
+        else if (buttonState().enabled) handleSwap();
+      });
+
+      if (els.amount && S.amount) els.amount.value = S.amount;
+      renderAll();
+    }
+
+    function computeUsd(mint, uiAmt) {
+      if (!uiAmt || uiAmt <= 0) return 0;
+      if (mint === SOL_MINT && S.solPrice > 0) return uiAmt * S.solPrice;
+      if (mint === USDC_MINT) return uiAmt;
+      if (mint === 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB') return uiAmt;
+      return 0;
+    }
+
+    function setTokenVisual(containerEl, symEl, token) {
+      if (!containerEl || !symEl) return;
+      containerEl.innerHTML = '';
+      var fallback = document.createElement('span');
+      fallback.className = 'sw-token-fallback';
+      fallback.textContent = (token && token.symbol) ? token.symbol.charAt(0).toUpperCase() : '?';
+      containerEl.appendChild(fallback);
+      if (token && token.logoURI) {
+        var img = document.createElement('img');
+        img.className = 'sw-token-logo';
+        img.src = token.logoURI;
+        img.alt = '';
+        img.loading = 'eager';
+        img.decoding = 'async';
+        img.onerror = function () { img.style.display = 'none'; };
+        containerEl.appendChild(img);
+      }
+      symEl.textContent = (token && token.symbol) || 'Select';
+    }
+
+    function renderRows() {
+      var inputToken  = tokenBy(S.inputMint);
+      var outputToken = tokenBy(S.outputMint);
+      setTokenVisual(els.tokInput, els.symInput, inputToken);
+      setTokenVisual(els.tokOutput, els.symOutput, outputToken);
+
+      var renderBal = function (el, mint, editable) {
+        if (!el) return;
+        el.classList.remove('sw-bal-loading');
+        if (!S.publicKey) { el.innerHTML = ''; return; }
+        if (S.balancesLoading && !S.balances[mint]) {
+          el.classList.add('sw-bal-loading');
+          el.textContent = 'Loading\u2026';
+          return;
+        }
+        var bal = S.balances[mint];
+        var tok = tokenBy(mint);
+        if (!bal) {
+          el.textContent = 'Balance: 0 ' + (tok ? tok.symbol : '');
+          return;
+        }
+        el.innerHTML = 'Balance: ' + fmtAmount(bal.uiAmount, bal.decimals) + ' ' + (tok ? tok.symbol : '');
+        if (editable && bal.uiAmount > 0) {
+          var b = document.createElement('button');
+          b.className = 'sw-max-btn'; b.textContent = 'MAX';
+          b.addEventListener('click', function () {
+            var maxAmt = bal.uiAmount;
+            if (S.inputMint === SOL_MINT) maxAmt = Math.max(0, maxAmt - SOL_RESERVE);
+            S.amount = String(maxAmt);
+            if (els.amount) els.amount.value = S.amount;
+            renderRows(); scheduleQuote();
+          });
+          el.appendChild(b);
+        }
+      };
+      renderBal(els.balInput, S.inputMint, true);
+      renderBal(els.balOutput, S.outputMint, false);
+
+      var oa = outAmountUi();
+      if (els.out) els.out.value = oa != null ? fmtAmount(oa, outputToken && outputToken.decimals) : (S.quoting ? '\u2026' : '');
+
+      if (els.usdInput) {
+        var inUi = Number(S.amount) || 0;
+        var inUsd = computeUsd(S.inputMint, inUi);
+        els.usdInput.textContent = inUsd > 0 ? '\u2248 ' + fmtUsd(inUsd) : '';
+      }
+      if (els.usdOutput) {
+        var outUsd = oa != null ? computeUsd(S.outputMint, oa) : 0;
+        els.usdOutput.textContent = outUsd > 0 ? '\u2248 ' + fmtUsd(outUsd) : '';
+      }
+    }
+
+    function renderDetails() {
+      var inputToken = tokenBy(S.inputMint), outputToken = tokenBy(S.outputMint);
+      var oa = outAmountUi();
+      if (!els.details) return;
+      if (!(S.quote && outputToken && inputToken && Number(S.amount) > 0)) {
+        els.details.style.display = 'none'; els.details.innerHTML = ''; return;
+      }
+      var pi = priceImpact();
+      var piClass = pi == null ? 'sw-impact-neutral' : pi > 5 ? 'sw-impact-bad' : pi > 1 ? 'sw-impact-warn' : 'sw-impact-good';
+      var rate = (oa / Number(S.amount)) || 0;
+      var mr = minReceived();
+      var fee = feeUi();
+      var feeUsd = fee != null ? computeUsd(S.inputMint, fee) : 0;
+      var feeStr = fee != null ? (fmtAmount(fee, inputToken.decimals) + ' ' + esc(inputToken.symbol) + (feeUsd > 0 ? ' \u2248 ' + fmtUsd(feeUsd) : '')) : '\u2014';
+      els.details.style.display = '';
+      els.details.innerHTML =
+        '<div class="sw-detail-row"><span>Rate</span><span class="sw-detail-val">1 ' + esc(inputToken.symbol) + ' \u2248 ' + esc(fmtAmount(rate, outputToken.decimals)) + ' ' + esc(outputToken.symbol) + '</span></div>' +
+        '<div class="sw-detail-row"><span>Fee (3%)</span><span class="sw-detail-val">' + feeStr + '</span></div>' +
+        '<div class="sw-detail-row"><span>Minimum received</span><span class="sw-detail-val">' + esc(fmtAmount(mr, outputToken.decimals)) + ' ' + esc(outputToken.symbol) + '</span></div>' +
+        '<div class="sw-detail-row"><span>Price impact</span><span class="sw-detail-val ' + piClass + '">' + (pi != null ? pi.toFixed(2) + '%' : '\u2014') + '</span></div>';
+    }
+
+    function renderBanners() {
+      if (!els.banners) return;
+      var html = '';
+      if (S.quoteError && !S.swapping && !S.swapResult) html += '<div class="sw-banner sw-banner-error">' + esc(S.quoteError) + '</div>';
+      if (S.swapError) html += '<div class="sw-banner sw-banner-error">' + esc(S.swapError) + '</div>';
+      if (S.swapResult) {
+        var kind = S.swapResult.pending ? 'pending' : 'success';
+        var msg  = S.swapResult.pending ? 'Submitted but still confirming. ' : 'Swap confirmed. ';
+        html += '<div class="sw-banner sw-banner-' + kind + '">' + msg + '<a class="sw-banner-link" href="https://solscan.io/tx/' + esc(S.swapResult.signature) + '" target="_blank" rel="noreferrer">View on Solscan</a></div>';
+      }
+      els.banners.innerHTML = html;
+    }
+
+    function buttonState() {
+      var inputToken = tokenBy(S.inputMint);
+      var bal = S.balances[S.inputMint];
+      var hasFunds = bal && Number(S.amount) > 0 && bal.uiAmount >= Number(S.amount);
+      var canSwap = !!S.publicKey && !!S.quote && !S.quoting && !S.swapping &&
+                    Number(S.amount) > 0 && S.inputMint !== S.outputMint && hasFunds;
+      var label;
+      if (S.swapping) label = 'Swapping\u2026';
+      else if (!S.publicKey) label = 'Connect Wallet';
+      else if (S.inputMint === S.outputMint) label = 'Select different tokens';
+      else if (!S.amount || Number(S.amount) <= 0) label = 'Enter amount';
+      else if (!S.quote && S.quoting) label = 'Getting quote\u2026';
+      else if (!S.quote) label = 'No route available';
+      else if (!hasFunds) label = 'Insufficient ' + (inputToken && inputToken.symbol || '');
+      else label = '\uD83D\uDE80 Swap';
+      return { label: label, enabled: !S.publicKey ? true : canSwap };
+    }
+    function renderButton() {
+      if (!els.primary) return;
+      var st = buttonState();
+      els.primary.textContent = st.label;
+      els.primary.classList.toggle('sw-disabled', !st.enabled);
+    }
+    function renderAll() { renderRows(); renderDetails(); renderBanners(); renderButton(); updateHeader(); }
+
+    var CANONICAL_ORDER = [
+      'So11111111111111111111111111111111111111112',
+      'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
+      'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN',
+      'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263'
+    ];
+    function isLikelySpam(t) {
+      var s = String(t.symbol || '');
+      if (s.length > 12) return true;
+      if (/\d/.test(s) && s.length >= 5) return true;
+      if (s.toLowerCase() === 'solana' && t.address !== CANONICAL_ORDER[0]) return true;
+      return false;
+    }
+    var pickerEl = null;
+    function openPicker(side) {
+      closePicker();
+      var exclude = side === 'input' ? S.outputMint : S.inputMint;
+      var pickerSide = side;
+      var q = '', qLower = '', qUpper = '';
+      var searchTimer = null;
+      var searchAbort = null;
+      var overlay = document.createElement('div');
+      overlay.className = 'sw-modal-overlay';
+      overlay.innerHTML =
+        '<div class="sw-modal-card">' +
+          '<div class="sw-modal-head">' +
+            '<div class="sw-modal-head-row">' +
+              '<h3 class="sw-modal-title">Select <em>token</em></h3>' +
+              '<button class="sw-icon-btn" data-close>' + CLOSE + '</button>' +
+            '</div>' +
+            '<input class="sw-modal-search" data-search placeholder="Search name, symbol, or paste address" />' +
+          '</div>' +
+          '<div class="sw-modal-list" data-list></div>' +
+        '</div>';
+      overlay.addEventListener('click', function (e) { if (e.target === overlay) closePicker(); });
+      overlay.querySelector('[data-close]').addEventListener('click', closePicker);
+      var listEl = overlay.querySelector('[data-list]');
+      var searchEl = overlay.querySelector('[data-search]');
+
+      function drawList() {
+        var pool = S.tokens.filter(function (t) {
+          if (t.address === exclude) return false;
+          if (!q) return true;
+          if (t.symbol && t.symbol.toLowerCase().indexOf(qLower) >= 0) return true;
+          if (t.name && t.name.toLowerCase().indexOf(qLower) >= 0) return true;
+          if (t.address && t.address.toLowerCase().indexOf(qLower) === 0) return true;
+          return false;
+        });
+        var canonicalPinned = [];
+        var seen = {};
+        for (var ci = 0; ci < CANONICAL_ORDER.length; ci++) {
+          var cm = CANONICAL_ORDER[ci];
+          if (cm === exclude) continue;
+          var tok = tokenBy(cm);
+          if (!tok) continue;
+          if (q) {
+            var matches = (tok.symbol && tok.symbol.toLowerCase().indexOf(qLower) >= 0) ||
+                          (tok.name   && tok.name.toLowerCase().indexOf(qLower) >= 0)   ||
+                          (tok.address && tok.address.toLowerCase().indexOf(qLower) === 0);
+            if (!matches) continue;
+          }
+          canonicalPinned.push(tok);
+          seen[cm] = true;
+        }
+        var rest = pool.filter(function (t) { return !seen[t.address]; });
+        rest.sort(function (a, b) {
+          var ab = (S.balances[a.address] && S.balances[a.address].uiAmount) || 0;
+          var bb = (S.balances[b.address] && S.balances[b.address].uiAmount) || 0;
+          if (ab > 0 && bb === 0) return -1;
+          if (bb > 0 && ab === 0) return 1;
+          if (ab !== bb) return bb - ab;
+          var aSpam = isLikelySpam(a) ? 1 : 0;
+          var bSpam = isLikelySpam(b) ? 1 : 0;
+          if (aSpam !== bSpam) return aSpam - bSpam;
+          var aExact = a.symbol && a.symbol.toUpperCase() === qUpper ? 0 : 1;
+          var bExact = b.symbol && b.symbol.toUpperCase() === qUpper ? 0 : 1;
+          if (aExact !== bExact) return aExact - bExact;
+          return (a.symbol || '').localeCompare(b.symbol || '');
+        });
+        pool = canonicalPinned.concat(rest).slice(0, 200);
+
+        if (S.tokensLoading && pool.length === 0) {
+          listEl.innerHTML = '<div class="sw-modal-msg">Loading tokens\u2026</div>';
+          return;
+        }
+        if (pool.length === 0) {
+          listEl.innerHTML = '<div class="sw-modal-msg">No tokens found.</div>';
+          return;
+        }
+        var html = '';
+        for (var i = 0; i < pool.length; i++) {
+          var t = pool[i];
+          var bal = S.balances[t.address];
+          var balCell = bal && bal.uiAmount > 0 ? '<div class="sw-token-row-bal">' + esc(fmtAmount(bal.uiAmount, bal.decimals)) + '</div>' : '';
+          var loadingAttr = i < 8 ? 'eager' : 'lazy';
+          var letter = (t.symbol || '?').charAt(0).toUpperCase();
+          var logo =
+            '<div class="sw-token-row-logo-wrap"><div class="sw-token-row-placeholder">' + esc(letter) + '</div>' +
+            (t.logoURI
+              ? '<img class="sw-token-row-logo" src="' + esc(t.logoURI) + '" alt="" width="34" height="34" loading="' + loadingAttr + '" decoding="async" onerror="this.style.display=\'none\'"/>'
+              : '') +
+            '</div>';
+          html +=
+            '<button class="sw-token-row" data-mint="' + esc(t.address) + '" type="button">' + logo +
+              '<div class="sw-token-row-info">' +
+                '<div class="sw-token-row-sym">' + esc(t.symbol || '') + '</div>' +
+                '<div class="sw-token-row-name">' + esc(t.name || '') + '</div>' +
+              '</div>' + balCell + '</button>';
+        }
+        listEl.innerHTML = html;
+        var rows = listEl.querySelectorAll('[data-mint]');
+        for (var j = 0; j < rows.length; j++) {
+          (function (row) {
+            row.addEventListener('click', function () {
+              var mint = row.getAttribute('data-mint');
+              var changedOutput = (pickerSide !== 'input' && mint !== S.outputMint);
+              if (pickerSide === 'input') S.inputMint = mint;
+              else                         S.outputMint = mint;
+              closePicker();
+              S.quote = null;
+              renderAll();
+              scheduleQuote();
+              if (changedOutput) bootPriceCard();
+              if (S.publicKey) refreshBalances();
+            });
+          })(rows[j]);
+        }
+      }
+
+      searchEl.addEventListener('input', function (e) {
+        q = String(e.target.value || '').trim();
+        qLower = q.toLowerCase(); qUpper = q.toUpperCase();
+        if (searchTimer) clearTimeout(searchTimer);
+        drawList();
+        if (!q) return;
+        searchTimer = setTimeout(async function () {
+          if (searchAbort) searchAbort.abort();
+          var ac = new AbortController(); searchAbort = ac;
+          try {
+            var r = await fetch(ORIGIN + '/api/jupiter/tokens/search?query=' + encodeURIComponent(q), { signal: ac.signal });
+            if (!r.ok) return;
+            var data = await r.json();
+            var list = Array.isArray(data) ? data : (data && data.tokens || []);
+            for (var i = 0; i < list.length; i++) {
+              var t = list[i];
+              if (!t) continue;
+              upsertToken({
+                address:  t.id || t.address || t.mint,
+                symbol:   t.symbol,
+                name:     t.name,
+                decimals: t.decimals,
+                logoURI:  t.icon || t.logoURI || null
+              });
+            }
+            if (!ac.signal.aborted) drawList();
+          } catch (e) {}
+        }, 240);
+      });
+
+      document.body.appendChild(overlay);
+      pickerEl = overlay;
+      drawList();
+      setTimeout(function () { searchEl.focus(); }, 50);
+    }
+    function closePicker() { if (pickerEl) { pickerEl.remove(); pickerEl = null; } }
+
+    function doOpenWallet() {
+      try { sessionStorage.removeItem(DISCONNECT_FLAG); } catch (e) {}
+      try { window.VerixiaWallet.open(); }
+      catch (e) {
+        console.error('[appkit] open failed', e);
+        S.swapError = 'Could not open wallet picker: ' + (e && e.message || 'unknown');
+        renderBanners();
+      }
+    }
+    async function openConnect() {
+      if (appKitReady()) { doOpenWallet(); return; }
+      var ready = await waitForAppKit();
+      if (!ready) {
+        S.swapError = 'Wallet bundle not loaded. Refresh the page or check that /nexus-dex/verixia-wc.js is deployed.';
+        renderBanners();
+        return;
+      }
+      doOpenWallet();
+    }
+
+    async function onWalletStateChange(state) {
+      if (state && state.isConnected && state.address) {
+        try {
+          S.publicKey = new PublicKey(state.address);
+          S.walletName = state.walletName || state.providerType || 'Wallet';
+          var raw = window.VerixiaWallet.getProvider && window.VerixiaWallet.getProvider();
+          var tries = 0;
+          while (!raw && tries < 20) {
+            await new Promise(function (r) { setTimeout(r, 100); });
+            raw = window.VerixiaWallet.getProvider && window.VerixiaWallet.getProvider();
+            tries++;
+          }
+          S.provider = wrapAppKitProvider(raw, S.publicKey);
+          if (!S.provider) console.warn('[verixia] connected but provider unavailable');
+          try { sessionStorage.removeItem(DISCONNECT_FLAG); } catch (e) {}
+          renderAll();
+          refreshBalances();
+          scheduleQuote();
+        } catch (e) {
+          console.error('[verixia] address parse failed', e);
+        }
+      } else {
+        S.publicKey = null;
+        S.provider = null;
+        S.walletName = null;
+        S.balances = {};
+        S.quote = null;
+        renderAll();
+      }
+    }
+
+    function wrapAppKitProvider(raw, pubkey) {
+      if (!raw) return null;
+      var hasSignTx      = typeof raw.signTransaction === 'function';
+      var hasSignAndSend = typeof raw.signAndSendTransaction === 'function';
+      var normalizeSigned = function (result, originalTx) {
+        if (result && typeof result.serialize === 'function') return result;
+        if (result instanceof Uint8Array) return VersionedTransaction.deserialize(result);
+        if (result && typeof result.signature === 'string') {
+          try {
+            var bytes = b64ToBytes(result.signature);
+            originalTx.addSignature(pubkey, bytes);
+            return originalTx;
+          } catch (e) {
+            throw new Error('Wallet returned an unrecognized signature format.');
+          }
+        }
+        if (result && typeof result.transaction === 'string') {
+          return VersionedTransaction.deserialize(b64ToBytes(result.transaction));
+        }
+        throw new Error('Wallet did not return a signed transaction.');
+      };
+      return {
+        publicKey: pubkey,
+        _raw: raw,
+        _supportsSignTx: hasSignTx,
+        _supportsSignAndSend: hasSignAndSend,
+        signTransaction: hasSignTx ? async function (tx) {
+          var res = await raw.signTransaction(tx);
+          return normalizeSigned(res, tx);
+        } : null,
+        signAndSendTransaction: hasSignAndSend ? async function (tx) {
+          var res = await raw.signAndSendTransaction(tx);
+          if (typeof res === 'string') return res;
+          return res && (res.signature || res.txid || null);
+        } : null
+      };
+    }
+
+    async function disconnect() {
+      try {
+        if (window.VerixiaWallet && typeof window.VerixiaWallet.disconnect === 'function') {
+          await window.VerixiaWallet.disconnect();
+        }
+      } catch (e) { console.warn('[verixia] disconnect', e && e.message); }
+      try { sessionStorage.setItem(DISCONNECT_FLAG, '1'); } catch (e) {}
+      S.provider = null;
+      S.publicKey = null;
+      S.walletName = null;
+      S.balances = {};
+      S.quote = null;
+      closeAccountMenu();
+      renderAll();
+    }
+
+    var accountMenuEl = null;
+    function openAccountMenu() {
+      closeAccountMenu();
+      if (!S.publicKey) return;
+      var addr = S.publicKey.toBase58();
+      var short = addr.slice(0, 4) + '\u2026' + addr.slice(-4);
+      var overlay = document.createElement('div');
+      overlay.className = 'sw-modal-overlay';
+      overlay.innerHTML =
+        '<div class="sw-modal-card" style="max-width:380px;border-radius:20px;padding:0;">' +
+          '<div style="padding:20px;text-align:center;">' +
+            '<div style="width:36px;height:4px;background:rgba(26,27,78,.18);border-radius:2px;margin:0 auto 16px;"></div>' +
+            '<div style="font-family:\'JetBrains Mono\',monospace;font-size:10px;color:rgba(26,27,78,.45);letter-spacing:.14em;text-transform:uppercase;margin-bottom:8px;">' + esc(S.walletName || 'Connected') + '</div>' +
+            '<div style="font-family:\'Space Grotesk\',sans-serif;font-size:22px;font-weight:800;color:#1A1B4E;margin-bottom:4px;">' + short + '</div>' +
+            '<div style="font-family:\'JetBrains Mono\',monospace;font-size:10px;color:rgba(26,27,78,.45);word-break:break-all;margin-bottom:18px;">' + esc(addr) + '</div>' +
+            '<div style="display:flex;flex-direction:column;gap:8px;">' +
+              '<button data-copy style="padding:12px;background:rgba(255,255,255,.6);border:1px solid rgba(26,27,78,.08);border-radius:12px;color:#1A1B4E;font-family:\'Space Grotesk\',sans-serif;font-weight:700;font-size:13px;cursor:pointer;">Copy address</button>' +
+              '<button data-disconnect style="padding:12px;background:rgba(209,75,106,.1);border:1px solid rgba(209,75,106,.35);border-radius:12px;color:#D14B6A;font-family:\'Space Grotesk\',sans-serif;font-weight:700;font-size:13px;cursor:pointer;">Disconnect</button>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+      overlay.addEventListener('click', function (e) { if (e.target === overlay) closeAccountMenu(); });
+      overlay.querySelector('[data-copy]').addEventListener('click', function () {
+        try { navigator.clipboard.writeText(addr); } catch (e) {}
+        var btn = overlay.querySelector('[data-copy]');
+        btn.textContent = 'Copied!';
+        setTimeout(function () { btn.textContent = 'Copy address'; }, 1500);
+      });
+      overlay.querySelector('[data-disconnect]').addEventListener('click', disconnect);
+      document.body.appendChild(overlay);
+      accountMenuEl = overlay;
+    }
+    function closeAccountMenu() { if (accountMenuEl) { accountMenuEl.remove(); accountMenuEl = null; } }
+
+    function updateHeader() {
+      var btn = document.getElementById('verixia-header-connect');
+      if (!btn) return;
+      if (S.publicKey) {
+        var s = S.publicKey.toBase58();
+        btn.textContent = s.slice(0, 4) + '\u2026' + s.slice(-4);
+      } else {
+        btn.textContent = 'Connect';
+      }
+    }
+
+    // ========================================================================
+    // Live price card + SMOOTH bezier sparkline — GeckoTerminal (CG) only.
+    // No DexScreener for chart data, and NEVER a synthesized/fake chart: if the
+    // subject token has no real OHLCV, fall back to a random liquid Solana token.
+    // ========================================================================
+    async function fetchChartPoints(pool) {
+      if (!pool) return null;
+      try {
+        var r = await fetch(GT_API + '/networks/solana/pools/' + encodeURIComponent(pool) + '/ohlcv/hour?aggregate=4&limit=42&currency=usd', { headers: { Accept: 'application/json' } });
+        if (!r.ok) return null;
+        var data = await r.json();
+        var list = data && data.data && data.data.attributes && data.data.attributes.ohlcv_list;
+        if (!Array.isArray(list) || list.length < 4) return null;
+        var pts = list.map(function (x) { return { ts: Number(x[0]), price: Number(x[4]) }; })
+                      .filter(function (p) { return Number.isFinite(p.ts) && Number.isFinite(p.price) && p.price > 0; })
+                      .sort(function (a, b) { return a.ts - b.ts; });
+        return pts.length >= 4 ? pts : null;
+      } catch (e) { return null; }
+    }
+
+    function buildSmoothPath(points, w, h, padX, padY) {
+      if (!points || points.length < 2) return '';
+      var n = points.length;
+      var min = Infinity, max = -Infinity;
+      for (var i = 0; i < n; i++) {
+        if (points[i].price < min) min = points[i].price;
+        if (points[i].price > max) max = points[i].price;
+      }
+      var range = max - min || 1;
+      var dx = (w - padX * 2) / (n - 1);
+      var pts = points.map(function (p, i) {
+        return {
+          x: padX + i * dx,
+          y: padY + (h - padY * 2) * (1 - (p.price - min) / range)
+        };
+      });
+      var d = 'M ' + pts[0].x.toFixed(2) + ' ' + pts[0].y.toFixed(2);
+      for (var k = 0; k < n - 1; k++) {
+        var p0 = pts[k - 1] || pts[k];
+        var p1 = pts[k];
+        var p2 = pts[k + 1];
+        var p3 = pts[k + 2] || pts[k + 1];
+        var t = 0.5;
+        var cp1x = p1.x + (p2.x - p0.x) / 6 * t * 2;
+        var cp1y = p1.y + (p2.y - p0.y) / 6 * t * 2;
+        var cp2x = p2.x - (p3.x - p1.x) / 6 * t * 2;
+        var cp2y = p2.y - (p3.y - p1.y) / 6 * t * 2;
+        d += ' C ' + cp1x.toFixed(2) + ' ' + cp1y.toFixed(2) +
+             ', ' + cp2x.toFixed(2) + ' ' + cp2y.toFixed(2) +
+             ', ' + p2.x.toFixed(2)  + ' ' + p2.y.toFixed(2);
+      }
+      return { d: d, pts: pts };
+    }
+
+    async function bootPriceCard() {
+      var card = document.getElementById('nx-px-card');
+      if (!card) return;
+      var mint = null;
+      if (S.outputMint && S.outputMint !== SOL_MINT && S.outputMint !== USDC_MINT) mint = S.outputMint;
+      else if (S.inputMint && S.inputMint !== SOL_MINT && S.inputMint !== USDC_MINT) mint = S.inputMint;
+      if (!mint) { card.classList.remove('is-live'); var stats = document.getElementById('nx-px-stats'); if (stats) stats.classList.remove('is-live'); return; }
+      card.classList.add('is-live');
+      var statsEl = document.getElementById('nx-px-stats'); if (statsEl) statsEl.classList.add('is-live');
+
+      var icoEl    = document.getElementById('nx-px-ico');
+      var symEl    = document.getElementById('nx-px-sym');
+      var nameEl   = document.getElementById('nx-px-name');
+      var priceEl  = document.getElementById('nx-px-now');
+      var chgEl    = document.getElementById('nx-px-chg');
+      var sparkEl  = document.getElementById('nx-spark');
+      var rangeEl  = document.getElementById('nx-spark-range');
+      var mcapEl   = document.getElementById('nx-stat-mcap');
+      var liqEl    = document.getElementById('nx-stat-liq');
+      var volEl    = document.getElementById('nx-stat-vol');
+      var txEl     = document.getElementById('nx-stat-tx');
+
+      // ---- All market data from GeckoTerminal (CoinGecko on-chain) ----
+      var price = null, change24 = null, fdv = null, liq = null, vol24 = null, txns24 = null;
+      var symbol = null, name = null, icon = null;
+      _chartPool = null;
+      try {
+        var rt = await fetch(GT_API + '/networks/solana/tokens/' + encodeURIComponent(mint) + '?include=top_pools', { headers: { Accept: 'application/json' } });
+        var dt = await rt.json();
+        var at = (dt && dt.data && dt.data.attributes) || {};
+        if (at.price_usd != null)            price  = Number(at.price_usd);
+        if (at.fdv_usd != null)              fdv    = Number(at.fdv_usd);
+        if (at.market_cap_usd != null)       fdv    = Number(at.market_cap_usd) || fdv;
+        if (at.total_reserve_in_usd != null) liq    = Number(at.total_reserve_in_usd);
+        if (at.volume_usd && at.volume_usd.h24 != null) vol24 = Number(at.volume_usd.h24);
+        symbol = at.symbol || null; name = at.name || null; icon = at.image_url || null;
+        var inc = (dt && dt.included) || [];
+        if (Array.isArray(inc) && inc.length) {
+          var bestPool = null, bestLiq = -1;
+          for (var pi = 0; pi < inc.length; pi++) {
+            var pa0 = inc[pi].attributes || {};
+            var rl = Number(pa0.reserve_in_usd || 0);
+            if (rl > bestLiq) { bestLiq = rl; bestPool = inc[pi]; }
+          }
+          if (bestPool) {
+            var pa = bestPool.attributes || {};
+            _chartPool = pa.address || (bestPool.id ? String(bestPool.id).replace(/^solana_/, '') : null);
+            if (pa.price_change_percentage && pa.price_change_percentage.h24 != null) change24 = Number(pa.price_change_percentage.h24);
+            if (pa.transactions && pa.transactions.h24) txns24 = Number(pa.transactions.h24.buys || 0) + Number(pa.transactions.h24.sells || 0);
+            if (liq == null && pa.reserve_in_usd != null) liq = Number(pa.reserve_in_usd);
+            if (vol24 == null && pa.volume_usd && pa.volume_usd.h24 != null) vol24 = Number(pa.volume_usd.h24);
+            if (price == null && pa.base_token_price_usd != null) price = Number(pa.base_token_price_usd);
+          }
+        }
+      } catch (e) {}
+
+      var tok = tokenBy(mint);
+      if (!symbol && tok) symbol = tok.symbol;
+      if (!name && tok) name = tok.name;
+      if (!icon && tok) icon = tok.logoURI;
+
+      // No GeckoTerminal market data (dead/non-Solana subject)? Fall back to a
+      // random good Solana token so a real chart ALWAYS renders. Capped so it
+      // can never loop.
+      if (price == null && _chartTries < 2) {
+        _chartTries++;
+        try {
+          var altMint = await pickRandomSolanaToken(mint);
+          if (altMint && altMint !== mint && altMint !== SOL_MINT && altMint !== USDC_MINT) {
+            _chartIsRandom = true;
+            applyOutputMint(altMint);
+            return;
+          }
+        } catch (e) {}
+      }
+
+      if (symEl)   symEl.textContent = symbol || '\u2014';
+      if (nameEl)  nameEl.textContent = name || '';
+      if (priceEl) priceEl.textContent = price != null ? fmtUsd(price) : '\u2014';
+      if (chgEl) {
+        if (change24 == null) {
+          chgEl.textContent = '\u2014 \u00B7 24H';
+          chgEl.className = 'px-chg muted';
+        } else {
+          var sign = change24 >= 0 ? '+' : '';
+          chgEl.textContent = sign + change24.toFixed(2) + '% \u00B7 24H';
+          chgEl.className = 'px-chg ' + (change24 >= 0 ? 'up' : 'dn');
+        }
+      }
+      if (mcapEl) mcapEl.textContent = fdv  != null ? fmtUsd(fdv)  : '\u2014';
+      if (liqEl)  liqEl.textContent  = liq  != null ? fmtUsd(liq)  : '\u2014';
+      if (volEl)  volEl.textContent  = vol24 != null ? fmtUsd(vol24) : '\u2014';
+      if (txEl)   txEl.textContent   = txns24 != null ? Number(txns24).toLocaleString('en-US') : '\u2014';
+
+      if (icoEl) {
+        var letter = (symbol || '?').charAt(0).toUpperCase();
+        if (icon) {
+          icoEl.innerHTML = '<img src="' + esc(icon) + '" alt="" style="width:100%;height:100%;border-radius:inherit;object-fit:cover" onerror="this.parentNode.textContent=' + JSON.stringify(letter) + '">';
+        } else {
+          icoEl.textContent = letter;
+        }
+      }
+
+      // Sparkline from the GeckoTerminal pool OHLCV. No real data -> never
+      // synthesize: pull a random liquid token instead, else hide the chart.
+      if (!sparkEl) return;
+      var points = await fetchChartPoints(_chartPool);
+      if (!points || points.length < 4) {
+        if (_chartTries < 2) {
+          _chartTries++;
+          try {
+            var altMint2 = await pickRandomSolanaToken(mint);
+            if (altMint2 && altMint2 !== mint && altMint2 !== SOL_MINT && altMint2 !== USDC_MINT) {
+              _chartIsRandom = true;
+              applyOutputMint(altMint2);
+              return;
+            }
+          } catch (e) {}
+        }
+        sparkEl.innerHTML = '';
+        if (rangeEl) rangeEl.textContent = '\u2014';
+        return;
+      }
+      var w = 320, h = 60, padX = 4, padY = 4;
+      var path = buildSmoothPath(points, w, h, padX, padY);
+      if (!path || !path.d) { sparkEl.innerHTML = ''; return; }
+      var wChg = ((points[points.length - 1].price - points[0].price) / points[0].price) * 100;
+      var isUp = Number.isFinite(wChg) ? wChg >= 0 : true;
+      var stroke = isUp ? '#0a7a4c' : '#9d8cff';
+      var fill   = isUp ? 'rgba(10,122,76,0.10)' : 'rgba(157,140,255,0.12)';
+      var lastPt = path.pts[path.pts.length - 1];
+      var areaD = path.d + ' L ' + lastPt.x.toFixed(2) + ' ' + (h - padY).toFixed(2) +
+                  ' L ' + path.pts[0].x.toFixed(2) + ' ' + (h - padY).toFixed(2) + ' Z';
+      sparkEl.innerHTML =
+        '<path d="' + areaD + '" fill="' + fill + '" stroke="none"/>' +
+        '<path d="' + path.d + '" fill="none" stroke="' + stroke + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
+      if (rangeEl) {
+        rangeEl.textContent = Number.isFinite(wChg)
+          ? (isUp ? '+' : '') + wChg.toFixed(2) + '%'
+          : '\u2014';
+        rangeEl.style.color = isUp ? '#0a7a4c' : '#9d8cff';
+      }
+    }
+
+    function bootPresets() {
+      var presetEl = document.getElementById('nx-presets');
+      if (!presetEl) return;
+      var btns = presetEl.querySelectorAll('[data-usd]');
+      for (var i = 0; i < btns.length; i++) {
+        (function (btn) {
+          btn.addEventListener('click', function () {
+            var usd = Number(btn.getAttribute('data-usd'));
+            if (!usd) return;
+            var inputT = tokenBy(S.inputMint);
+            if (!inputT) return;
+            if (S.inputMint === SOL_MINT) {
+              if (!S.solPrice || S.solPrice <= 0) return;
+              S.amount = (usd / S.solPrice).toFixed(4);
+            } else if (S.inputMint === USDC_MINT || S.inputMint === 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB') {
+              S.amount = usd.toFixed(2);
+            } else {
+              return;
+            }
+            if (els.amount) els.amount.value = S.amount;
+            for (var j = 0; j < btns.length; j++) btns[j].classList.remove('is-active');
+            btn.classList.add('is-active');
+            renderRows(); scheduleQuote();
+          });
+        })(btns[i]);
+      }
+    }
+
+    function init() {
+      root = document.getElementById('verixia-swap-root');
+      if (!root) return;
+
+      _subjectRaw = detectSubjectRaw();
+      var di  = root.getAttribute('data-input-mint');
+      var dom = root.getAttribute('data-output-mint');
+      if (di)  S.inputMint  = di;
+      if (dom) S.outputMint = dom;
+      _hasExplicitOutput = !!dom;
+
+      buildDom();
+      loadTokens();
+      loadSolPrice();
+      bootPriceCard();
+      bootPresets();
+
+      var headerBtn = document.getElementById('verixia-header-connect');
+      if (headerBtn) headerBtn.addEventListener('click', function () {
+        if (!S.publicKey) openConnect();
+        else openAccountMenu();
+      });
+      updateHeader();
+
+      scheduleQuote();
+
+      waitForAppKit().then(function (ok) {
+        if (!ok) {
+          console.warn('[verixia] wallet bundle not loaded \u2014 Connect button will error on click');
+          return;
+        }
+        try {
+          window.VerixiaWallet.subscribe(onWalletStateChange);
+          if (typeof window.VerixiaWallet.getState === 'function') {
+            var cur = window.VerixiaWallet.getState();
+            if (cur) onWalletStateChange(cur);
+          }
+        } catch (e) { console.warn('[verixia] subscribe failed', e); }
+      });
+    }
+
+    init();
+  } // end __verixiaApp
+})(); // end __verixiaSwapBoot
+</script>
+
+<script>
+(function(){
+  try {
+    var meta = window.__pageMeta || {};
+    var faq = Array.isArray(meta.faq) ? meta.faq : [];
+    var list = document.getElementById('nx-faq-list');
+    if (!list || !faq.length) return;
+    var esc = function(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});};
+    var html = '';
+    for (var i = 0; i < faq.length; i++) {
+      var item = faq[i];
+      if (!item) continue;
+      var q = item.q || item.question || '';
+      var a = item.a || item.answer || '';
+      if (!q || !a) continue;
+      html += '<details class="faq-item"><summary>' + esc(q) + '<span class="plus">+</span></summary><div class="faq-a">' + esc(a) + '</div></details>';
+    }
+    if (html) {
+      list.innerHTML = html;
+      list.classList.add('is-live');
+    }
+  } catch(e) { console.warn('[verixia] faq render failed', e); }
+})();
+</script>
+
+</body>
+</html>
