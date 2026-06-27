@@ -691,14 +691,13 @@ function useStocksCSS() {
 // provided, we render the real image and fall back to the sector-letter
 // gradient on load error. Same shape & size in both modes.
 // =====================================================================
-// Charts  GeckoTerminal OHLCV (primary) + DexScreener (fallback).
+// Charts  CoinGecko (GeckoTerminal) OHLCV — the ONLY source. No DexScreener,
 // Pool resolution ALWAYS enforces base-token == this mint and picks the
 // highest-liquidity pool, with a seeded reduce so a thin pool still
 // charts  the chart can never show the wrong asset. Self-contained and
 // degrades gracefully (live-tick line when no history is indexed yet).
 // =====================================================================
 const STK_GT = 'https://api.geckoterminal.com/api/v2';
-const STK_DS = 'https://api.dexscreener.com/latest/dex';
 
 // base-token-match + highest USD-liquidity, seeded reduce (mirrors LaunchRadar)
 function stkPickGeckoPool(pools, mint) {
@@ -713,16 +712,6 @@ function stkPickGeckoPool(pools, mint) {
   const set  = base.length ? base : any;                                             // prefer base; else any pool holding it
   if (!set.length) return null;
   return set.reduce((best, p) => liq(p) > liq(best) ? p : best, set[0]);             // highest-liquidity pool
-}
-function stkPickPair(pairs, mint) {
-  if (!Array.isArray(pairs) || !pairs.length) return null;
-  const ok  = p => p && p.chainId === 'solana' && p.pairAddress;
-  const liq = p => Number(p.liquidity?.usd) || 0;
-  const base = pairs.filter(p => ok(p) && p.baseToken?.address === mint);             // EXACT, case-sensitive
-  const any  = pairs.filter(p => ok(p) && (p.baseToken?.address === mint || p.quoteToken?.address === mint));
-  const set  = base.length ? base : any;
-  if (!set.length) return null;
-  return set.reduce((best, p) => liq(p) > liq(best) ? p : best, set[0]);              // highest-liquidity pair
 }
 
 const STK_TFS = ['1H', '1D', '1W', '1M', '1Y'];
@@ -788,7 +777,14 @@ async function stkFetchJson(url, ms = 9000) {
   } catch (e) { return null; } finally { clearTimeout(id); }
 }
 
-async function stkResolvePool(mint) {
+async function stkResolvePool(mint, poolHint) {
+  // A pool address handed in by the feed wins immediately — no round-trip, so
+  // the chart/sparkline have a contract-matched pool the instant the card mounts.
+  if (poolHint && typeof poolHint === 'string') {
+    stkPoolCache.set(mint, poolHint);
+    stkLsSet(STK_POOL_LS + mint, poolHint);
+    return poolHint;
+  }
   if (stkPoolCache.has(mint)) return stkPoolCache.get(mint);
   const cached = stkLsGet(STK_POOL_LS + mint, STK_POOL_TTL);
   if (cached !== undefined) { stkPoolCache.set(mint, cached); return cached; }
@@ -803,8 +799,8 @@ async function stkResolvePool(mint) {
 
 // GeckoTerminal series — real OHLCV (pool resolve + ohlcv). Higher fidelity but
 // can be slow / rate-limited. Never throws; returns pts | null.
-async function stkGeckoSeries(mint, tf) {
-  const pool = await stkResolvePool(mint);
+async function stkGeckoSeries(mint, tf, poolHint) {
+  const pool = await stkResolvePool(mint, poolHint);
   if (!pool) return null;
   const p = STK_TF_PARAMS[tf] || STK_TF_PARAMS['1D'];
   const url = `${STK_GT}/networks/solana/pools/${pool}/ohlcv/${p.unit}?aggregate=${p.agg}&limit=${p.limit}&currency=usd`;
@@ -818,24 +814,9 @@ async function stkGeckoSeries(mint, tf) {
   return pts.length >= 2 ? pts : null;
 }
 
-// DexScreener fallback — one fast request. No OHLCV, so we synthesize a coarse
-// real-direction series from the live price + its 24h/6h/1h/5m % changes
-// (price_then = price_now / (1 + chg/100)). Enough to draw an accurate sparkline
-// the instant GeckoTerminal is slow/rate-limited.
-async function stkDexSeries(mint) {
-  const j = await stkFetchJson(`${STK_DS}/tokens/${encodeURIComponent(mint)}`, 4000);
-  const pair = stkPickPair(j?.pairs, mint);
-  const price = Number(pair?.priceUsd);
-  if (!(price > 0)) return null;
-  const pc = pair.priceChange || {};
-  const at = chg => { const c = Number(chg); return Number.isFinite(c) ? price / (1 + c / 100) : null; };
-  const raw = [at(pc.h24), at(pc.h6), at(pc.h1), at(pc.m5), price]; // oldest → now
-  const pts = raw.filter(v => Number.isFinite(v) && v > 0).map((c, i) => ({ t: i, c }));
-  return pts.length >= 2 ? pts : null;
-}
 
 const stkSeriesInflight = new Map(); // key -> Promise (dedup concurrent fetches of same series)
-export async function stkFetchSeries(mint, tf) {
+export async function stkFetchSeries(mint, tf, poolHint) {
   const key = mint + '|' + tf;
   if (stkSeriesCache.has(key)) return stkSeriesCache.get(key);
   const cached = stkLsGet(STK_SERIES_LS + key, STK_SERIES_TTL);
@@ -845,13 +826,10 @@ export async function stkFetchSeries(mint, tf) {
   const inflightP = (async () => {
     const save = (out) => { stkSeriesCache.set(key, out); stkLsSet(STK_SERIES_LS + key, out); return out; };
 
-    // GeckoTerminal first (real OHLCV). Only if it returns nothing do we fall
-    // back to DexScreener pricing. No racing.
-    const gecko = await stkGeckoSeries(mint, tf).catch(() => null);
-    if (gecko) return save(gecko);
-
-    const dex = await stkDexSeries(mint).catch(() => null);
-    return save(dex);
+    // CoinGecko (GeckoTerminal) real OHLCV — the only source. Contract-matched
+    // pool, real candles, or nothing. No synthetic series, no DexScreener.
+    const gecko = await stkGeckoSeries(mint, tf, poolHint).catch(() => null);
+    return save(gecko);
   })();
 
   stkSeriesInflight.set(key, inflightP);
@@ -884,13 +862,27 @@ export function stkBuildPath(pts, w, h, pad = 2) {
 // import resolves and the build compiles.
 export const stkSmoothPath = stkBuildPath;
 
+// Two REAL endpoints from the token's own live price + real 24h change:
+// price(24h ago) = price / (1 + change/100), then price now. Both are numbers
+// the feed already reports — not synthetic — so a sparkline drawn from them is
+// directionally accurate and always agrees with the displayed % and the chart.
+// Guarantees a line the instant a price exists, before OHLCV is fetched.
+export function stkEndpointSeries(price, change) {
+  const now = Number(price);
+  if (!(now > 0)) return null;
+  const c = Number(change);
+  const then = Number.isFinite(c) ? now / (1 + c / 100) : now;
+  if (!(then > 0)) return null;
+  return [{ t: 0, c: then }, { t: 1, c: now }];
+}
+
 // ── Embedded chart (trade sheet) ──────────────────────────────────────
 // Switched from a hand-drawn SVG to the provider's live embedded chart —
-// GeckoTerminal primary, DexScreener fallback — reusing the same base-token
+// CoinGecko (GeckoTerminal) only — reusing the same base-token
 // pool resolution as the sparklines so it can never show the wrong asset.
 // Defaults to the 1D (24-hour) view. Resolution per timeframe mirrors the
 // page's own STK_TF_PARAMS so 1H/1D/1W/1M/1Y feel the same as before.
-// (GeckoTerminal honors `resolution`; DexScreener honors `interval`. If a pool
+// (GeckoTerminal honors `resolution`. If a pool
 // can't serve a given granularity the provider falls back to its own default.)
 const STK_EMBED_RES = [
   { key: '1H', gecko: '1m', dex: '1'   },
@@ -907,17 +899,12 @@ async function stkResolveEmbedPool(mint) {
   if (stkEmbedPoolCache.has(mint)) return stkEmbedPoolCache.get(mint);
   const cached = stkLsGet(STK_EMBED_LS + mint, STK_POOL_TTL);
   if (cached !== undefined) { stkEmbedPoolCache.set(mint, cached); return cached; }
-  // GeckoTerminal first (live candles); DexScreener fallback for pools GT hasn't
-  // indexed — xStocks (TSLAx, METAx, …) frequently aren't on GT but are on DS.
+  // CoinGecko (GeckoTerminal) only — contract-matched pool, or nothing.
   let res = null;
   const gj = await stkFetchJson(`${STK_GT}/networks/solana/tokens/${encodeURIComponent(mint)}/pools`, 6000);
   const gp = stkPickGeckoPool(gj?.data, mint);
   if (gp?.attributes?.address) {
     res = { provider: 'GECKOTERMINAL', addr: gp.attributes.address };
-  } else {
-    const dj = await stkFetchJson(`${STK_DS}/tokens/${encodeURIComponent(mint)}`, 5000);
-    const dp = stkPickPair(dj?.pairs, mint);
-    if (dp?.pairAddress) res = { provider: 'DEXSCREENER', addr: dp.pairAddress };
   }
   stkEmbedPoolCache.set(mint, res);
   stkLsSet(STK_EMBED_LS + mint, res);
@@ -927,9 +914,7 @@ async function stkResolveEmbedPool(mint) {
 function stkBuildEmbedSrc(pool, tfKey) {
   if (!pool) return null;
   const r = STK_EMBED_RES.find(x => x.key === tfKey) || STK_EMBED_RES[1];
-  if (pool.provider === 'DEXSCREENER') {
-    return `https://dexscreener.com/solana/${pool.addr}?embed=1&theme=light&info=0&trades=0&interval=${r.dex}`;
-  }
+  if (pool.provider !== 'GECKOTERMINAL') return null;
   return `https://www.geckoterminal.com/solana/pools/${pool.addr}?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&bg_color=ffffff&resolution=${r.gecko}`;
 }
 
