@@ -318,19 +318,21 @@ function shade(hex, p) {
 
 /* ============================================================
    TRADE PARAM BUILDERS
-   NOTE: the BUY divisor 110n matches the server-side 10% slippage
-   (1 + 10/100). If slippage changes server-side, change it here too.
+   Buys are denominatedInSol on the server, so the wallet spends exactly
+   `n` SOL on the curve — the 10% slippage only affects how many tokens
+   come back, NOT how much SOL leaves. Real debit = n + 3% fee. The
+   earlier "110n divisor" note was stale and is removed.
    ============================================================ */
 function buildBuyParams(n) {
   if (!Number.isFinite(n) || n <= 0) return null;
-  // n = SOL the user wants to spend on tokens. That IS the trade amount.
+  // n = SOL the user spends on tokens. denominatedInSol on the server, so
+  // this is the exact SOL that leaves for the curve (slippage hits tokens-out).
   const tradeLamports = BigInt(Math.floor(n * 1e9));
   if (tradeLamports <= 0n) return null;
-  // 3% platform fee charged ON TOP, transferred from the wallet in addition.
+  // 3% platform fee, transferred from the wallet ON TOP of the trade amount.
   const feeLamports = (tradeLamports * BigInt(FEE_BPS)) / 10000n;
   if (feeLamports <= 0n) return null;
-  // What the wallet pays (excludes network/priority fee). 10% slippage is
-  // applied server-side to the token-out side, not to the SOL spent.
+  // True wallet debit (excludes only the network/priority fee).
   const totalLamports = tradeLamports + feeLamports;
   return { mode: 'buy', solAmount: n, totalLamports: totalLamports.toString(), tradeLamports: tradeLamports.toString(), feeLamports: feeLamports.toString() };
 }
@@ -2804,7 +2806,6 @@ export default function Ape({ mainWalletPubkey }) {
   const [showWallet, setShowWallet] = useState(false);
   const [showStats, setShowStats] = useState(false);
   const [statsTab, setStatsTab] = useState('referrals');
-  const [showAuto, setShowAuto] = useState(false);
   const [showWatch, setShowWatch] = useState(false);
   const [hotWindow, setHotWindow] = useState('1h'); // 5m | 1h | 24h
   // Discovery view: a research lens over the same feed. Sort toggle decides the
@@ -3242,10 +3243,6 @@ export default function Ape({ mainWalletPubkey }) {
     finally { setWithdrawBusy(false); }
   }, [wallet, refreshSol, pushToast]);
 
-  const auto = useAutoTrade({
-    recentTokens: recent, solBalance, solPrice, balances, executeSwap, pushToast, heldTokenUsd,
-  });
-
   // Your bag — the held positions worth showing. Extracted so both the owned
   // tab's rows AND the "You own · N" badge derive from one list and can never
   // disagree. A position is shown only if it has a real price and at least
@@ -3384,7 +3381,6 @@ export default function Ape({ mainWalletPubkey }) {
             <span className="ap-bname">Ape<span className="dot">·</span><span className="it">early</span></span>
           </div>
           <div className="ap-nav-live"><span className="d" /><span>LIVE FEED</span></div>
-          <button className="ap-nav-btn" onClick={() => setShowAuto(true)}>Auto-trade</button>
           <button className="ap-nav-btn" onClick={() => setShowWatch(true)}>Wallets</button>
           <button className="ap-nav-btn" onClick={() => { setStatsTab('referrals'); setShowStats(true); }}>Earnings</button>
           <button className="ap-nav-wallet" onClick={() => setShowWallet(true)}>
@@ -3564,7 +3560,6 @@ export default function Ape({ mainWalletPubkey }) {
       {showFilters && (<FiltersModal wildOnly={wildOnly} setWildOnly={setWildOnly} minLiq={minLiq} setMinLiq={setMinLiq} onClose={() => setShowFilters(false)} />)}
       {showWallet && (<WalletDrawer wallet={wallet} solBalance={solBalance} solPrice={solPrice} onWithdraw={onWithdraw} onClose={() => setShowWallet(false)} busy={withdrawBusy} balances={balances} resolveToken={resolveToken} heldTokenUsd={heldTokenUsd} capUsd={BURNER_CAP_USD} />)}
       <StatsPanel open={showStats} onClose={() => setShowStats(false)} wallet={wallet} mainWalletPubkey={mainWalletPubkey} solPrice={solPrice} initialTab={statsTab} />
-      <AutoPanel open={showAuto} onClose={() => setShowAuto(false)} auto={auto} solBalance={solBalance} solPrice={solPrice} />
       <WatchedWallets open={showWatch} onClose={() => setShowWatch(false)} solPrice={solPrice} resolveToken={resolveToken} />
 
       <div className="ap-toasts">
@@ -3865,413 +3860,3 @@ function StatsPanel({ open, onClose, wallet, mainWalletPubkey, solPrice, initial
     </div>
   );
 }
-
-/* ============================================================
-   AUTO-TRADE
-   ============================================================ */
-const BALANCED_SETTINGS = {
-  perTradeSol: 0.2, takeProfitPct: 150, stopLossPct: 30,
-  minAgeMin: 0, maxAgeMin: 30, minLiqUsd: 10000, minMcapUsd: 0, minHolders: 30,
-  minVibe: 40, maxOpen: 5, maxPerHour: 10,
-};
-const SAFETY_FLOOR = { dailyLossCapSol: 1.0, maxHoldMin: 30, ageMinAbsolute: 0, posPollMs: 7000 };
-const AT_SETTINGS_KEY = 'lr_at_settings_v1';
-const AT_STATE_KEY = 'lr_at_state_v1';
-const AT_POSITIONS_KEY = 'lr_at_positions_v1';
-const AT_ENABLED_KEY = 'lr_at_enabled_v1';
-const AT_BAL_AMT_KEY = 'lr_at_bal_amount_v1';
-const AT_POS_MAX_AGE_MS = 6 * 60 * 60 * 1000;
-
-function loadCustomSettings() {
-  try { const raw = localStorage.getItem(AT_SETTINGS_KEY); if (!raw) return { ...BALANCED_SETTINGS }; return { ...BALANCED_SETTINGS, ...JSON.parse(raw) }; }
-  catch (e) { return { ...BALANCED_SETTINGS }; }
-}
-function saveCustomSettings(s) { try { localStorage.setItem(AT_SETTINGS_KEY, JSON.stringify(s)); } catch (e) {} }
-function loadDailyState() {
-  try { const raw = localStorage.getItem(AT_STATE_KEY); if (!raw) return null; const d = JSON.parse(raw); if (!d || d.day !== new Date().toDateString()) return null; return d; }
-  catch (e) { return null; }
-}
-function saveDailyState(d) { try { localStorage.setItem(AT_STATE_KEY, JSON.stringify({ ...d, day: new Date().toDateString() })); } catch (e) {} }
-function loadPositions() {
-  try {
-    const raw = localStorage.getItem(AT_POSITIONS_KEY); if (!raw) return [];
-    const arr = JSON.parse(raw); if (!Array.isArray(arr)) return [];
-    const cutoff = Date.now() - AT_POS_MAX_AGE_MS;
-    return arr.filter(p => p && p.mint && Number.isFinite(p.ts) && p.ts > cutoff && Number.isFinite(p.entryPriceUsd)).map(p => ({ ...p, exiting: false }));
-  } catch (e) { return []; }
-}
-function savePositions(arr) { try { localStorage.setItem(AT_POSITIONS_KEY, JSON.stringify(arr || [])); } catch (e) {} }
-function loadEnabled() { try { return localStorage.getItem(AT_ENABLED_KEY) === '1'; } catch (e) { return false; } }
-function saveEnabled(v) { try { localStorage.setItem(AT_ENABLED_KEY, v ? '1' : '0'); } catch (e) {} }
-
-function useAutoTrade(deps) {
-  const { recentTokens, solBalance, solPrice, balances, executeSwap, pushToast, heldTokenUsd } = deps;
-  const initialDaily = useMemo(() => loadDailyState() || {}, []);
-  const [enabled, setEnabledState] = useState(() => loadEnabled());
-  const [custom, setCustom] = useState(() => loadCustomSettings());
-  const [positions, setPositionsState] = useState(() => loadPositions());
-  const [log, setLog] = useState([]);
-  const [dailyPnlSol, setDailyPnlSol] = useState(initialDaily.dailyPnlSol || 0);
-  const [tradesToday, setTradesToday] = useState(initialDaily.tradesToday || 0);
-  const [paused, setPaused] = useState(initialDaily.paused || false);
-  const seenMintsRef = useRef(new Set());
-  const inflightRef = useRef(new Set());
-  const cappedRef = useRef(false);
-  const tradeStampsRef = useRef([]);
-  const positionsRef = useRef(positions);
-  useEffect(() => { positionsRef.current = positions; }, [positions]);
-  const balancesRef = useRef(balances);
-  useEffect(() => { balancesRef.current = balances; }, [balances]);
-  const exitSolPriceRef = useRef(solPrice);
-  useEffect(() => { exitSolPriceRef.current = solPrice; }, [solPrice]);
-
-  const setEnabled = useCallback((v) => {
-    setEnabledState(prev => {
-      const next = typeof v === 'function' ? v(prev) : v;
-      saveEnabled(next); return next;
-    });
-  }, []);
-
-  const setPositions = useCallback((updater) => {
-    setPositionsState(prev => {
-      const next = typeof updater === 'function' ? updater(prev) : updater;
-      savePositions(next); return next;
-    });
-  }, []);
-
-  // Single mode (Custom only). No per-trade size cap — whatever the user sets
-  // is what fires. Only guard against a non-positive / NaN value by falling
-  // back to the 0.2 default.
-  // Memoized so `effective` (and the exit-loop interval that depends on it)
-  // stays referentially stable across renders — otherwise the interval would
-  // tear down and rebuild on every render, re-polling prices needlessly.
-  const settings = useMemo(
-    () => ({ ...custom, perTradeSol: Number(custom.perTradeSol) > 0 ? Number(custom.perTradeSol) : 0.2 }),
-    [custom]
-  );
-  const effective = useMemo(() => ({ ...settings, minAgeMin: Math.max(SAFETY_FLOOR.ageMinAbsolute, settings.minAgeMin) }), [settings]);
-
-  const updateCustom = useCallback((patch) => {
-    setCustom(prev => { const next = { ...prev, ...patch }; saveCustomSettings(next); return next; });
-  }, []);
-
-  useEffect(() => { saveDailyState({ dailyPnlSol, tradesToday, paused }); }, [dailyPnlSol, tradesToday, paused]);
-
-  const pushLog = useCallback((tag, msg) => {
-    setLog(prev => [{ id: Math.random().toString(36).slice(2, 9), ts: Date.now(), tag, msg }, ...prev].slice(0, 200));
-  }, []);
-
-  useEffect(() => {
-    if (-dailyPnlSol >= SAFETY_FLOOR.dailyLossCapSol && !paused) {
-      setPaused(true); setEnabled(false);
-      pushLog('error', 'Daily loss cap hit — auto-trade paused');
-      pushToast && pushToast({ type: 'error', em: '⊘', body: <>Daily loss cap hit. <b>Auto paused.</b></> });
-    }
-  }, [dailyPnlSol, paused, pushLog, pushToast]);
-
-  // Discovery loop — buy via executeSwap (which now forwards correctly to ape-helpers)
-  useEffect(() => {
-    if (!enabled || paused) return;
-    if (!Array.isArray(recentTokens) || recentTokens.length === 0) return;
-    const now = Date.now();
-    tradeStampsRef.current = tradeStampsRef.current.filter(t => now - t < 60 * 60 * 1000);
-    if (tradeStampsRef.current.length >= effective.maxPerHour) return;
-    if (positionsRef.current.length + inflightRef.current.size >= effective.maxOpen) return;
-
-    // No holdings cap — auto-buy is never gated on accumulated token value.
-    cappedRef.current = false;
-
-    // Not enough SOL for even one trade → stop the engine and tell the user
-    // once, rather than scanning the whole feed and failing every token.
-    const availSol = (solBalance && solBalance.uiAmount) || 0;
-    if (availSol < effective.perTradeSol * 1.03) {
-      setEnabled(false);
-      pushLog('error', 'Auto-trade stopped — burner out of SOL');
-      pushToast && pushToast({ type: 'error', em: '◎', body: <>Out of SOL — auto-trade stopped. <b>Add funds to your burner</b> to keep going.</>, duration: 9000 });
-      return;
-    }
-
-    for (const tk of recentTokens) {
-      if (!tk || !tk.mint) continue;
-      if (seenMintsRef.current.has(tk.mint)) continue;
-      if (inflightRef.current.has(tk.mint)) continue;
-      if (positionsRef.current.some(p => p.mint === tk.mint)) continue;
-
-      // Only "too old" permanently blacklists. Age-too-young, liquidity,
-      // holders, and vibe are all transient — a token that fails now may
-      // pass minutes later as it ages into the window and fills out. Marking
-      // them seen here is what stopped auto-buys from ever firing.
-      const ageMin = tk.pairCreatedAtMs ? (now - tk.pairCreatedAtMs) / 60000 : 999;
-      if (ageMin > effective.maxAgeMin) { seenMintsRef.current.add(tk.mint); continue; }
-      if (ageMin < effective.minAgeMin) continue;
-      if (!Number.isFinite(tk.liquidity) || tk.liquidity < effective.minLiqUsd) continue;
-      if (effective.minMcapUsd > 0 && (!Number.isFinite(tk.mcap) || tk.mcap < effective.minMcapUsd)) continue;
-      if (!Number.isFinite(tk.holders) || tk.holders < effective.minHolders) continue;
-      const r = riskRead(tk);
-      if (r.score < effective.minVibe) continue;
-      if (!(tk.price > 0)) continue;
-      if (((solBalance && solBalance.uiAmount) || 0) < effective.perTradeSol * 1.03) continue;
-
-      seenMintsRef.current.add(tk.mint);
-      inflightRef.current.add(tk.mint);
-      pushLog('info', 'Considering $' + tk.sym + ' · score ' + r.score);
-
-      (async () => {
-        try {
-          // FIX 5/8: use buildBuyParams and read result.sig
-          const buyParams = buildBuyParams(effective.perTradeSol);
-          if (!buyParams) throw new Error('Bad buy size');
-          const result = await executeSwap({ mode: 'buy', token: tk, swapParams: buyParams });
-          if (!result || !result.sig) throw new Error('No signature');
-          const entryPriceUsd = tk.price;
-          setPositions(prev => [...prev, {
-            mint: tk.mint, sym: tk.sym, name: tk.name, icon: tk.icon, ts: Date.now(),
-            entryPriceUsd, entrySol: effective.perTradeSol, currentPriceUsd: entryPriceUsd,
-            signature: result.sig, exiting: false,
-          }]);
-          tradeStampsRef.current.push(Date.now());
-          setTradesToday(n => n + 1);
-          pushLog('buy', 'Bought $' + tk.sym + ' · ' + effective.perTradeSol.toFixed(2) + ' SOL');
-          pushToast && pushToast({ type: 'success', em: '✓', body: <>Auto: bought <b>${tk.sym}</b></> });
-        } catch (e) {
-          const msg = (e && e.message) || 'failed';
-          // Out of SOL: there's nothing left to trade with, so stop the engine
-          // and show ONE clear message instead of spraying identical errors
-          // every cycle until the user notices.
-          if (/not enough sol|insufficient/i.test(msg)) {
-            setEnabled(false);
-            pushLog('error', 'Auto-trade stopped — burner out of SOL');
-            pushToast && pushToast({ type: 'error', em: '◎', body: <>Out of SOL — auto-trade stopped. <b>Add funds to your burner</b> to keep going.</>, duration: 9000 });
-          } else {
-            pushLog('error', 'Skipped $' + tk.sym + ' · ' + msg);
-          }
-        } finally {
-          inflightRef.current.delete(tk.mint);
-        }
-      })();
-      break;
-    }
-  }, [enabled, paused, recentTokens, effective, solBalance, solPrice, heldTokenUsd, executeSwap, pushLog, pushToast, setPositions]);
-
-  // Exit loop — TP/SL/timeout.
-  // Reads positions/balances/solPrice from refs so the interval is built once
-  // per on/off transition (gated on hasPositions) rather than rebuilt on every
-  // price tick or balance poll. Depending on `solPrice`/`balances` directly
-  // would tear the interval down every 30s and could fire tick() mid-trade.
-  const hasPositions = positions.length > 0;
-  useEffect(() => {
-    if (!hasPositions) return;
-    let cancelled = false;
-    const tick = async () => {
-      const now = Date.now();
-      for (const p of positionsRef.current) {
-        if (cancelled) return;
-        if (p.exiting) continue;
-        try {
-          const r = await fetch('/api/dex/token/' + encodeURIComponent(p.mint));
-          if (!r.ok) continue;
-          const d = await r.json();
-          const px = Number(d?.token?.price);
-          if (!Number.isFinite(px) || px <= 0) continue;
-          setPositions(prev => prev.map(x => x.mint === p.mint ? { ...x, currentPriceUsd: px } : x));
-          const pnlPct = ((px - p.entryPriceUsd) / p.entryPriceUsd) * 100;
-          // Auto-sell fires ONLY on take-profit or stop-loss. The time-based
-          // force-exit has been removed — positions are held until they hit
-          // the user's TP/SL target (or are sold manually).
-          const reason = pnlPct >= effective.takeProfitPct ? 'take-profit'
-                       : pnlPct <= -effective.stopLossPct ? 'stop-loss' : null;
-          if (!reason) continue;
-          setPositions(prev => prev.map(x => x.mint === p.mint ? { ...x, exiting: true } : x));
-          try {
-            const owned = balancesRef.current && balancesRef.current[p.mint];
-            if (!owned || !((owned.uiAmount || 0) > 0)) {
-              // Balance may not have landed yet (refreshOneToken fires ~800ms
-              // after buy; the 30s poll is slower). Don't drop a fresh position
-              // as "gone" — wait until it's had time to show up.
-              if ((Date.now() - p.ts) < 45000) {
-                setPositions(prev => prev.map(x => x.mint === p.mint ? { ...x, exiting: false } : x));
-                continue;
-              }
-              setPositions(prev => prev.filter(x => x.mint !== p.mint));
-              pushLog('info', '$' + p.sym + ' position cleared (no balance)');
-              continue;
-            }
-            const tk = { mint: p.mint, sym: p.sym, name: p.name, icon: p.icon, price: px };
-            const exitFee = sellFeeLamports(owned.uiAmount, px, exitSolPriceRef.current);
-            await executeSwap({ mode: 'sell', token: tk, tradeTokensRaw: BigInt(owned.amount || '0'), tradeTokensUi: owned.uiAmount, decimals: owned.decimals, feeLamports: exitFee });
-            const exitSol = (owned.uiAmount * px) / (exitSolPriceRef.current || 150);
-            // Realized P&L, net of fees: proceeds minus the 3% sell fee, against
-            // the full entry cost (trade size + the 3% buy fee paid on top). The
-            // old `exitSol - entrySol` ignored both and overstated every result,
-            // which also let the daily loss cap drift. This feeds setDailyPnlSol
-            // and SAFETY_FLOOR.dailyLossCapSol, so it has to be exact.
-            const netProceedsSol = exitSol - Number(exitFee) / 1e9;
-            const entryCostSol = (p.entrySol || 0) * (1 + FEE_BPS / 10000);
-            const pnlSol = netProceedsSol - entryCostSol;
-            setPositions(prev => prev.filter(x => x.mint !== p.mint));
-            setDailyPnlSol(n => n + pnlSol);
-            tradeStampsRef.current.push(Date.now());
-            pushLog('sell', 'Sold $' + p.sym + ' · ' + reason + ' · ' + formatSolSigned(pnlSol) + ' SOL');
-          } catch (e) {
-            setPositions(prev => prev.map(x => x.mint === p.mint ? { ...x, exiting: false } : x));
-            pushLog('error', 'Exit failed $' + p.sym + ' · ' + (e.message || 'unknown'));
-          }
-        } catch (e) {}
-      }
-    };
-    tick();
-    const id = setInterval(tick, SAFETY_FLOOR.posPollMs);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [hasPositions, effective, executeSwap, setPositions, pushLog]);
-
-  const flatten = useCallback(async () => {
-    setEnabled(false);
-    for (const p of positionsRef.current) {
-      try {
-        const owned = balancesRef.current && balancesRef.current[p.mint];
-        if (!owned || !((owned.uiAmount || 0) > 0)) continue;
-        const tk = { mint: p.mint, sym: p.sym, name: p.name, icon: p.icon, price: p.currentPriceUsd };
-        const flatFee = sellFeeLamports(owned.uiAmount, p.currentPriceUsd, exitSolPriceRef.current);
-        await executeSwap({ mode: 'sell', token: tk, tradeTokensRaw: BigInt(owned.amount || '0'), tradeTokensUi: owned.uiAmount, decimals: owned.decimals, feeLamports: flatFee });
-        pushLog('sell', 'Flatten $' + p.sym);
-      } catch (e) {
-        pushLog('error', 'Flatten failed $' + p.sym);
-      }
-    }
-    setPositions([]);
-  }, [executeSwap, setPositions, pushLog]);
-
-  return { enabled, setEnabled, paused, setPaused, custom, updateCustom, settings, effective, positions, log, dailyPnlSol, tradesToday, flatten };
-}
-
-function Slider({ label, hint, value, min, max, step, suffix, onChange }) {
-  return (
-    <div className="wa-slider">
-      <div className="wa-slider-top">
-        <span className="wa-slider-lbl">{label}</span>
-        <span className="wa-slider-v">{value}<span className="u">{suffix}</span></span>
-      </div>
-      {hint ? <div className="wa-slider-desc">{hint}</div> : null}
-      <input type="range" min={min} max={max} step={step} value={value} onChange={e => onChange(Number(e.target.value))} />
-    </div>
-  );
-}
-
-function AutoPanel({ open, onClose, auto, solBalance, solPrice }) {
-  useEffect(() => { if (!open) return; const prev = document.body.style.overflow; document.body.style.overflow = 'hidden'; return () => { document.body.style.overflow = prev; }; }, [open]);
-  useEffect(() => { if (!open) return; const h = (e) => { if (e.key === 'Escape') onClose && onClose(); }; window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h); }, [open, onClose]);
-  if (!open) return null;
-
-  const { enabled, setEnabled, paused, setPaused, settings, custom, updateCustom, positions, log, dailyPnlSol, tradesToday, flatten } = auto;
-  const s = settings;
-
-  return (
-    <div className="wa-root">
-      <div className="wa-head">
-        <div style={{display:'flex',alignItems:'center',gap:11,cursor:'pointer'}} onClick={onClose}>
-          <div style={{width:30,height:30,borderRadius:10,background:'linear-gradient(135deg,#8b7bff,#1ad98a)',display:'grid',placeItems:'center',fontFamily:"'Inter',sans-serif",fontStyle:'italic',fontSize:17,color:'#fff'}}>A</div>
-          <span style={{fontFamily:"'Inter',sans-serif",fontSize:22,letterSpacing:'-.015em',color:'#f4f5f7'}}>Ape <em style={{fontStyle:'italic',color:'#86868b'}}>· auto-trade</em></span>
-        </div>
-        <div className={'wa-stat-pill ' + (paused ? 'paused' : enabled ? 'on' : 'off')}>
-          {enabled && !paused ? <><span className="d" /><span>RUNNING</span></> : paused ? <span>PAUSED · CAP HIT</span> : <span>OFF</span>}
-        </div>
-        <button className="wa-close" onClick={onClose}>×</button>
-      </div>
-      <div className="wa-page">
-        <div className="wa-eye"><span className="gl">◉</span><span>Auto-trade · alpha</span><span className="rule" /></div>
-        <h1 className="wa-h1">Trade <span className="it">while you sleep.</span></h1>
-        <p className="wa-sub">A small bot watching the feed. It buys what looks safe by your rules and sells on take-profit or stop-loss. <b>Test small first.</b></p>
-
-        {paused ? (
-          <div className="wa-pause-banner">
-            <span className="gl">⊘</span>
-            <div className="t"><div className="h">Auto paused</div><div className="b">Daily loss cap of {SAFETY_FLOOR.dailyLossCapSol} SOL hit. Resume when ready.</div></div>
-            <button onClick={() => { setPaused(false); setEnabled(false); }}>RESUME</button>
-          </div>
-        ) : null}
-
-        <div className={'wa-master' + (enabled && !paused ? ' on' : paused ? ' paused' : '')}>
-          <div className="wa-master-l">
-            <div className={'wa-master-h' + (enabled && !paused ? ' on' : '')}>{enabled && !paused ? <>Running.</> : paused ? <>Paused.</> : <>Ready when you <span className="it">are.</span></>}</div>
-            <div className="wa-master-s">{enabled && !paused ? 'Watching the feed · ' + positions.length + ' open · ' + tradesToday + ' today' : 'Flip when ready'}</div>
-          </div>
-          <div className={'wa-tog' + (enabled && !paused ? ' on' : '')} onClick={() => { if (paused) return; setEnabled(!enabled); }} />
-        </div>
-
-        <div className="wa-sliders">
-          <Slider label="Per-trade SOL" hint="Each auto-buy uses this much SOL." value={s.perTradeSol} min={0.01} max={50} step={0.01} suffix="SOL" onChange={v => updateCustom({ perTradeSol: v })} />
-          <Slider label="Take profit at" value={s.takeProfitPct} min={20} max={500} step={10} suffix="%" onChange={v => updateCustom({ takeProfitPct: v })} hint="Sell when up this much." />
-          <Slider label="Stop loss at" value={s.stopLossPct} min={10} max={70} step={5} suffix="%" onChange={v => updateCustom({ stopLossPct: v })} hint="Sell if down this much." />
-          <Slider label="Min age" value={s.minAgeMin} min={0} max={20} step={1} suffix="min" onChange={v => updateCustom({ minAgeMin: v })} hint="Skip launches younger than this. 0 = buy immediately." />
-          <Slider label="Max age" value={s.maxAgeMin} min={5} max={120} step={5} suffix="min" onChange={v => updateCustom({ maxAgeMin: v })} hint="Skip launches older than this." />
-          <Slider label="Min liquidity" value={s.minLiqUsd} min={0} max={100000} step={500} suffix="$" onChange={v => updateCustom({ minLiqUsd: v })} hint="0 = buy anything. Thin pools are hard to SELL — your stop-loss may not fill." />
-          <Slider label="Min market cap" value={s.minMcapUsd} min={0} max={500000} step={1000} suffix="$" onChange={v => updateCustom({ minMcapUsd: v })} hint="0 = no market-cap floor. Skip tokens below this mcap." />
-          <Slider label="Min holders" value={s.minHolders} min={0} max={500} step={5} suffix="" onChange={v => updateCustom({ minHolders: v })} hint="0 = no holder requirement." />
-          <Slider label="Min safety score" value={s.minVibe} min={0} max={85} step={5} suffix="/85" onChange={v => updateCustom({ minVibe: v })} hint="0 = ignore safety score entirely." />
-          <Slider label="Max open" value={s.maxOpen} min={1} max={10} step={1} suffix="" onChange={v => updateCustom({ maxOpen: v })} hint="Hold limit." />
-          <Slider label="Max / hour" value={s.maxPerHour} min={1} max={30} step={1} suffix="" onChange={v => updateCustom({ maxPerHour: v })} hint="Trade frequency cap." />
-          <div className="wa-floor">
-            <b>Safety floors that can't be turned off:</b><br/>
-            · Daily loss cap: -{SAFETY_FLOOR.dailyLossCapSol} SOL (auto-pauses)<br/>
-            · Per-trade buy capped at 1 SOL<br/>
-            · Sells only on your take-profit or stop-loss target
-          </div>
-        </div>
-
-        <div className="wa-stats">
-          <div className="wa-statc"><div className="wa-statc-l">Today P&L</div><div className={'wa-statc-v ' + (dailyPnlSol > 0 ? 'gn' : dailyPnlSol < 0 ? 'rd' : 'dim')}>{Math.abs(dailyPnlSol) > 0.0001 ? formatSolSigned(dailyPnlSol) : '—'}{Math.abs(dailyPnlSol) > 0.0001 ? <span className="u">SOL</span> : null}</div></div>
-          <div className="wa-statc"><div className="wa-statc-l">Trades today</div><div className="wa-statc-v">{tradesToday}</div></div>
-          <div className="wa-statc"><div className="wa-statc-l">Open positions</div><div className="wa-statc-v">{positions.length}</div></div>
-          <div className="wa-statc"><div className="wa-statc-l">Burner SOL</div><div className="wa-statc-v">{formatSol((solBalance && solBalance.uiAmount) || 0)}<span className="u">SOL</span></div></div>
-        </div>
-
-        <div className="wa-pos-frame">
-          <div className="wa-section-head"><span>◉ Open positions</span><span className="count">{positions.length}</span></div>
-          {positions.length === 0 ? (
-            <div className="wa-empty"><span className="gl">∅</span><div className="h">No open <span className="it">positions</span></div><div className="s">When auto-trade fires, positions appear here.</div></div>
-          ) : positions.map(p => {
-            const c = colorFor(p.mint);
-            const pnlPct = p.entryPriceUsd > 0 ? ((p.currentPriceUsd - p.entryPriceUsd) / p.entryPriceUsd) * 100 : 0;
-            const pnlSol = (p.entrySol || 0) * (pnlPct / 100);
-            const up = pnlPct > 0.01, dn = pnlPct < -0.01;
-            const ageMin = Math.floor((Date.now() - p.ts) / 60000);
-            return (
-              <div className="wa-pos-row" key={p.mint}>
-                <div className="wa-pos-av" style={{background:'linear-gradient(135deg,'+c+','+shade(c,-30)+')'}}>{(p.sym || '?').charAt(0)}</div>
-                <div className="wa-pos-nm">
-                  <div className="wa-pos-sym">${p.sym || '???'}</div>
-                  <div className="wa-pos-time">{ageMin}min open · {formatSol(p.entrySol || 0)} SOL in</div>
-                </div>
-                <div className="wa-pos-pnl">
-                  <div className={'wa-pos-pnl-v ' + (up ? 'gn' : dn ? 'rd' : '')}>{Math.abs(pnlSol) > 0.0001 ? formatSolSigned(pnlSol) : '—'}</div>
-                  <div className={'wa-pos-pnl-p ' + (up ? 'gn' : dn ? 'rd' : '')}>{(pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(1) + '%'}</div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="wa-log-frame">
-          <div className="wa-section-head"><span>§ Event log</span><span className="count">{log.length}</span></div>
-          <div className="wa-log-list">
-            {log.length === 0 ? (
-              <div className="wa-empty"><div className="h">No events yet</div></div>
-            ) : log.map(e => (
-              <div className="wa-log-row" key={e.id}>
-                <span className="wa-log-ts">{new Date(e.ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
-                <span className={'wa-log-tag ' + e.tag}>{e.tag}</span>
-                <span className="wa-log-msg">{e.msg}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="wa-kill">
-        <button className="wa-kill-btn stop" disabled={!enabled && !paused} onClick={() => { setEnabled(false); setPaused(false); }}>STOP AUTO</button>
-        <button className="wa-kill-btn flat" disabled={positions.length === 0} onClick={flatten}>FLATTEN ALL · {positions.length}</button>
-      </div>
-    </div>
-  );
-}
-   
