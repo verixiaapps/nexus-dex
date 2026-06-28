@@ -1,13 +1,13 @@
 // Ape.jsx — Nexus DEX · Ape (early-launch trading terminal)
 //
 // Fully self-contained single-file build. The React surface, the CSS, the
-// heavy auxiliary panels (StatsPanel + AutoPanel + useAutoTrade), AND the
+// heavy auxiliary panels (StatsPanel), AND the
 // former ./ape-helpers logic (executeSwap, formatters, riskRead, vibe-check,
 // trade-param builders, share intents, RPC layer) are all inlined below — no
 // local module imports. The only externals are npm packages
 // (react / bs58 / @solana/*) and the same backend API routes as before.
 //
-// Pastel Wonderland-light palette throughout (matches /referrals + /why).
+// Dark first-light terminal palette throughout (amber accent, green/red semantic).
 // Strips the old "specimen / wild / wonderland//radar" jargon. Fixes the
 // open-positions flash bug.
 //
@@ -63,9 +63,6 @@ const CLOSED_DUST_USD = 1.50;
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
 const FEE_BPS    = 300;
 const SOL_RESERVE = 0; // no reserve — MAX buy uses the full balance, nothing held back for ATA rent / fees
-// Polish-phase soft cap: the app's buy flow (manual + auto) won't let token
-// holdings exceed this USD value. Client-side guardrail only — NOT custody.
-const BURNER_CAP_USD = 100;
 
 const DEFAULT_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
 const DEFAULT_SELL_PRESETS = [25, 50, 100];
@@ -1443,6 +1440,30 @@ const AP_CSS = `
 .ap-safety-bar i{display:block;height:100%;border-radius:3px;background:linear-gradient(90deg,#0fae7d,var(--green))}
 .ap-safety-bar i.amber{background:linear-gradient(90deg,var(--ember2),var(--ember1))}
 .ap-safety-bar i.red{background:linear-gradient(90deg,#cc3450,var(--red))}
+
+/* ============================================================
+   V3 — POLISH PASS (appended last; wins on equal specificity).
+   Tightens row hierarchy, sparkline column, buy button, trending
+   cards and the quick-buy bar. Same palette/DNA, sharper execution.
+   ============================================================ */
+.ap-row{padding:12px 14px;gap:12px}
+.ap-sym-row{font-size:15.5px;font-weight:700;letter-spacing:-.01em;gap:7px}
+.ap-sym-row .chg{font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700}
+.ap-name-line{gap:6px;margin-top:3px;font-size:11.5px;font-family:'JetBrains Mono',monospace}
+.ap-name-line .price{color:var(--ink)}
+.ap-name-line .mcap{color:var(--ink2)}
+.ap-name-line .dot{color:var(--border-hi)}
+.ap-name-line .ownedusd{color:var(--ink)}
+.ap-riskmeter{margin-top:7px}
+.ap-riskmeter i{width:12px;height:3px}
+.ap-riskmeter .lab{font-size:8.5px;letter-spacing:.07em}
+.ap-spark{width:66px;opacity:.95}
+.ap-btn-buy{padding:9px 13px;border-radius:11px;font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:800;box-shadow:0 4px 14px -6px rgba(22,209,150,.5)}
+.ap-btn-buy.compact{padding:8px 12px}
+.ap-trend-card{min-width:172px}
+.ap-trend-card .sym{font-size:14px}
+.ap-qamt{border-radius:10px;padding:7px 12px}
+.ap-qbar{gap:7px}
 `;
 
 function useApCSS() {
@@ -2265,8 +2286,7 @@ const SpecimenRow = React.memo(function SpecimenRow({ token, ageMsLive, owned, c
           </div>
           <div className="ap-name-line">
             <span className="price">{formatPrice(token.price)}</span><span className="dot">·</span>
-            <span className="mcap">{formatMoney(token.mcap)} mcap</span><span className="dot">·</span>
-            <span className="ghost">{formatMoney(token.liquidity)} liq · {token.holders > 0 ? Math.round(token.holders).toLocaleString() : 0} holders</span>
+            <span className="mcap">{formatMoney(token.mcap)}</span>
             {ownedMode ? <><span className="dot">·</span><span className="ownedusd">{formatTokens(ownedUi)} · {formatUsdAbs(ownedUsd)}</span></> : null}
           </div>
           <div className={'ap-riskmeter ' + r.tier}>
@@ -2383,7 +2403,7 @@ function FiltersModal({ wildOnly, setWildOnly, minLiq, setMinLiq, onClose }) {
   );
 }
 
-function WalletDrawer({ wallet, solBalance, solPrice, onWithdraw, onClose, busy, balances, resolveToken, heldTokenUsd = 0, capUsd = 0 }) {
+function WalletDrawer({ wallet, solBalance, solPrice, onWithdraw, onClose, busy, balances, resolveToken, heldTokenUsd = 0 }) {
   const [tab, setTab] = useState('deposit');
   const [copied, setCopied] = useState(false);
   const [dest, setDest] = useState(''); const [amt, setAmt] = useState('');
@@ -2428,7 +2448,7 @@ function WalletDrawer({ wallet, solBalance, solPrice, onWithdraw, onClose, busy,
             <div className="ap-ballbl">Ready to trade</div>
             <div className="ap-balval">{formatSol(sol)} <span className="u">SOL</span></div>
             <div className="ap-balusd">{solPrice > 0 ? '≈ $' + format(sol * solPrice) : ' '}</div>
-            {capUsd > 0 ? (
+            {heldTokenUsd > 0 ? (
               <div style={{ marginTop: 10, fontFamily: 'ui-monospace,Menlo,monospace', fontSize: 11, fontWeight: 700, color: '#86868b' }}>
                 Tokens held · ${Math.round(heldTokenUsd)}
               </div>
@@ -3519,7 +3539,7 @@ export default function Ape({ mainWalletPubkey }) {
                       owned={balances[t.mint]}
                       costBasis={pnlBasis[t.mint]}
                       solPrice={solPrice}
-                      quickAmount={quickAmount + ' SOL'}
+                      quickAmount={quickAmount}
                       busy={!!busyMints[t.mint]}
                       onApe={onApe}
                       onSell={onSell}
@@ -3558,7 +3578,7 @@ export default function Ape({ mainWalletPubkey }) {
       )}
       {showPresets && (<PresetsModal buyPresets={buyPresets} setBuyPresets={setBuyPresets} sellPresets={sellPresets} setSellPresets={setSellPresets} onClose={() => setShowPresets(false)} />)}
       {showFilters && (<FiltersModal wildOnly={wildOnly} setWildOnly={setWildOnly} minLiq={minLiq} setMinLiq={setMinLiq} onClose={() => setShowFilters(false)} />)}
-      {showWallet && (<WalletDrawer wallet={wallet} solBalance={solBalance} solPrice={solPrice} onWithdraw={onWithdraw} onClose={() => setShowWallet(false)} busy={withdrawBusy} balances={balances} resolveToken={resolveToken} heldTokenUsd={heldTokenUsd} capUsd={BURNER_CAP_USD} />)}
+      {showWallet && (<WalletDrawer wallet={wallet} solBalance={solBalance} solPrice={solPrice} onWithdraw={onWithdraw} onClose={() => setShowWallet(false)} busy={withdrawBusy} balances={balances} resolveToken={resolveToken} heldTokenUsd={heldTokenUsd} />)}
       <StatsPanel open={showStats} onClose={() => setShowStats(false)} wallet={wallet} mainWalletPubkey={mainWalletPubkey} solPrice={solPrice} initialTab={statsTab} />
       <WatchedWallets open={showWatch} onClose={() => setShowWatch(false)} solPrice={solPrice} resolveToken={resolveToken} />
 
