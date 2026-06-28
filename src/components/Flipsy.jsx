@@ -9,29 +9,28 @@ const FLIPSY_CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap');
 
 .fp-page{
-  --ink:#0a0a0a; --ink-2:#6b6b6b; --ink-3:#9a9a9a;
-  --pink:#e0364f; --mint:#16a34a; --lav:#6b6b6b; --peach:#e8820c;
-  --sky:#2f6bff; --gold:#a67200;
-  --sol-mint:#16a34a; --sol-mag:#e0364f; --sol-cyan:#2f6bff; --sol-purple:#0a0a0a;
-  --green:#16a34a; --red:#e0364f;
-  --glass:#ffffff; --glass-strong:#fafafa;
-  --border:#e4e4e7;
-  --hairline:#efeff1;
+  --ink:#2a2342; --ink-2:#6b6588; --ink-3:#a9a4c0;
+  --pink:#ff5d7e; --mint:#13c98c; --lav:#6d4aff; --peach:#ffb13d;
+  --sky:#6d4aff; --gold:#ffb13d;
+  --sol-mint:#13c98c; --sol-mag:#ff5d7e; --sol-cyan:#6d4aff; --sol-purple:#6d4aff;
+  --green:#13c98c; --red:#ff5d7e;
+  --up:#13c98c; --upd:#0fae78; --down:#ff5d7e; --downd:#f23d63; --vio:#6d4aff; --viod:#5a37e6;
+  --glass:#ffffff; --glass-strong:#faf9ff;
+  --border:#e7e3f5;
+  --hairline:#efecfa;
 
-  position:relative;min-height:100dvh;min-height:100dvh;width:100%;
+  position:relative;min-height:100dvh;width:100%;
   padding-bottom:calc(env(safe-area-inset-bottom) + 60px);overflow-x:hidden;
   color:var(--ink);
-  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",system-ui,sans-serif;
-  background:#ffffff;
+  font-family:'Space Grotesk',-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",system-ui,sans-serif;
+  background:linear-gradient(170deg,#f1edfc 0%,#eaf4f1 52%,#f3eefb 100%);
   border-radius:0;
 }
 .fp-page *{box-sizing:border-box}
 
-@keyframes fp-drift{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(20px,-30px) scale(1.05)}}
 @keyframes fp-pulse{0%,100%{opacity:1}50%{opacity:0.4}}
 @keyframes fp-spin{to{transform:rotate(360deg)}}
 @keyframes fp-shimmer{0%{background-position:0% 50%}100%{background-position:200% 50%}}
-@keyframes fp-mascot-float{0%,100%{transform:none}50%{transform:none}}
 @keyframes fp-card-enter{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
 @keyframes fp-live-glow{0%,100%{opacity:0.45}50%{opacity:0.7}}
 @keyframes fp-price-tick{from{transform:translateY(2px);opacity:0}to{transform:translateY(0);opacity:1}}
@@ -40,7 +39,6 @@ const FLIPSY_CSS = `
 @keyframes fp-modal-up{from{transform:translateX(-50%) translateY(100%);opacity:0}to{transform:translateX(-50%) translateY(0);opacity:1}}
 @keyframes fp-timer-urgent{0%,100%{transform:scale(1)}50%{transform:scale(1.04)}}
 
-.fp-blob{display:none !important}
 
 /* CLAIM BANNER */
 .fp-claim-banner{
@@ -576,6 +574,125 @@ const FLIPSY_CSS = `
   margin-top:10px;text-align:center;
   font-family:ui-monospace,Menlo,monospace;font-size:10px;color:var(--ink-3);font-weight:600;letter-spacing:0.3px;
 }
+
+/* ===== Flipsy v7 layout (fx-*) ===== */
+.fx-page{font-family:'Space Grotesk',sans-serif}
+.fx-inner{max-width:480px;margin:0 auto;padding:0 0 10px}
+.fx-claim{display:flex;align-items:center;gap:9px;justify-content:center;margin:12px 14px 4px;padding:11px 14px;border-radius:16px;background:linear-gradient(135deg,#6d4aff,#8b6bff);color:#fff;font-family:'JetBrains Mono',monospace;font-weight:700;font-size:11px;letter-spacing:.04em;cursor:pointer;box-shadow:0 8px 20px rgba(109,74,255,.32)}
+.fx-claim-c{background:rgba(255,255,255,.25);border-radius:999px;padding:2px 9px}
+.fx-flash-wrap{position:sticky;top:8px;z-index:60;display:flex;justify-content:center;pointer-events:none;padding:6px 14px 0}
+.fx-flash{pointer-events:auto;padding:10px 16px;border-radius:14px;font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#fff;box-shadow:0 10px 26px rgba(0,0,0,.16)}
+.fx-flash.success{background:linear-gradient(135deg,#1ad99a,#12b884)}
+.fx-flash.error{background:linear-gradient(135deg,#ff6f8d,#f2456a)}
+
+.fx-hd{display:flex;align-items:center;justify-content:space-between;padding:15px 16px 9px}
+.fx-br{display:flex;align-items:center;gap:10px}
+.fx-mascot{width:38px;height:38px;border-radius:50%;background:radial-gradient(circle at 32% 28%,#8b6bff,#6d4aff 60%,#5a37e6);display:grid;place-items:center;font-weight:700;font-size:18px;color:#fff;box-shadow:0 5px 16px rgba(109,74,255,.4),inset 0 0 0 2px rgba(255,255,255,.25)}
+.fx-bt{font-size:21px;font-weight:700;letter-spacing:-.02em;line-height:1;color:#36284f}
+.fx-bs{font-family:'JetBrains Mono',monospace;font-size:8px;letter-spacing:.14em;text-transform:uppercase;color:#8a85a6;margin-top:3px}
+.fx-hr{display:flex;align-items:center;gap:8px}
+.fx-streak{display:flex;align-items:center;gap:4px;background:linear-gradient(135deg,#ffc861,#ff9d3c);border-radius:999px;padding:7px 12px;font-family:'JetBrains Mono',monospace;font-weight:700;font-size:13px;color:#5a3500;box-shadow:0 5px 14px rgba(255,157,60,.38)}
+.fx-bal{display:flex;flex-direction:column;align-items:flex-end;background:#fff;border-radius:16px;padding:6px 12px;box-shadow:0 4px 12px rgba(80,60,160,.1)}
+.fx-bal-connect{cursor:pointer;background:linear-gradient(135deg,#6d4aff,#8b6bff)}
+.fx-bal-connect .fx-bal-v{color:#fff;font-size:13px}
+.fx-bal-l{font-family:'JetBrains Mono',monospace;font-size:7px;letter-spacing:.12em;color:var(--ink-3)}
+.fx-bal-v{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:var(--vio)}
+.fx-bal-v.fail{color:var(--down)}
+.fx-bal.warn{box-shadow:0 0 0 1.5px var(--down) inset,0 4px 12px rgba(80,60,160,.1)}
+
+.fx-prow{display:flex;align-items:center;gap:9px;padding:4px 16px 9px}
+.fx-ppill{display:flex;align-items:center;gap:10px;background:#fff;border-radius:999px;padding:6px 16px 6px 6px;box-shadow:0 5px 16px rgba(80,60,160,.12)}
+.fx-ptok{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#6d4aff,#13c98c);display:grid;place-items:center;color:#fff;font-weight:700;font-size:14px}
+.fx-pv{font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:700;color:var(--ink);line-height:1}
+.fx-pl{font-family:'JetBrains Mono',monospace;font-size:8px;letter-spacing:.1em;color:var(--ink-3);margin-top:2px}
+
+.fx-fclbl{padding:6px 16px 6px;font-family:'JetBrains Mono',monospace;font-size:8.5px;letter-spacing:.12em;color:#7a7498;font-weight:700}
+.fx-fcrow{display:flex;gap:8px;overflow-x:auto;padding:0 16px 4px;-webkit-overflow-scrolling:touch}
+.fx-fcrow::-webkit-scrollbar{display:none}
+.fx-fcell{flex:0 0 auto;min-width:62px;background:#fff;border-radius:17px;padding:9px 12px;box-shadow:0 4px 12px rgba(80,60,160,.08)}
+.fx-ft{font-family:'JetBrains Mono',monospace;font-size:8px;letter-spacing:.06em;color:var(--ink-3);margin-bottom:3px}
+.fx-fp{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:var(--ink);line-height:1}
+.fx-fd{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;margin-top:3px}
+.fx-fd.u{color:var(--up)} .fx-fd.n{color:var(--ink-3)} .fx-fd.d{color:var(--down)}
+
+.fx-hist{display:flex;align-items:center;gap:7px;padding:9px 17px 4px}
+.fx-hl{font-family:'JetBrains Mono',monospace;font-size:8px;letter-spacing:.1em;color:#7a7498;font-weight:700}
+.fx-pips{display:flex;gap:3px}
+.fx-pip{width:9px;height:9px;border-radius:50%}
+.fx-pip.u{background:var(--up);box-shadow:0 2px 5px rgba(19,201,140,.5)}
+.fx-pip.d{background:var(--down);opacity:.6}
+.fx-pip.t{background:var(--ink-3);opacity:.5}
+.fx-wr{margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--up);font-weight:700}
+
+.fx-rh{display:flex;align-items:baseline;justify-content:space-between;padding:10px 17px 8px}
+.fx-rh h3{font-size:17px;font-weight:700;color:#36284f;margin:0}
+.fx-rh em{font-style:normal;font-family:'JetBrains Mono',monospace;color:var(--vio)}
+.fx-sw{font-family:'JetBrains Mono',monospace;font-size:9px;color:#8a85a6}
+
+.fx-wrap{padding:0 15px}
+.fx-lcard{background:#fff;border-radius:30px;padding:13px;box-shadow:0 16px 40px rgba(80,55,160,.18)}
+.fx-lhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:11px;padding:2px 4px}
+.fx-lv{display:flex;align-items:center;gap:7px;font-weight:700;font-size:13px;color:var(--vio);letter-spacing:.03em}
+.fx-dot{width:7px;height:7px;border-radius:50%;background:var(--up);box-shadow:0 0 8px var(--up);animation:fx-pl 1.3s infinite}
+@keyframes fx-pl{50%{opacity:.4}}
+.fx-ep{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink-3);margin-left:6px}
+.fx-tm{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:var(--down)}
+.fx-tm.urgent{animation:fx-pl .6s infinite}
+.fx-big{width:100%;border:none;border-radius:20px;padding:15px 18px;display:flex;align-items:center;gap:9px;cursor:pointer;color:#fff;font-family:'Space Grotesk',sans-serif;box-shadow:0 8px 20px rgba(0,0,0,.08)}
+.fx-big:active{transform:translateY(1px)}
+.fx-ic{font-size:19px;font-weight:700}
+.fx-lb{font-size:16px;font-weight:700;letter-spacing:.02em}
+.fx-ml{margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:700}
+.fx-big.up{background:linear-gradient(135deg,#1ad99a,#12b884)}
+.fx-big.down{background:linear-gradient(135deg,#ff6f8d,#f2456a)}
+.fx-panel{background:linear-gradient(180deg,#fbfaff,#f4f1fc);border-radius:24px;padding:14px 15px;margin:9px 0;box-shadow:inset 0 0 0 1.5px rgba(109,74,255,.1)}
+.fx-plab{display:flex;align-items:center;justify-content:space-between}
+.fx-plab .fx-l{font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.12em;color:var(--ink-2);font-weight:700}
+.fx-co{font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--ink-3)}
+.fx-prow2{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:6px}
+.fx-cprice{font-family:'JetBrains Mono',monospace;font-size:25px;font-weight:700;letter-spacing:-.01em}
+.fx-cdelta{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:#fff;border-radius:999px;padding:7px 13px;white-space:nowrap}
+.fx-spk{display:block;width:100%;height:50px;margin:9px 0 6px}
+.fx-metrow{display:flex;gap:8px;margin-top:4px}
+.fx-met{flex:1;background:#fff;border-radius:14px;padding:8px 11px;box-shadow:0 2px 8px rgba(80,60,160,.06)}
+.fx-ml2{font-family:'JetBrains Mono',monospace;font-size:7.5px;letter-spacing:.1em;color:var(--ink-3)}
+.fx-mv{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:var(--ink);margin-top:2px}
+.fx-mv.g{color:var(--gold)}
+.fx-sent{margin:11px 2px 2px}
+.fx-sl{display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;margin-bottom:4px}
+.fx-sl .su{color:var(--up)} .fx-sl .sd{color:var(--down)}
+.fx-bar{height:8px;border-radius:999px;overflow:hidden;background:var(--down)}
+.fx-bar .fx-f{height:100%;background:var(--up);border-radius:999px 0 0 999px}
+.fx-pos{display:flex;justify-content:space-between;margin-top:10px;padding:9px 13px;border-radius:14px;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;background:rgba(19,201,140,.12);color:var(--upd)}
+
+.fx-empty{background:#fff;border-radius:24px;padding:30px 18px;text-align:center;box-shadow:0 10px 26px rgba(80,55,160,.12);font-family:'JetBrains Mono',monospace;color:var(--ink-2);font-size:12px}
+.fx-empty-i{font-size:30px;margin-bottom:8px}
+.fx-empty-t{font-weight:700;color:var(--ink);font-size:14px;margin-bottom:4px;font-family:'Space Grotesk',sans-serif}
+.fx-empty-m{font-size:11px;color:var(--ink-3)}
+.fx-empty.err .fx-empty-t{color:var(--down)}
+
+.fx-utitle{display:flex;align-items:baseline;justify-content:space-between;padding:18px 17px 9px}
+.fx-utitle h4{font-size:14px;font-weight:700;color:#36284f;margin:0}
+.fx-c{font-family:'JetBrains Mono',monospace;font-size:9px;color:#8a85a6}
+.fx-ugrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:0 15px}
+.fx-ut{background:#fff;border-radius:22px;padding:12px;box-shadow:0 6px 16px rgba(80,55,160,.1)}
+.fx-uh{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px}
+.fx-ue{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:var(--vio)}
+.fx-ub{font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:700;letter-spacing:.08em;color:#fff;background:linear-gradient(135deg,#6d4aff,#8b6bff);border-radius:999px;padding:3px 9px}
+.fx-us2{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--ink-3)}
+.fx-us{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--ink-2);margin-bottom:9px}
+.fx-us b{color:var(--ink)} .fx-us .g{color:var(--gold);font-weight:700}
+.fx-ubt{display:flex;gap:7px;margin-top:8px}
+.fx-mini{flex:1;border-radius:14px;padding:9px;font-size:11px;font-weight:700;border:none;cursor:pointer;color:#fff;font-family:'Space Grotesk',sans-serif}
+.fx-mini.u{background:linear-gradient(135deg,#1ad99a,#12b884)}
+.fx-mini.d{background:linear-gradient(135deg,#ff6f8d,#f2456a)}
+
+.fx-tabs{display:flex;gap:8px;padding:18px 15px 4px}
+.fx-tab{flex:1;text-align:center;padding:12px;border-radius:18px;font-size:11px;font-weight:700;font-family:'JetBrains Mono',monospace;background:#fff;color:#8a85a6;box-shadow:0 5px 14px rgba(80,55,160,.08);cursor:pointer;position:relative}
+.fx-tab.on{background:linear-gradient(135deg,#6d4aff,#8b6bff);color:#fff;box-shadow:0 8px 18px rgba(109,74,255,.34)}
+.fx-tab.disabled{opacity:.55;cursor:default}
+.fx-soon{font-size:7px;letter-spacing:.06em;background:var(--ink-3);color:#fff;border-radius:999px;padding:1px 5px;margin-left:5px;vertical-align:middle}
+.fx-footer{text-align:center;font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--ink-3);padding:18px 24px 8px;line-height:1.5}
 `;
 
 function injectFlipsyStyles() {
@@ -587,7 +704,12 @@ function injectFlipsyStyles() {
   document.head.appendChild(tag);
 }
 
-const BLOCKED_COUNTRIES = ['US'];
+const BLOCKED_COUNTRIES = [
+  // Comprehensively sanctioned / high-risk jurisdictions (baseline).
+  // NOTE: prediction-market & online-gaming rules vary widely by country and by
+  // US state — review and expand this list with counsel before a public launch.
+  'US', 'IR', 'KP', 'SY', 'CU',
+];
 const GEO_BYPASS_WALLETS = new Set([
   'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV',
   'GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA',
@@ -596,6 +718,17 @@ const DEFAULT_MIN_BET = 1;
 const DEFAULT_MAX_BET = 25;
 const DEFAULT_CLAIM_FORFEIT_DELAY = 21_600; // 6 hours
 const NET_MULT = 0.75;
+
+// Illustrative SOL price forecasts for the strip. These are PLACEHOLDER values —
+// replace with a live feed from your backend (they will otherwise go stale).
+// Set SOL_FORECASTS = [] to hide the forecast strip entirely.
+const SOL_FORECASTS = [
+  { t: 'TODAY', p: '$72.49', d: '+2.4%', k: 'u' },
+  { t: 'TMRW',  p: '$73.28', d: '+3.5%', k: 'u' },
+  { t: '7D',    p: '$76.55', d: '+8.1%', k: 'u' },
+  { t: '30D',   p: '$75.42', d: '+6.5%', k: 'u' },
+  { t: 'EOY',   p: '$80.00', d: '+13%',  k: 'u' },
+];
 
 async function checkGeo() {
   const sources = [
@@ -614,14 +747,15 @@ async function checkGeo() {
       if (cc) return { country: cc, blocked: BLOCKED_COUNTRIES.includes(cc) };
     } catch {}
   }
-  return { country: 'UNKNOWN', blocked: false };
+  // Fail CLOSED: if geo can't be determined (both sources failed, timed out, or
+  // were blocked by an ad-blocker / VPN), deny rather than allow. Wallets in
+  // GEO_BYPASS_WALLETS still pass, so testing isn't affected.
+  return { country: 'UNKNOWN', blocked: true };
 }
 
 function BlockScreen({ title, message, sub }) {
   return (
     <div className="fp-page">
-      <div className="fp-blob" style={{ width: 320, height: 320, background: '#FF8FBE', top: '5%', left: '-80px' }}/>
-      <div className="fp-blob" style={{ width: 360, height: 360, background: '#A0E7FF', bottom: '10%', right: '-100px', animationDelay: '3s' }}/>
       <div className="fp-block-wrap">
         <div className="fp-block-card">
           <div className="fp-block-icon">🔒</div>
@@ -803,7 +937,7 @@ function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, t
 
   useEffect(() => {
     if (open) {
-      setAmount('5'); setStatus('idle'); setErrMsg('');
+      setAmount(String(Math.min(Math.max(5, minBet), maxBet))); setStatus('idle'); setErrMsg('');
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   }, [open]);
@@ -827,6 +961,11 @@ function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, t
   const belowMin = amt > 0 && amt < minBet;
   const aboveMax = amt > maxBet;
   const invalidAmount = belowMin || aboveMax || insufficient;
+
+  // Quick-bet chips clamped to the live min/max so a preset can never be invalid.
+  const chipPresets = [1, 5, 10, 25, 50, 100];
+  const chipsInRange = chipPresets.filter(v => v >= minBet && v <= maxBet);
+  const betChips = (chipsInRange.length ? chipsInRange : [minBet, maxBet]).slice(0, 4);
 
   const handleTrade = async () => {
     if (amt <= 0 || invalidAmount) return;
@@ -882,7 +1021,7 @@ function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, t
         </div>
 
         <div className="fp-bet-chips">
-          {[1, 5, 10, 25].map(v => {
+          {betChips.map(v => {
             const active = parseFloat(amount) === v;
             return (
               <button
@@ -939,124 +1078,128 @@ function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, t
 // ============================================================
 // ROUND CARD
 // ============================================================
-function RoundCard({ round, state, userBets, livePrice, onSideTap, claim, claimable }) {
-  const { epoch, headsPool = 0, tailsPool = 0, lockPrice = 0, closePrice = 0, lockTime = 0, closeTime = 0, outcome = 'unresolved' } = round;
-  const totalPool = headsPool + tailsPool;
-  const headsPayout = headsPool > 0 ? 1 + ((totalPool / headsPool) - 1) * NET_MULT : 2.0;
-  const tailsPayout = tailsPool > 0 ? 1 + ((totalPool / tailsPool) - 1) * NET_MULT : 2.0;
-
-  const isPrev = state === 'previous';
-  const isLive = state === 'live';
-  const isNext = state === 'next';
-  const isLater = state === 'later';
+function LiveHero({ round, livePrice, bets, onSide }) {
+  const { epoch, headsPool = 0, tailsPool = 0, lockPrice = 0, closeTime = 0 } = round;
+  const total = headsPool + tailsPool;
+  const headsPayout = headsPool > 0 ? 1 + ((total / headsPool) - 1) * NET_MULT : 2.0;
+  const tailsPayout = tailsPool > 0 ? 1 + ((total / tailsPool) - 1) * NET_MULT : 2.0;
 
   const [now, setNow] = useState(Math.floor(Date.now() / 1000));
   useEffect(() => {
-    if (!isLive) return;
     const i = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
     return () => clearInterval(i);
-  }, [isLive]);
+  }, []);
 
-  let badge, badgeKey;
-  if (isPrev)  { badge = 'CLOSED'; badgeKey = 'prev'; }
-  if (isLive)  { badge = 'LIVE';   badgeKey = 'live'; }
-  if (isNext)  { badge = 'NEXT';   badgeKey = 'next'; }
-  if (isLater) { badge = 'LATER';  badgeKey = 'later'; }
+  // rolling live-price buffer for the sparkline (resets per round)
+  const [hist, setHist] = useState([]);
+  useEffect(() => { setHist([]); }, [epoch]);
+  useEffect(() => {
+    if (livePrice > 0) setHist(h => (h.length && h[h.length - 1] === livePrice ? h : [...h.slice(-39), livePrice]));
+  }, [livePrice]);
 
-  const priceDiff = isLive && lockPrice != null ? livePrice - lockPrice : 0;
-  const isPriceUp = priceDiff >= 0;
-  const timeLeft = isLive ? Math.max(0, closeTime - now) : 0;
-  const startsIn = isNext || isLater ? Math.max(0, lockTime - now) : 0;
-  const urgent = isLive && timeLeft <= 10 && timeLeft > 0;
-  const longWon = isPrev && outcome === 'heads';
-  const shortWon = isPrev && outcome === 'tails';
-  const fmtTime = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  const timeLeft = Math.max(0, closeTime - now);
+  const urgent = timeLeft <= 10 && timeLeft > 0;
+  const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
-  const betsArr = Array.isArray(userBets) ? userBets : (userBets ? [userBets] : []);
-  const longTotal = betsArr.filter(b => b.side === 'heads').reduce((s, b) => s + b.amount, 0);
-  const shortTotal = betsArr.filter(b => b.side === 'tails').reduce((s, b) => s + b.amount, 0);
+  const priceDiff = lockPrice > 0 ? livePrice - lockPrice : 0;
+  const up = priceDiff >= 0;
+  const upPct = total > 0 ? Math.round((headsPool / total) * 100) : 50;
 
-  const cardCls = 'fp-card fp-card-' + state + (urgent ? ' fp-card-urgent' : '');
+  const betsArr = Array.isArray(bets) ? bets : (bets ? [bets] : []);
+  const myUp = betsArr.filter(b => b.side === 'heads').reduce((s, b) => s + b.amount, 0);
+  const myDown = betsArr.filter(b => b.side === 'tails').reduce((s, b) => s + b.amount, 0);
+  const myBet = myUp + myDown;
+  const mySide = myUp >= myDown ? 'heads' : 'tails';
+  const myPayout = mySide === 'heads' ? headsPayout : tailsPayout;
+
+  let spark = null;
+  if (hist.length >= 2) {
+    const min = Math.min(...hist), max = Math.max(...hist), rng = (max - min) || 1;
+    const pts = hist.map((v, i) => `${((i / (hist.length - 1)) * 300).toFixed(1)},${(50 - ((v - min) / rng) * 44).toFixed(1)}`).join(' ');
+    spark = (
+      <svg className="fx-spk" viewBox="0 0 300 54" preserveAspectRatio="none">
+        <polyline points={pts} fill="none" stroke={up ? 'var(--up)' : 'var(--down)'} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
 
   return (
-    <div className={cardCls}>
-      {isLive && <div className="fp-card-livering"/>}
-      <div className="fp-card-head">
-        <span className={'fp-card-badge ' + badgeKey}>
-          {isLive && <span className="d"/>}{badge}
-        </span>
-        <span className="fp-card-epoch">#{epoch}</span>
+    <div className="fx-lcard">
+      <div className="fx-lhead">
+        <span className="fx-lv"><span className="fx-dot" />LIVE<span className="fx-ep">#{epoch}</span></span>
+        <span className={'fx-tm' + (urgent ? ' urgent' : '')}>{fmt(timeLeft)}</span>
       </div>
 
-      <button
-        className={'fp-card-side fp-card-long ' + (longWon ? 'won' : isPrev ? 'lost' : '') + (longTotal > 0 ? ' active' : '')}
-        onClick={() => !isPrev && onSideTap(epoch, 'heads', headsPayout, tailsPayout)}
-        disabled={isPrev}
-      >
-        <span className="fp-card-side-icon">↑</span>
-        <span className="fp-card-side-label">UP</span>
-        <span className="fp-card-side-mult">{headsPayout.toFixed(2)}×</span>
+      <button className="fx-big up" onClick={() => onSide(epoch, 'heads', headsPayout, tailsPayout)}>
+        <span className="fx-ic">↑</span><span className="fx-lb">UP</span><span className="fx-ml">{headsPayout.toFixed(2)}×</span>
       </button>
 
-      <div className="fp-card-mid">
-        {isLive && (<>
-          <div className="fp-mid-label">LAST PRICE</div>
-          <div className="fp-mid-price">${livePrice.toFixed(4)}</div>
-          <div className={'fp-mid-delta ' + (isPriceUp ? 'up' : 'down')}>
-            {isPriceUp ? '↑' : '↓'} ${Math.abs(priceDiff).toFixed(4)}
+      <div className="fx-panel">
+        <div className="fx-plab">
+          <span className="fx-l">LIVE PRICE</span>
+          <span className="fx-co">locked {lockPrice > 0 ? '$' + lockPrice.toFixed(2) : '—'}</span>
+        </div>
+        <div className="fx-prow2">
+          <div className="fx-cprice" style={{ color: up ? 'var(--up)' : 'var(--down)' }}>${livePrice.toFixed(4)}</div>
+          {lockPrice > 0 && (
+            <div className="fx-cdelta" style={{ background: up ? 'var(--up)' : 'var(--down)' }}>
+              {up ? '↑' : '↓'} ${Math.abs(priceDiff).toFixed(4)}
+            </div>
+          )}
+        </div>
+        {spark}
+        <div className="fx-metrow">
+          <div className="fx-met"><div className="fx-ml2">PRIZE POOL</div><div className="fx-mv g">${total.toFixed(2)}</div></div>
+          {myBet > 0
+            ? <div className="fx-met"><div className="fx-ml2">YOUR BET</div><div className="fx-mv">${myBet.toFixed(2)} → ~${(myBet * myPayout).toFixed(2)}</div></div>
+            : <div className="fx-met"><div className="fx-ml2">DOWN PAYS</div><div className="fx-mv">{tailsPayout.toFixed(2)}×</div></div>}
+        </div>
+        <div className="fx-sent">
+          <div className="fx-sl"><span className="su">▲ UP {upPct}%</span><span className="sd">{100 - upPct}% DOWN ▼</span></div>
+          <div className="fx-bar"><div className="fx-f" style={{ width: upPct + '%' }} /></div>
+        </div>
+        {myBet > 0 && (
+          <div className="fx-pos">
+            <span>● YOUR {mySide === 'heads' ? 'UP' : 'DOWN'} BET</span>
+            <span>${myBet.toFixed(2)} → ~${(myBet * myPayout).toFixed(2)}</span>
           </div>
-          <div className="fp-mid-divider"/>
-          <div className="fp-mid-row"><span>Locked</span><span className="fp-mid-row-val">${lockPrice.toFixed(2)}</span></div>
-          <div className="fp-mid-row"><span>Pool</span><span className="fp-mid-row-val gold">${totalPool.toFixed(2)}</span></div>
-          <div className={'fp-mid-timer' + (urgent ? ' urgent' : '')}>{fmtTime(timeLeft)}</div>
-        </>)}
-        {isNext && (<>
-          <div className="fp-mid-label">PRIZE POOL</div>
-          <div className="fp-mid-pool">${totalPool.toFixed(2)}</div>
-          <div className="fp-mid-divider"/>
-          <div className="fp-mid-payout-preview">
-            <div><span className="l">Up</span> wins <b>${(5 * headsPayout).toFixed(2)}</b> per $5</div>
-            <div><span className="s">Down</span> wins <b>${(5 * tailsPayout).toFixed(2)}</b> per $5</div>
-          </div>
-          <div className="fp-mid-starts">Starts in <b>{fmtTime(startsIn)}</b></div>
-        </>)}
-        {isLater && (<>
-          <div className="fp-mid-label">UPCOMING</div>
-          <div className="fp-mid-later-icon">⏳</div>
-          <div className="fp-mid-starts">Starts in <b>{fmtTime(startsIn)}</b></div>
-        </>)}
-        {isPrev && (<>
-          <div className="fp-mid-label">CLOSED</div>
-          <div className="fp-mid-row"><span>Lock</span><span className="fp-mid-row-val">${lockPrice.toFixed(2)}</span></div>
-          <div className="fp-mid-row"><span>Close</span><span className="fp-mid-row-val">${closePrice.toFixed(2)}</span></div>
-          <div className="fp-mid-divider"/>
-          <div className={'fp-mid-outcome ' + (longWon ? 'long' : shortWon ? 'short' : 'tie')}>
-            {longWon ? '↑ UP WON' : shortWon ? '↓ DOWN WON' : '= TIE'}
-          </div>
-          {claimable && <button className="fp-mid-claim" onClick={() => claim?.(epoch)}>💰 Claim Winnings</button>}
-        </>)}
+        )}
       </div>
 
-      <button
-        className={'fp-card-side fp-card-short ' + (shortWon ? 'won' : isPrev ? 'lost' : '') + (shortTotal > 0 ? ' active' : '')}
-        onClick={() => !isPrev && onSideTap(epoch, 'tails', headsPayout, tailsPayout)}
-        disabled={isPrev}
-      >
-        <span className="fp-card-side-mult">{tailsPayout.toFixed(2)}×</span>
-        <span className="fp-card-side-label">DOWN</span>
-        <span className="fp-card-side-icon">↓</span>
+      <button className="fx-big down" onClick={() => onSide(epoch, 'tails', headsPayout, tailsPayout)}>
+        <span className="fx-ic">↓</span><span className="fx-lb">DOWN</span><span className="fx-ml">{tailsPayout.toFixed(2)}×</span>
       </button>
+    </div>
+  );
+}
 
-      {longTotal > 0 && (
-        <div className="fp-card-position fp-card-position-heads">
-          <span>● UP</span><span>${longTotal.toFixed(2)}</span>
-        </div>
+function UpcomingTile({ round, next, onSide }) {
+  const { epoch, headsPool = 0, tailsPool = 0, lockTime = 0 } = round;
+  const total = headsPool + tailsPool;
+  const headsPayout = headsPool > 0 ? 1 + ((total / headsPool) - 1) * NET_MULT : 2.0;
+  const tailsPayout = tailsPool > 0 ? 1 + ((total / tailsPool) - 1) * NET_MULT : 2.0;
+
+  const [now, setNow] = useState(Math.floor(Date.now() / 1000));
+  useEffect(() => {
+    const i = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
+    return () => clearInterval(i);
+  }, []);
+  const startsIn = Math.max(0, lockTime - now);
+  const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+
+  return (
+    <div className="fx-ut">
+      <div className="fx-uh">
+        <span className="fx-ue">#{epoch}</span>
+        {next ? <span className="fx-ub">NEXT</span> : <span className="fx-us2">⏱ {fmt(startsIn)}</span>}
+      </div>
+      {next && (
+        <div className="fx-us">in <b>{fmt(startsIn)}</b>{total > 0 ? <> · <span className="g">${total.toFixed(0)}</span></> : null}</div>
       )}
-      {shortTotal > 0 && (
-        <div className="fp-card-position fp-card-position-tails">
-          <span>● DOWN</span><span>${shortTotal.toFixed(2)}</span>
-        </div>
-      )}
+      <div className="fx-ubt">
+        <button className="fx-mini u" onClick={() => onSide(epoch, 'heads', headsPayout, tailsPayout)}>↑ UP</button>
+        <button className="fx-mini d" onClick={() => onSide(epoch, 'tails', headsPayout, tailsPayout)}>↓ DOWN</button>
+      </div>
     </div>
   );
 }
@@ -1184,24 +1327,42 @@ export default function Flipsy({ onConnectWallet }) {
   const liveEpoch = liveRound?.epoch ?? upcomingRounds[0]?.epoch ?? null;
   const nothingToShow = !liveRound && upcomingRounds.length === 0 && recentRounds.length === 0;
 
-  // Honest balance pill rendering — never silent zero.
-  const renderBalancePill = () => {
+  // --- derived UI data ---
+  const sortedRecent = [...recentRounds].sort((a, b) => (b.epoch || 0) - (a.epoch || 0)); // newest first
+  let streak = 0;
+  for (const r of sortedRecent) {
+    if (!r || r.outcome === 'unresolved') continue;
+    const rb = getBetsForEpoch(r.epoch);
+    if (!rb || rb.length === 0) break;            // streak counts only rounds you played
+    const won = rb.some(b => r.outcome === b.side || r.outcome === 'tie');
+    if (won) streak++; else break;
+  }
+
+  const resolved = [...recentRounds]
+    .filter(r => r && r.outcome && r.outcome !== 'unresolved')
+    .sort((a, b) => (a.epoch || 0) - (b.epoch || 0));
+  const pips = resolved.slice(-12).map(r => (r.outcome === 'heads' ? 'u' : r.outcome === 'tails' ? 'd' : 't'));
+  const upCount = pips.filter(p => p === 'u').length;
+  const upRate = pips.length ? Math.round((upCount / pips.length) * 100) : 0;
+
+  const heroRound = liveRound || upcomingRounds[0] || null;
+  const gridRounds = liveRound ? upcomingRounds.slice(0, 6) : upcomingRounds.slice(1, 7);
+
+  // Honest balance pill — never a silent zero.
+  const renderBalance = () => {
     if (!wallet.connected) {
       return (
-        <div className="fp-bal fp-bal-connect" onClick={() => onConnectWallet?.()}>
-          <span className="fp-bal-v">Connect</span>
+        <div className="fx-bal fx-bal-connect" onClick={() => onConnectWallet?.()}>
+          <span className="fx-bal-v">Connect</span>
         </div>
       );
     }
     const isLoading = balanceStatus === 'loading' || balanceStatus === 'idle';
-    const isFail    = balanceStatus === 'fail';
+    const isFail = balanceStatus === 'fail';
     return (
-      <div
-        className={'fp-bal' + (isFail ? ' fp-bal-warn' : '')}
-        title={isFail ? 'Solana devnet RPC declined the balance lookup' : undefined}
-      >
-        <span className="fp-bal-l">BAL</span>
-        <span className={'fp-bal-v' + (isLoading ? ' fp-bal-loading' : '') + (isFail ? ' fp-bal-fail' : '')}>
+      <div className={'fx-bal' + (isFail ? ' warn' : '')} title={isFail ? 'Solana RPC declined the balance lookup' : undefined}>
+        <span className="fx-bal-l">BAL</span>
+        <span className={'fx-bal-v' + (isFail ? ' fail' : '')}>
           {isFail ? 'RPC DOWN' : isLoading ? '…' : '$' + balance.toFixed(2)}
         </span>
       </div>
@@ -1209,97 +1370,105 @@ export default function Flipsy({ onConnectWallet }) {
   };
 
   return (
-    <div className="fp-page">
-      <div className="fp-blob" style={{ width: 380, height: 380, background: '#FFE8F4', top: -100, left: -120 }}/>
-      <div className="fp-blob" style={{ width: 420, height: 420, background: '#A0E7FF', top: '30%', right: -160, animationDelay: '3s' }}/>
-      <div className="fp-blob" style={{ width: 300, height: 300, background: '#FFD46B', bottom: '10%', left: -80, animationDelay: '6s' }}/>
-
+    <div className="fp-page fx-page">
       {hasClaim && (
-        <div className="fp-claim-banner" onClick={() => setRoundsOpen(true)}>
-          <span>💰</span>
+        <div className="fx-claim" onClick={() => setRoundsOpen(true)}>
+          <span>◆</span>
           <span>{claimableRounds.length} ROUND{claimableRounds.length > 1 ? 'S' : ''} READY TO COLLECT</span>
-          <b className="fp-claim-banner-count">{claimableRounds.length}</b>
+          <b className="fx-claim-c">{claimableRounds.length}</b>
         </div>
       )}
 
-      <div className="fp-page-inner">
-        {flash && (
-          <div className="fp-flash-top">
-            <div className={'fp-flash ' + flash.type}>{flash.msg}</div>
-          </div>
-        )}
+      {flash && (
+        <div className="fx-flash-wrap"><div className={'fx-flash ' + flash.type}>{flash.msg}</div></div>
+      )}
 
-        <header className="fp-header">
-          <div className="fp-brand">
-            <div className="fp-mascot">F</div>
-            <div className="fp-brand-text">
-              <div className="fp-title">flipsy</div>
-              <div className="fp-subtitle">Solana Sentiment</div>
+      <div className="fx-inner">
+        <header className="fx-hd">
+          <div className="fx-br">
+            <div className="fx-mascot">F</div>
+            <div>
+              <div className="fx-bt">flipsy</div>
+              <div className="fx-bs">Solana Sentiment</div>
             </div>
           </div>
-          <div className="fp-actions">
-            <button
-              onClick={() => setRoundsOpen(true)}
-              className={'fp-rounds-btn' + (hasClaim ? ' fp-has-claim' : '')}
-            >
-              {hasClaim ? '💰' : '📋'} Rounds
-              {hasClaim && (<span className="fp-rounds-btn-count">{claimableRounds.length}</span>)}
-            </button>
-
-            {renderBalancePill()}
+          <div className="fx-hr">
+            {streak > 0 && <div className="fx-streak">🔥 {streak}</div>}
+            {renderBalance()}
           </div>
         </header>
 
-        <div className="fp-rounds-head">
-          <h3 className="fp-rounds-title">
-            {liveEpoch != null ? <>Round <em>#{liveEpoch}</em></> : <>Rounds</>}
-          </h3>
-          <span className="fp-rounds-sub">swipe <span className="arrow">←</span></span>
+        <div className="fx-prow">
+          <div className="fx-ppill">
+            <div className="fx-ptok">◎</div>
+            <div>
+              <div className="fx-pv">{livePrice > 0 ? '$' + livePrice.toFixed(2) : '—'}</div>
+              <div className="fx-pl">SOL / USD</div>
+            </div>
+          </div>
         </div>
 
-        <div className="fp-carousel" ref={carouselRef}>
-          {loading && nothingToShow && (
-            <div className="fp-card fp-card-loading">Loading rounds…</div>
-          )}
-          {!loading && nothingToShow && chainError && (
-            <div className="fp-card fp-card-empty err">
-              <div className="fp-card-empty-icon">⚠️</div>
-              <div className="fp-card-empty-title">Couldn't load rounds</div>
-              <div className="fp-card-empty-msg">{chainError}</div>
+        {SOL_FORECASTS.length > 0 && (
+          <>
+            <div className="fx-fclbl">◎ SOL FORECAST · ANALYST ESTIMATES</div>
+            <div className="fx-fcrow">
+              {SOL_FORECASTS.map((f, i) => (
+                <div className="fx-fcell" key={i}>
+                  <div className="fx-ft">{f.t}</div>
+                  <div className="fx-fp">{f.p}</div>
+                  <div className={'fx-fd ' + (f.k || 'n')}>{f.k === 'u' ? '↑ ' : ''}{f.d}</div>
+                </div>
+              ))}
             </div>
+          </>
+        )}
+
+        {pips.length > 0 && (
+          <div className="fx-hist">
+            <span className="fx-hl">LAST {pips.length}</span>
+            <span className="fx-pips">{pips.map((p, i) => <span key={i} className={'fx-pip ' + p} />)}</span>
+            <span className="fx-wr">{upRate}% ↑</span>
+          </div>
+        )}
+
+        <div className="fx-rh">
+          <h3>{heroRound ? <>Live Round <em>#{heroRound.epoch}</em></> : <>Rounds</>}</h3>
+          <span className="fx-sw">↑ up or ↓ down?</span>
+        </div>
+
+        <div className="fx-wrap">
+          {loading && nothingToShow && <div className="fx-empty">Loading rounds…</div>}
+          {!loading && nothingToShow && chainError && (
+            <div className="fx-empty err"><div className="fx-empty-i">⚠️</div><div className="fx-empty-t">Couldn't load rounds</div><div className="fx-empty-m">{chainError}</div></div>
           )}
           {!loading && nothingToShow && !chainError && (
-            <div className="fp-card fp-card-empty">
-              <div className="fp-card-empty-icon">⏳</div>
-              <div className="fp-card-empty-title">No active rounds</div>
-              <div className="fp-card-empty-msg">New rounds start automatically. Hang tight.</div>
-            </div>
+            <div className="fx-empty"><div className="fx-empty-i">⏳</div><div className="fx-empty-t">No active rounds</div><div className="fx-empty-m">New rounds start automatically. Hang tight.</div></div>
           )}
-          {[...recentRounds].reverse().map(r => (
-            <RoundCard key={`prev-${r.epoch}`} round={r} state="previous"
-              userBets={getBetsForEpoch(r.epoch)} livePrice={livePrice}
-              onSideTap={handleSideTap} claim={handleClaim} claimable={isClaimable(r)} />
-          ))}
-          {liveRound && (
-            <RoundCard round={liveRound} state="live"
-              userBets={getBetsForEpoch(liveRound.epoch)} livePrice={livePrice}
-              onSideTap={handleSideTap} />
+          {heroRound && (
+            <LiveHero round={heroRound} livePrice={livePrice} bets={getBetsForEpoch(heroRound.epoch)} onSide={handleSideTap} />
           )}
-          {upcomingRounds[0] && (
-            <RoundCard key={`next-${upcomingRounds[0].epoch}`} round={upcomingRounds[0]} state="next"
-              userBets={getBetsForEpoch(upcomingRounds[0].epoch)} livePrice={livePrice}
-              onSideTap={handleSideTap} />
-          )}
-          {upcomingRounds.slice(1).map(r => (
-            <RoundCard key={`later-${r.epoch}`} round={r} state="later"
-              userBets={getBetsForEpoch(r.epoch)} livePrice={livePrice}
-              onSideTap={handleSideTap} />
-          ))}
         </div>
 
-        <div className="fp-footer">
-          Powered by Solana · Non-custodial · 25% fee on wins only · No other fees
+        {gridRounds.length > 0 && (
+          <>
+            <div className="fx-utitle"><h4>Upcoming rounds</h4><span className="fx-c">bet early →</span></div>
+            <div className="fx-ugrid">
+              {gridRounds.map((r, i) => (
+                <UpcomingTile key={r.epoch} round={r} next={!!liveRound && i === 0} onSide={handleSideTap} />
+              ))}
+            </div>
+          </>
+        )}
+
+        <div className="fx-tabs">
+          <div className="fx-tab on">◆ Play</div>
+          <div className="fx-tab disabled">🏆 Leaders<span className="fx-soon">soon</span></div>
+          <div className="fx-tab" onClick={() => setRoundsOpen(true)}>
+            📋 My Rounds{hasClaim ? ` · ${claimableRounds.length}` : ''}
+          </div>
         </div>
+
+        <div className="fx-footer">Powered by Solana · Non-custodial · 25% fee on wins only · No other fees</div>
       </div>
 
       <RoundsPopup
