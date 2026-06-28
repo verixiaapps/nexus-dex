@@ -976,6 +976,34 @@ function nxdGetCached(lens) {
   return hit ? hit.tokens : null;
 }
 
+// Shape a token from /api/nx/discover (ALREADY normalized server-side) into the
+// client token shape. Keeps sym/change/mcap/etc verbatim; only derives the
+// client-only fields (age, fresh, emoji) the UI needs. No re-normalization.
+function nxdShape(t) {
+  if (!t || !t.mint) return null;
+  const createdMs = Number(t.pairCreatedAtMs);
+  const am = Number.isFinite(createdMs) && createdMs > 0 ? (Date.now() - createdMs) : Infinity;
+  return {
+    mint:      t.mint,
+    sym:       t.sym || t.symbol || '???',
+    name:      t.name || t.sym || 'Unknown',
+    emoji:     emojiFor(t.sym || t.symbol || ''),
+    icon:      t.icon || t.logoURI || null,
+    price:     Number(t.price || 0),
+    change:    Number.isFinite(t.change) ? t.change : null,
+    age:       ageStr(am),
+    ageMs:     am,
+    mcap:      Number(t.mcap || t.fdv || 0),
+    volume24h: Number(t.volume24h || 0),
+    holders:   Number(t.holders || 0),
+    liquidity: Number(t.liquidity || 0),
+    decimals:  Number(t.decimals ?? 6),
+    pool:      t.pool || null,
+    fresh:     am < 24 * 3600 * 1000,
+    source:    'discover',
+  };
+}
+
 async function nxdFetchLens(lens, limit = 80) {
   if (_nxdInflight.has(lens)) return _nxdInflight.get(lens);
   const job = (async () => {
@@ -983,7 +1011,11 @@ async function nxdFetchLens(lens, limit = 80) {
       const r = await fetch('/api/nx/discover?lens=' + encodeURIComponent(lens) + '&limit=' + limit);
       const d = await r.json();
       const raw = Array.isArray(d?.tokens) ? d.tokens : [];
-      const tokens = _uniqMint(raw.map(normalize).filter(t => t && t.mint));
+      // Server tokens are ALREADY normalized (sym, change, mcap, liquidity…).
+      // Do NOT run them through normalize() again — that reads t.symbol/t.id/
+      // t.firstPool which don't exist here, producing $??? and null pools.
+      // Just add the client-only fields (age/fresh/emoji) and drop stables.
+      const tokens = _uniqMint(raw.map(nxdShape).filter(t => t && t.mint && !isStablecoin(t)));
       _nxdCache.set(lens, { at: Date.now(), tokens });
       // Warm sparklines + charts for the whole lens immediately.
       nxWarm(tokens.map(t => t.mint));
@@ -1187,9 +1219,10 @@ function MwSparkline({ mint, price, change, pool, w = 50, h = 22, full = false }
   if (!pts) return null;
 
   const path = mwSparkPath(pts, w, h);
-  // Color must match the % shown next to it — never a red line on a green +%.
+  // No red sparklines: up = green, down = neutral gray (never red). The colored
+  // %/price pills next to it still carry direction; the line never shows red.
   const up = Number.isFinite(change) ? change >= 0 : path.up;
-  const col = up ? 'var(--green)' : 'var(--down)';
+  const col = up ? 'var(--green)' : '#5b6472';
   const id = 'mws' + (up ? 'u' : 'd') + (mint ? String(mint).slice(0, 8) : '');
   return (
     <svg width={full ? '100%' : w} height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ flex: '0 0 auto', display: 'block', overflow: 'visible' }}>
@@ -1406,12 +1439,12 @@ const MWD_CSS = `
 .mwd-sym .pc{font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700}
 .mwd-meta{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink2);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mwd-meta .k{color:var(--ink3)}
-.mwd-risk{display:flex;align-items:center;gap:2.5px;margin-top:5px}
-.mwd-risk i{width:13px;height:3px;border-radius:2px;background:var(--line2)}
-.mwd-risk .lab{font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;margin-left:6px}
-.mwd-risk.low i.on{background:var(--up);box-shadow:0 0 5px -1px var(--up)} .mwd-risk.low .lab{color:var(--up)}
-.mwd-risk.med i.on{background:var(--amber);box-shadow:0 0 5px -1px var(--amber)} .mwd-risk.med .lab{color:var(--amber)}
-.mwd-risk.high i.on{background:var(--down);box-shadow:0 0 5px -1px var(--down)} .mwd-risk.high .lab{color:var(--down)}
+.mwd-sig{display:flex;align-items:center;gap:2.5px;margin-top:5px}
+.mwd-sig i{width:13px;height:3px;border-radius:2px;background:var(--line2)}
+.mwd-sig .lab{font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;margin-left:6px}
+.mwd-sig.high i.on{background:var(--up);box-shadow:0 0 5px -1px var(--up)} .mwd-sig.high .lab{color:var(--up)}
+.mwd-sig.mid i.on{background:var(--amber);box-shadow:0 0 5px -1px var(--amber)} .mwd-sig.mid .lab{color:var(--amber)}
+.mwd-sig.low i.on{background:var(--ink3)} .mwd-sig.low .lab{color:var(--ink3)}
 .mwd-spark{flex-shrink:0;width:66px;height:32px;display:flex;align-items:center}
 .mwd-right{flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end;gap:6px;min-width:74px}
 .mwd-price{font-family:'JetBrains Mono',monospace;font-size:12.5px;font-weight:700}
@@ -1435,22 +1468,14 @@ function useMwdCSS() {
 
 // Risk tier from real fields: liquidity vs mcap + age. Mirrors the preview's
 // segmented meter (low/med/high). Pure presentation — no new data.
-function mwdRisk(t) {
-  const liq = Number(t.liquidity || 0);
-  const mc  = Number(t.mcap || 0);
-  const ratio = mc > 0 ? liq / mc : 0;
-  const young = Number.isFinite(t.ageMs) && t.ageMs < 6 * 3600 * 1000;
-  if (liq >= 50000 && ratio >= 0.12) return { dots: 5, tier: 'low' };
-  if (liq >= 12000 && ratio >= 0.05) return { dots: young ? 3 : 4, tier: 'med' };
-  return { dots: young ? 2 : 1, tier: 'high' };
-}
-
+// Signal meter uses the REAL signalScore() (defined above) — the same function
+// Launches uses — computed from change, volume24h, liquidity, holders. No
+// fabricated tiers, no invented risk rating.
 function MwdRow({ t, i, onOpen, onTrade }) {
   const up = Number.isFinite(t.change) ? t.change >= 0 : true;
-  const r = mwdRisk(t);
   const old = !t.fresh;
   return (
-    <div className="mwd-row" style={{ animationDelay: `${Math.min(i, 12) * 0.03}s` }} onClick={() => onOpen && onOpen(t.mint)}>
+    <div className="mwd-row" style={{ animationDelay: `${Math.min(i, 12) * 0.03}s` }} onClick={() => onOpen && onOpen(t)}>
       <div className="mwd-av">
         <div className="sq"><TokenIcon token={t} /></div>
         {t.age ? <span className={'mwd-age' + (old ? ' old' : '')}>{t.age}</span> : null}
@@ -1463,10 +1488,17 @@ function MwdRow({ t, i, onOpen, onTrade }) {
         <div className="mwd-meta">
           <span className="k">MC</span> {format(t.mcap)} <span className="k">LP</span> {format(t.liquidity)}{t.holders ? <> {format(t.holders)} <span className="k">hold</span></> : null}
         </div>
-        <div className={'mwd-risk ' + r.tier}>
-          {[0,1,2,3,4].map(d => <i key={d} className={d < r.dots ? 'on' : ''} />)}
-          <span className="lab">{r.tier} risk</span>
-        </div>
+        {(() => {
+          const sig = signalScore(t);                 // real 0–100 signal (same as Launches)
+          const dots = Math.max(1, Math.round(sig / 20)); // 1–5 segments from the score
+          const tier = sig >= 70 ? 'high' : sig >= 40 ? 'mid' : 'low';
+          return (
+            <div className={'mwd-sig ' + tier}>
+              {[0,1,2,3,4].map(d => <i key={d} className={d < dots ? 'on' : ''} />)}
+              <span className="lab">signal {sig}</span>
+            </div>
+          );
+        })()}
       </div>
       <div className="mwd-spark"><MwSparkline mint={t.mint} price={t.price} change={t.change} pool={t.pool} w={66} h={32} full /></div>
       <div className="mwd-right">
@@ -1926,7 +1958,20 @@ function MemeWonderland({ onConnectWallet } = {}) {
   const topToken = tokensWithWhale[0];
   const freshCount = tokensWithWhale.filter(t => t.fresh).length;
 
-  const openDetail = (mint) => { setDetailMint(mint); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+  const openDetail = (mintOrToken) => {
+    let mint;
+    if (mintOrToken && typeof mintOrToken === 'object') {
+      mint = mintOrToken.mint;
+      // Register so tokenByMint() can resolve it (feed tokens live only in the
+      // feed's local state otherwise, so DetailView would never open).
+      setDiscovered(prev => prev[mint] ? prev : { ...prev, [mint]: mintOrToken });
+    } else {
+      mint = mintOrToken;
+    }
+    if (!mint) return;
+    setDetailMint(mint);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
   const closeDetail = () => setDetailMint(null);
   const openSheet = (mintOrToken, mode = 'buy') => {
     if (mintOrToken && typeof mintOrToken === 'object') {
@@ -3192,6 +3237,116 @@ function useLrCSS() {
   }, []);
 }
 
+const MWD_LR_CSS = `
+.mwd{
+  --bg:#060708; --bg2:#0a0b0d; --panel:#0d0f12; --panel2:#111317; --hover:#13151a;
+  --line:#191c22; --line2:#262a33;
+  --ink:#f2f4f8; --ink2:#838a98; --ink3:#4c525f;
+  --amber:#f5a623; --amber2:#ffc24d; --ember:#ff7a3c;
+  --up:#3ddc84; --down:#ff5466; --glass:rgba(13,15,18,.72);
+  min-height:100vh;color:var(--ink);
+  font-family:'Space Grotesk',-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+  background-color:var(--bg);
+  background-image:
+    radial-gradient(900px 420px at 50% -8%,rgba(245,166,35,.07),transparent 70%),
+    radial-gradient(700px 500px at 100% 0%,rgba(61,220,132,.04),transparent 70%),
+    linear-gradient(rgba(255,255,255,.014) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(255,255,255,.014) 1px,transparent 1px);
+  background-size:auto,auto,40px 40px,40px 40px;background-attachment:fixed;
+}
+.mwd,.mwd *{box-sizing:border-box}
+.mwd-mono{font-family:'JetBrains Mono','SF Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.mwd-wrap{max-width:480px;margin:0 auto;padding-bottom:40px}
+.mwd-bar{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:7px;padding:10px 13px 0}
+.mwd-chips{display:flex;gap:6px;padding:10px 13px;overflow-x:auto;scrollbar-width:none;border-bottom:1px solid var(--line)}
+.mwd-chips::-webkit-scrollbar{display:none}
+.mwd-chip{flex-shrink:0;display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:7px;
+  background:linear-gradient(180deg,var(--panel),var(--bg2));border:1px solid var(--line);cursor:pointer;
+  font-family:inherit;font-size:12px;font-weight:600;color:var(--ink2);transition:.16s;white-space:nowrap}
+.mwd-chip:hover{color:var(--ink);border-color:var(--line2)}
+.mwd-chip.on{background:var(--panel2);border-color:var(--line2);color:var(--ink)}
+.mwd-chip.on.hot{border-color:rgba(245,166,35,.45);box-shadow:0 0 14px -4px rgba(245,166,35,.4),inset 0 0 0 1px rgba(245,166,35,.12)}
+.mwd-chip.on.hot::before{content:"";width:5px;height:5px;border-radius:50%;background:var(--amber);box-shadow:0 0 8px var(--amber)}
+.mwd-chip .ct{display:grid;place-items:center;min-width:16px;height:16px;padding:0 4px;border-radius:999px;
+  background:rgba(245,166,35,.16);color:var(--amber);font-family:'JetBrains Mono',monospace;font-weight:800;font-size:8.5px}
+.mwd-feed{padding:3px 8px 0}
+.mwd-empty{padding:16px;text-align:center;color:var(--ink3);font-size:12.5px}
+.mwd-row{position:relative;display:flex;align-items:center;gap:10px;padding:8px 7px;cursor:pointer;border-radius:8px;transition:background .14s}
+.mwd-row::after{content:"";position:absolute;left:7px;right:7px;bottom:0;height:1px;background:var(--line)}
+.mwd-row:last-child::after{display:none}
+.mwd-row:hover{background:var(--hover)}
+.mwd-row:hover::after{opacity:0}
+.mwd-av{position:relative;flex-shrink:0}
+.mwd-av .sq{width:36px;height:36px;font-size:14px;border-radius:9px;display:grid;place-items:center;font-weight:800;color:#fff;overflow:hidden;box-shadow:inset 0 1px 0 rgba(255,255,255,.22),inset 0 -2px 6px rgba(0,0,0,.4),0 2px 7px rgba(0,0,0,.35)}
+.mwd-av .sq img{width:100%;height:100%;object-fit:cover}
+.mwd-age{position:absolute;bottom:-4px;left:50%;transform:translateX(-50%);font-family:'JetBrains Mono',monospace;font-size:7.5px;font-weight:800;color:#1a1205;padding:1px 5px;border-radius:5px;background:var(--amber);white-space:nowrap;box-shadow:0 0 0 2px var(--bg),0 0 7px -1px rgba(245,166,35,.6)}
+.mwd-age.old{background:var(--ink3);color:#fff;box-shadow:0 0 0 2px var(--bg)}
+.mwd-mid{flex:1;min-width:0}
+.mwd-sym{display:flex;align-items:center;gap:7px}
+.mwd-sym .s{font-size:15px;font-weight:700;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px}
+.mwd-sym .pc{font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700}
+.mwd-meta{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink2);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mwd-meta .k{color:var(--ink3)}
+.mwd-bond{margin-top:6px;height:4px;border-radius:3px;background:var(--line);overflow:hidden;max-width:148px}
+.mwd-bond i{display:block;height:100%;border-radius:3px;background:linear-gradient(90deg,var(--ember),var(--amber2))}
+.mwd-bondlab{font-family:'JetBrains Mono',monospace;font-size:8.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;margin-top:4px;color:var(--ink3)}
+.mwd-spark{flex-shrink:0;width:66px;height:32px;display:flex;align-items:center}
+.mwd-right{flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end;gap:6px;min-width:74px}
+.mwd-price{font-family:'JetBrains Mono',monospace;font-size:12.5px;font-weight:700}
+.mwd-buy{padding:6px 14px;border-radius:7px;border:none;cursor:pointer;font-family:inherit;font-size:12px;font-weight:700;background:linear-gradient(140deg,var(--amber2),var(--amber));color:#1a1205;transition:.16s;white-space:nowrap;box-shadow:0 0 12px -4px rgba(245,166,35,.45)}
+.mwd-buy:hover{filter:brightness(1.07);box-shadow:0 0 16px -3px rgba(245,166,35,.55)}
+.mwd-buy:active{transform:scale(.97)}
+.mwd-sell{padding:6px 12px;border-radius:7px;border:1px solid var(--line2);cursor:pointer;font-family:inherit;font-size:12px;font-weight:700;background:var(--panel2);color:var(--ink2);transition:.16s;white-space:nowrap}
+.mwd-sell:hover{color:var(--down);border-color:var(--down)}
+.mwd-end{padding:22px 16px;text-align:center;color:var(--ink3);font-size:11.5px}
+`;
+
+function useMwdLrCSS() {
+  useEffect(() => {
+    const id = 'mwd-defi-css';
+    if (document.getElementById(id)) return;
+    const el = document.createElement('style');
+    el.id = id; el.textContent = MWD_LR_CSS;
+    document.head.appendChild(el);
+  }, []);
+}
+
+function LrFeedRow({ t, i, owned, isFresh, onOpen, onBuy, onSell }) {
+  const up = Number.isFinite(t.change) ? t.change >= 0 : true;
+  const old = !isFresh;
+  const bond = Number.isFinite(t.bondingProgress) ? Math.max(0, Math.min(100, t.bondingProgress)) : null;
+  const hasBal = owned && owned.uiAmount > 0;
+  return (
+    <div className="mwd-row" onClick={() => onOpen && onOpen(t)}>
+      <div className="mwd-av">
+        <div className="sq"><TokenIcon token={t} /></div>
+        {t.age ? <span className={'mwd-age' + (old ? ' old' : '')}>{t.age}</span> : null}
+      </div>
+      <div className="mwd-mid">
+        <div className="mwd-sym">
+          <span className="s">${t.sym}</span>
+          {Number.isFinite(t.change) ? <span className="pc" style={{ color: up ? 'var(--up)' : 'var(--down)' }}>{formatPct(t.change)}</span> : null}
+        </div>
+        <div className="mwd-meta">
+          <span className="k">MC</span> {format(t.mcap)} <span className="k">LP</span> {format(t.liquidity)}{t.holders ? <> {format(t.holders)} <span className="k">hold</span></> : null}
+        </div>
+        {t.graduated
+          ? <div className="mwd-bondlab" style={{ color: 'var(--up)' }}>● graduated</div>
+          : bond != null
+          ? <><div className="mwd-bond"><i style={{ width: bond + '%' }} /></div><div className="mwd-bondlab">{bond.toFixed(0)}% bonded</div></>
+          : null}
+      </div>
+      <div className="mwd-spark"><MwSparkline mint={t.mint} price={t.price} change={t.change} pool={t.pool} w={66} h={32} full /></div>
+      <div className="mwd-right">
+        <div className="mwd-price">{formatPrice(t.price)}</div>
+        {hasBal
+          ? <button className="mwd-sell" onClick={(e) => { e.stopPropagation(); onSell && onSell(t); }}>Sell</button>
+          : <button className="mwd-buy" onClick={(e) => { e.stopPropagation(); onBuy && onBuy(t); }}>Buy</button>}
+      </div>
+    </div>
+  );
+}
+
 /* ════════════════════════════════════════════════════════════════════
    CONFIG — pump.fun bonding curve only. 3% SOL fee → FEE_WALLET, atomic
    in the same signed tx. No ATAs touched on the fee side — pure
@@ -4320,6 +4475,7 @@ function LaunchCard({ token, owned, onBuy, onSell, isFresh, tintIndex = 0 }) {
    ════════════════════════════════════════════════════════════════════ */
 function LaunchRadar({ onConnectWallet } = {}) {
   useLrCSS();
+  useMwdLrCSS();
   const wallet = useWallet();
   // General-purpose connection — /api/solana-rpc (Alchemy only). Balances,
   // SOL price, the launch feed.
@@ -4818,154 +4974,77 @@ function LaunchRadar({ onConnectWallet } = {}) {
   }, [wallet, onConnectWallet, pushToast]);
 
   return (
-    <div className="lr-root">
-      <div className="lr-blob" style={{ width: 400, height: 400, background: '#FFB088', top: -80, left: -120 }} />
-      <div className="lr-blob" style={{ width: 500, height: 500, background: '#FF8FBE', top: '30%', right: -180, animationDelay: '3s' }} />
-      <div className="lr-blob" style={{ width: 340, height: 340, background: '#FFD46B', bottom: '10%', left: -100, animationDelay: '6s' }} />
+    <div className="mwd">
+      <div className="mwd-wrap">
 
-      <div className="lr-phone">
-
-
-        <div className="lr-status">
-  <button type="button" className="lr-gear-btn" style={{ width: 22, height: 22, fontSize: 11 }}
-    onClick={() => setSettingsOpen(true)} aria-label="Settings" title="Edit presets">⚙</button>
-  <div className="lr-status-divider" />
-  <div className="lr-status-item">
-
-            <span className={'lr-live-dot' + (recentError ? ' lr-warn' : '')} />
+        <div className="mwd-bar" style={{ justifyContent: 'space-between' }}>
+          <div className="mwd-mono" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, fontWeight: 700, letterSpacing: '.04em', color: 'var(--ink2)' }}>
+            <span className={'lr-live-dot' + (recentError ? ' lr-warn' : '')} style={{ width: 6, height: 6, borderRadius: '50%', background: recentError ? 'var(--down)' : 'var(--up)', boxShadow: recentError ? '0 0 8px var(--down)' : '0 0 8px var(--up)' }} />
             {lane === 'fresh'
-              ? (recentLoading ? <>SYNCING…</> : <>LIVE · <b>{freshTokens.length}</b> fresh</>)
-              : (recentLoading ? <>SYNCING…</> : recentError ? <>FEED DOWN</> : <><b>{recentTokens.length}</b> tokens</>)}
+              ? (recentLoading ? 'SYNCING…' : <>LIVE · <b style={{ color: 'var(--ink)' }}>{freshTokens.length}</b>&nbsp;fresh</>)
+              : (recentLoading ? 'SYNCING…' : recentError ? 'FEED DOWN' : <><b style={{ color: 'var(--ink)' }}>{recentTokens.length}</b>&nbsp;tokens</>)}
+            <span style={{ color: 'var(--ink3)' }}>·</span>
+            SOL <b style={{ color: 'var(--ink)' }}>${solPrice > 0 ? solPrice.toFixed(2) : '—'}</b>
+            {wallet.publicKey ? <><span style={{ color: 'var(--ink3)' }}>·</span> <b style={{ color: 'var(--amber)' }}>{formatSol(solBalance?.uiAmount || 0)}</b> SOL</> : null}
           </div>
-          <div className="lr-status-divider" />
-          <div className="lr-status-item">SOL <b>${solPrice > 0 ? solPrice.toFixed(2) : '—'}</b></div>
-          {wallet.publicKey && (
-            <>
-              <div className="lr-status-divider" />
-              <div className="lr-status-item">💰 <b>{formatSol(solBalance?.uiAmount || 0)}</b></div>
-            </>
-          )}
+          <button type="button" onClick={() => setSettingsOpen(true)} aria-label="Settings" title="Edit presets"
+            style={{ background: 'var(--panel2)', border: '1px solid var(--line)', color: 'var(--ink2)', width: 28, height: 28, borderRadius: 7, cursor: 'pointer', fontSize: 13 }}>⚙</button>
         </div>
 
-        <div className="lr-orbs">
-          <div className="lr-orb lr-orb-1" style={{ animationDelay: '0s' }}>
-            <span className="lr-orb-emoji">🥚</span>
-            <div className="lr-orb-val">{freshTokens.length}</div>
-            <div className="lr-orb-lbl">Just Hatched</div>
-          </div>
-          <div className="lr-orb lr-orb-2" style={{ animationDelay: '.05s' }}>
-            <span className="lr-orb-emoji">🔥</span>
-            <div className="lr-orb-val lr-orb-mono">{topGainer ? formatPct(topGainer.change) : '—'}</div>
-            <div className="lr-orb-lbl">Top Mover</div>
-          </div>
-          <div className="lr-orb lr-orb-3" style={{ animationDelay: '.1s' }}>
-            <span className="lr-orb-emoji">🍿</span>
-            <div className="lr-orb-val lr-orb-mono">${format(totalVol24h)}</div>
-            <div className="lr-orb-lbl">Vol 24h</div>
-          </div>
-          <div className="lr-orb lr-orb-4" style={{ animationDelay: '.15s' }}>
-            <span className="lr-orb-emoji">📡</span>
-            <div className="lr-orb-val">{recentTokens.length}</div>
-            <div className="lr-orb-lbl">On Radar</div>
-          </div>
-        </div>
-
-        {featured && (
-          <div className="lr-feature">
-            <div className="lr-feature-badge">
-              <span className="lr-egg">🐣</span>JUST HATCHED
-            </div>
-            <div className="lr-feature-head">
-              <div className="lr-feature-avatar">
-                <div className="lr-inner"><TokenIcon token={featured} /></div>
-              </div>
-              <div className="lr-feature-name">
-                <div className="lr-feature-sym">${featured.sym}</div>
-                <div className="lr-feature-sub">{featured.name} · {formatPrice(featured.price)}</div>
-                <div className="lr-feature-age">⚡ {featured.age} old</div>
-              </div>
-            </div>
-            <div className="lr-feature-actions">
-              <button type="button" className="lr-feature-btn" onClick={() => onCardBuy(featured)}>
-                🚀 BUY ${featured.sym}
-              </button>
-            </div>
-          </div>
-        )}
-
-        <div className={'lr-tabs' + (lane === 'recent' ? ' lr-tab-recent' : '')}>
-          <div className="lr-tab-indicator" />
+        <div className="mwd-chips">
           <button type="button"
-            className={'lr-tab' + (lane === 'fresh' ? ' lr-active' : '')}
+            className={'mwd-chip' + (lane === 'fresh' ? ' on hot' : '')}
             onClick={() => setLane('fresh')}>
-            <span className="lr-tab-emoji">🐣</span>
-            JUST HATCHED
-            <span className="lr-tab-count">{freshTokens.length}</span>
+            Just launched{freshTokens.length ? <span className="ct">{freshTokens.length}</span> : null}
           </button>
           <button type="button"
-            className={'lr-tab' + (lane === 'recent' ? ' lr-active' : '')}
+            className={'mwd-chip' + (lane === 'recent' ? ' on' : '')}
             onClick={() => setLane('recent')}>
-            <span className="lr-tab-emoji">🌈</span>
-            ON RADAR
-            <span className="lr-tab-count">{recentTokens.length}</span>
+            On radar{recentTokens.length ? <span className="ct">{recentTokens.length}</span> : null}
           </button>
-        </div>
-
-        <div className="lr-filters">
+          <div style={{ width: 1, alignSelf: 'stretch', background: 'var(--line)', margin: '2px 2px' }} />
           {[
-            ['all', '🌟 ALL'],
-            ['1h',  '⚡ STILL HOT'],
-            ['6h',  '🍿 TODAY'],
-            ['24h', '🌙 24H'],
+            ['all', 'All'],
+            ['1h',  'Hot'],
+            ['6h',  'Today'],
+            ['24h', '24h'],
           ].map(([k, l]) => (
             <button key={k} type="button"
-              className={'lr-filter' + (timeFilter === k ? ' lr-active' : '')}
+              className={'mwd-chip' + (timeFilter === k ? ' on' : '')}
               onClick={() => setTimeFilter(k)}>{l}</button>
           ))}
-          <div className="lr-filter-divider" />
+          <div style={{ width: 1, alignSelf: 'stretch', background: 'var(--line)', margin: '2px 2px' }} />
           {[
-            ['newest', '🆕 FRESHEST'],
-            ['volume', '🔥 LOUDEST'],
-            ['signal', '✨ TOP SIGNAL'],
+            ['newest', 'Freshest'],
+            ['volume', 'Loudest'],
+            ['signal', 'Top signal'],
           ].map(([k, l]) => (
             <button key={k} type="button"
-              className={'lr-filter' + (sortBy === k ? ' lr-active' : '')}
+              className={'mwd-chip' + (sortBy === k ? ' on' : '')}
               onClick={() => setSortBy(k)}>{l}</button>
           ))}
         </div>
 
         {filtered.length === 0 ? (
-          <div className="lr-empty">
-            <span className="lr-empty-emoji">{lane === 'fresh' ? '🥚' : '🍿'}</span>
-            {lane === 'fresh' && recentLoading ? (
-              <>
-                <b>Warming up the launch stream…</b>
-                <div className="lr-empty-sub">Pulling fresh pump.fun launches any second now.</div>
-              </>
-            ) : lane === 'recent' && recentError ? (
-              <>
-                <b>Recent feed offline</b>
-                <div className="lr-empty-sub">Switch to JUST HATCHED while we retry.</div>
-                <div className="lr-empty-err">{recentError}</div>
-              </>
-            ) : (
-              <>
-                <b>Nothing matches yet</b>
-                <div className="lr-empty-sub">Loosen the filter or switch lanes — fresh drops are landing all day.</div>
-              </>
-            )}
+          <div className="mwd-empty" style={{ padding: '40px 16px' }}>
+            {lane === 'fresh' && recentLoading
+              ? 'Warming up the launch stream…'
+              : lane === 'recent' && recentError
+              ? ('Recent feed offline — ' + recentError)
+              : 'Nothing matches yet — loosen the filter or switch lanes.'}
           </div>
         ) : (
-          <div className="lr-feed">
+          <div className="mwd-feed">
             {filtered.map((t, i) => (
-              <LaunchCard
+              <LrFeedRow
                 key={t.mint}
-                token={t}
+                t={t}
+                i={i}
                 owned={balances[t.mint]}
+                isFresh={Number.isFinite(t.ageMs) && t.ageMs < freshThresholdMs}
+                onOpen={onCardBuy}
                 onBuy={onCardBuy}
                 onSell={onCardSell}
-                isFresh={Number.isFinite(t.ageMs) && t.ageMs < freshThresholdMs}
-                tintIndex={i % 5}
               />
             ))}
           </div>
@@ -5046,18 +5125,18 @@ return LaunchRadar;
    ════════════════════════════════════════════════════════════════════ */
 const DH_CSS = `
 .dh-switch-wrap{position:sticky;top:0;z-index:60;display:flex;justify-content:center;
-  padding:10px 16px;background:rgba(255,255,255,.92);backdrop-filter:blur(14px);
-  border-bottom:1px solid #efeff1}
-.dh-switch{display:flex;gap:4px;padding:4px;background:#f5f5f6;border:1px solid #e4e4e7;
-  border-radius:999px;width:100%;max-width:480px;
-  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",system-ui,sans-serif}
+  padding:9px 13px;background:rgba(6,7,8,.82);backdrop-filter:blur(22px) saturate(1.4);
+  border-bottom:1px solid #191c22}
+.dh-switch{display:flex;gap:3px;padding:3px;background:#111317;border:1px solid #191c22;
+  border-radius:9px;width:100%;max-width:480px;
+  font-family:'Space Grotesk',-apple-system,BlinkMacSystemFont,system-ui,sans-serif}
 .dh-tab{flex:1;display:flex;align-items:center;justify-content:center;gap:7px;
-  padding:9px 14px;border:none;background:none;cursor:pointer;font-family:inherit;
-  font-size:12.5px;font-weight:700;letter-spacing:.2px;color:#6b6b6b;border-radius:999px;
-  transition:all .15s}
-.dh-tab:hover{color:#0a0a0a}
-.dh-tab.dh-active{background:#0a0a0a;color:#fff}
-.dh-tab-emoji{font-size:13px}
+  padding:8px 14px;border:none;background:none;cursor:pointer;font-family:inherit;
+  font-size:12.5px;font-weight:700;letter-spacing:.2px;color:#838a98;border-radius:7px;
+  transition:all .16s}
+.dh-tab:hover{color:#f2f4f8}
+.dh-tab.dh-active{background:linear-gradient(140deg,#ffc24d,#f5a623);color:#1a1205;
+  box-shadow:0 0 16px -4px rgba(245,166,35,.5)}
 .dh-page[hidden]{display:none}
 `;
 let _dhInjected = false;
@@ -5075,18 +5154,18 @@ export default function DiscoverHub(props) {
   useDhCSS();
   const [view, setView] = useState('discover');
   return (
-    <div style={{ background: '#fff', minHeight: '100vh' }}>
+    <div style={{ background: '#060708', minHeight: '100vh' }}>
       <div className="dh-switch-wrap">
         <div className="dh-switch" role="tablist" aria-label="View">
           <button type="button" role="tab" aria-selected={view === 'discover'}
             className={'dh-tab' + (view === 'discover' ? ' dh-active' : '')}
             onClick={() => setView('discover')}>
-            <span className="dh-tab-emoji">🔮</span>Discover
+            Discover
           </button>
           <button type="button" role="tab" aria-selected={view === 'launches'}
             className={'dh-tab' + (view === 'launches' ? ' dh-active' : '')}
             onClick={() => setView('launches')}>
-            <span className="dh-tab-emoji">🐣</span>Launches
+            Launches
           </button>
         </div>
       </div>
