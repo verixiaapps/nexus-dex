@@ -653,7 +653,13 @@ function signalScore(t) {
 }
 function _uniqMint(list) {
   const seen = new Set();
-  return list.filter(t => t && t.mint && !seen.has(t.mint) && seen.add(t.mint));
+  return list.filter(t => {
+    if (!t) return false;
+    const k = String(t.mint == null ? '' : t.mint).trim();
+    if (!k || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
 }
 // Robust 24h %: read every field name a Solana feed uses for it.
 function pickChange(t) {
@@ -695,7 +701,7 @@ function normalize(t) {
   const created = t.firstPool?.createdAt || t.createdAt;
   const am = ageMs(created);
   return {
-    mint:      t.id || t.address || t.mint,
+    mint:      String(t.id || t.address || t.mint || '').trim(),
     sym:       t.symbol || '???',
     name:      t.name || t.symbol || 'Unknown',
     emoji:     emojiFor(t.symbol || ''),
@@ -984,7 +990,7 @@ function nxdShape(t) {
   const createdMs = Number(t.pairCreatedAtMs);
   const am = Number.isFinite(createdMs) && createdMs > 0 ? (Date.now() - createdMs) : Infinity;
   return {
-    mint:      t.mint,
+    mint:      String(t.mint || '').trim(),
     sym:       t.sym || t.symbol || '???',
     name:      t.name || t.sym || 'Unknown',
     emoji:     emojiFor(t.sym || t.symbol || ''),
@@ -1563,7 +1569,7 @@ function MwDiscoverFeed({
   // parent's already-loaded feed if a lens hasn't returned yet.
   const list = useMemo(() => {
     const base = (sets[lens] && sets[lens].length) ? sets[lens] : (fallbackTokens || []);
-    return base.map(t => {
+    return _uniqMint(base).map(t => {
       const cc = chartChg ? chartChg[t.mint] : undefined;
       return Number.isFinite(cc) ? { ...t, change: cc } : t;
     });
@@ -3303,7 +3309,7 @@ const MWD_LR_CSS = `
 
 function useMwdLrCSS() {
   useEffect(() => {
-    const id = 'mwd-defi-css';
+    const id = 'mwd-lr-defi-css';
     if (document.getElementById(id)) return;
     const el = document.createElement('style');
     el.id = id; el.textContent = MWD_LR_CSS;
@@ -3336,7 +3342,7 @@ function LrFeedRow({ t, i, owned, isFresh, onOpen, onBuy, onSell }) {
           ? <><div className="mwd-bond"><i style={{ width: bond + '%' }} /></div><div className="mwd-bondlab">{bond.toFixed(0)}% bonded</div></>
           : null}
       </div>
-      <div className="mwd-spark"><MwSparkline mint={t.mint} price={t.price} change={t.change} pool={t.pool} w={66} h={32} full /></div>
+      <div className="mwd-spark"><LrSparkline mint={t.mint} price={t.price} change={t.change} pool={t.pool} w={66} h={32} full /></div>
       <div className="mwd-right">
         <div className="mwd-price">{formatPrice(t.price)}</div>
         {hasBal
@@ -3477,7 +3483,13 @@ function signalScore(t) {
 
 function _uniqMint(list) {
   const seen = new Set();
-  return list.filter(t => t && t.mint && !seen.has(t.mint) && seen.add(t.mint));
+  return list.filter(t => {
+    if (!t) return false;
+    const k = String(t.mint == null ? '' : t.mint).trim();
+    if (!k || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
 }
 // Robust 24h %: read every field name a Solana feed uses for it.
 function pickChange(t) {
@@ -3503,7 +3515,7 @@ function pickPrice(t) {
   return 0;
 }
 function normalize(t) {
-  const rawMint = t?.mint;
+  const rawMint = (typeof t?.mint === 'string' ? t.mint.trim() : t?.mint);
   if (!rawMint || typeof rawMint !== 'string' || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(rawMint)) {
     return null;
   }
@@ -4925,18 +4937,13 @@ function LaunchRadar({ onConnectWallet } = {}) {
   );
   const activeList = lane === 'fresh' ? freshTokens : recentTokens;
 
-  const featured = useMemo(() => {
-    const pool = freshTokens.map(deriveDisplayValues);
-    return pool.length ? pool[0] : null;
-  }, [freshTokens, deriveDisplayValues]);
-
   const filtered = useMemo(() => {
     let l = activeList.map(deriveDisplayValues);
     const seen = new Set();
-    if (featured?.mint) seen.add(featured.mint);
     l = l.filter(t => {
-      if (!t?.mint || seen.has(t.mint)) return false;
-      seen.add(t.mint);
+      const k = t && t.mint != null ? String(t.mint).trim() : '';
+      if (!k || seen.has(k)) return false;
+      seen.add(k);
       return true;
     });
     if (timeFilter !== 'all') {
@@ -4947,13 +4954,8 @@ function LaunchRadar({ onConnectWallet } = {}) {
     else if (sortBy === 'volume') l = [...l].sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0));
     else if (sortBy === 'signal') l = [...l].sort((a, b) => signalScore(b) - signalScore(a));
     return l.slice(0, 30);
-  }, [activeList, timeFilter, sortBy, deriveDisplayValues, featured]);
+  }, [activeList, timeFilter, sortBy, deriveDisplayValues]);
 
-  const topGainer = useMemo(() => {
-    const pool = recentTokens.map(deriveDisplayValues).filter(t => Number.isFinite(t.change) && t.change > 0);
-    if (!pool.length) return null;
-    return pool.reduce((a, b) => (b.change > a.change ? b : a));
-  }, [recentTokens, deriveDisplayValues]);
   const totalVol24h = useMemo(
     () => recentTokens.reduce((s, t) => s + (t.volume24h || 0), 0),
     [recentTokens],
