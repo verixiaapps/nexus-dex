@@ -47,9 +47,16 @@ const ALLOWED_TF = new Set([1, 5, 15, 30, 60, 240, 720, 1440]);
 // Small server-side cache so a token everyone is watching only hits pump.fun
 // once per TTL, not once per viewer. Last-good value is kept short; charts move
 // by the minute, not the second.
+//
+// The cache key includes the requested `limit` as well as mint+tf: the chart
+// asks for 200 candles and the row sparkline for 80, and pump.fun trims to the
+// requested count, so keying on (mint:tf) alone would let an 80-candle response
+// satisfy a later 200-candle request (chart silently short of history). Keying
+// on (mint:tf:limit) keeps each caller's depth correct while still collapsing
+// identical requests.
 const CACHE_TTL_MS = 8_000;
 const CACHE_MAX    = 2_000;
-const _candleCache = new Map(); // `${mint}:${tf}` -> { at, candles }
+const _candleCache = new Map(); // `${mint}:${tf}:${limit}` -> { at, candles }
 function _cacheGet(key) {
   const h = _candleCache.get(key);
   if (h && (Date.now() - h.at) < CACHE_TTL_MS) return h.candles;
@@ -123,7 +130,7 @@ function mountRoutes(app) {
       let limit = Number(req.query.limit);
       limit = Number.isFinite(limit) ? Math.min(1000, Math.max(2, Math.floor(limit))) : 200;
 
-      const cacheKey = mint + ':' + tf;
+      const cacheKey = mint + ':' + tf + ':' + limit;
       let candles = _cacheGet(cacheKey);
       if (!candles) {
         candles = await pumpCandles(mint, tf, limit);
