@@ -3336,7 +3336,7 @@ function LrFeedRow({ t, i, owned, isFresh, onOpen, onBuy, onSell }) {
           ? <><div className="mwd-bond"><i style={{ width: bond + '%' }} /></div><div className="mwd-bondlab">{bond.toFixed(0)}% bonded</div></>
           : null}
       </div>
-      <div className="mwd-spark"><MwSparkline mint={t.mint} price={t.price} change={t.change} pool={t.pool} w={66} h={32} full /></div>
+      <div className="mwd-spark"><LrSparkline mint={t.mint} price={t.price} change={t.change} pool={t.pool} w={66} h={32} full /></div>
       <div className="mwd-right">
         <div className="mwd-price">{formatPrice(t.price)}</div>
         {hasBal
