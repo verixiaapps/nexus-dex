@@ -42,12 +42,7 @@ import {
   PublicKey, Keypair, VersionedTransaction, TransactionMessage, SystemProgram,
   AddressLookupTableAccount,
 } from '@solana/web3.js';
-import {
-  TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID,
-  getAssociatedTokenAddressSync,
-  createAssociatedTokenAccountIdempotentInstruction,
-  createTransferCheckedInstruction,
-} from '@solana/spl-token';
+import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
 
 /* ============================================================
    INLINED HELPERS (formerly ./ape-helpers.js) — page is now self-contained.
@@ -105,35 +100,6 @@ const getTradeConn = (commitment) => {
   return c;
 };
 const balRpcRace = (op) => op(getConn(BAL_COMMITMENT));
-
-// ── Jupiter helpers, copied verbatim from App.js (needed by the burner
-//    Jupiter path for graduated tokens). Not present in original Ape. ──
-const SLIPPAGE_BPS = 500;
-const deserIx = (ix) => ({
-  programId: new PublicKey(ix.programId),
-  keys: ix.accounts.map(a => ({ pubkey: new PublicKey(a.pubkey), isSigner: a.isSigner, isWritable: a.isWritable })),
-  data: Buffer.from(ix.data, 'base64'),
-});
-const tradeGetConn = (commitment, url = RPC_URL) => {
-  let c = _connCache.get(commitment + '|' + url);
-  if (!c) { c = new Connection(url, commitment); _connCache.set(commitment + '|' + url, c); }
-  return c;
-};
-const rpcRaceTrade = (label, op, commitment = 'confirmed') => {
-  return op(getTradeConn(commitment)).catch(e => {
-    console.warn(`[trade-rpc] ${label} failed:`, e?.message);
-    throw new Error(`${label}: trade RPC failed`);
-  });
-};
-// Verbatim from App.js — used by the burner Jupiter onSuccess tail.
-function tradeFmtTokens(n) {
-  if (!Number.isFinite(n) || n <= 0) return '0';
-  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
-  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
-  if (n >= 1e3) return Math.round(n).toLocaleString();
-  if (n >= 1)   return n.toFixed(2);
-  return n.toPrecision(3);
-}
 
 /* ============================================================
    FORMATTERS
@@ -657,211 +623,6 @@ async function apeExecuteSwap({ mode, swapParams, token, keypair, userPk, tradeC
 
   return { confirmed: true, sig };
 }
-
-/* ============================================================
-   BURNER JUPITER PATH — graduated tokens.
-   App.js executeRegularSwap copied VERBATIM. Only changes:
-     • standalone fn taking the burner keypair/userPk (not the
-       useCallback wrapper / connected wallet),
-     • signer line: wallet.signTransaction(tx) -> tx.sign([keypair]).
-   Fee logic, sim, instruction assembly, send/confirm: unchanged.
-   ============================================================ */
-async function apeJupiterSwap({ mode, swapParams, token, keypair, userPk, refreshSol, refreshOneToken, walletStr, solPrice }) {
-  if (!keypair || !userPk) throw new Error('Burner wallet not ready.');
-    if (!swapParams) throw new Error('Nothing to trade.');
-    const isBuy = mode === 'buy';
-    // userPk provided as arg (burner)
-    const connection = tradeGetConn('confirmed'); // /api/solana-rpc — MemeWonderland's `connection`
-    const inputMint  = isBuy ? SOL_MINT : token.mint;
-    const outputMint = isBuy ? token.mint : SOL_MINT;
-    const dec = isBuy ? 9 : (swapParams.decimals || token.decimals || 6);
-    // Ape fee model (matches the pump path): on BUY, tradeLamports is the SOL
-    // that goes INTO the swap and the 3% fee is added ON TOP (feeLamports).
-    // On SELL, tradeTokens is the full token amount; fee is taken in-token.
-    const swapInAmount = BigInt(isBuy ? swapParams.tradeLamports : swapParams.tradeTokens);
-    if (swapInAmount <= 0n) throw new Error('Amount too small.');
-
-    // Jupiter swaps the full swap-in amount; the fee is a SEPARATE transfer
-    // (NOT carved out of the swap), exactly like apeExecuteSwap.
-    const net = swapInAmount;
-    if (net <= 0n) throw new Error('Amount too small.');
-    const params = new URLSearchParams({
-      inputMint,
-      outputMint,
-      amount:      net.toString(),
-      slippageBps: String(SLIPPAGE_BPS),
-      taker:       userPk
-        ? userPk.toBase58()
-        : '11111111111111111111111111111111',
-    });
-    const r = await fetch(`/api/jupiter/build?${params}`);
-    if (!r.ok) {
-      const body = await r.json().catch(() => ({}));
-      throw new Error(body.error || `Quote failed (${r.status})`);
-    }
-    const build = await r.json();
-
-      // Full 3% fee → FEE_WALLET (from swapParams.feeLamports — Ape's model)
-      const feeAmount = isBuy
-        ? BigInt(swapParams.feeLamports || '0')
-        : (swapInAmount * BigInt(FEE_BPS)) / 10000n;
-      if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero — amount too small.');
-
-      const feeIxs = [];
-      if (inputMint === SOL_MINT) {
-        feeIxs.push(SystemProgram.transfer({
-          fromPubkey: userPk,
-          toPubkey:   FEE_WALLET,
-          lamports:   Number(feeAmount),
-        }));
-      } else {
-        const mintPk = new PublicKey(inputMint);
-        // Buy/sell critical path → trade RPC (Alchemy primary, Ankr fallback).
-        const mintInfo = await rpcRaceTrade('getMintInfo', c => c.getAccountInfo(mintPk));
-        if (!mintInfo) throw new Error('Input mint not found on-chain.');
-        const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
-          ? TOKEN_2022_PROGRAM_ID
-          : TOKEN_PROGRAM_ID;
-
-        const sourceAta = getAssociatedTokenAddressSync(mintPk, userPk, true, tokenProgram);
-        const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET,       true, tokenProgram);
-
-        feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
-          userPk, destAta, FEE_WALLET, mintPk, tokenProgram,
-        ));
-        feeIxs.push(createTransferCheckedInstruction(
-          sourceAta, mintPk, destAta, userPk,
-          feeAmount, dec, [], tokenProgram,
-        ));
-      }
-
-      const ixs = [];
-      if (Array.isArray(build.computeBudgetInstructions))
-        for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
-      for (const ix of feeIxs) ixs.push(ix);
-      if (Array.isArray(build.setupInstructions))
-        for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
-      if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
-      if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
-      if (Array.isArray(build.otherInstructions))
-        for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
-
-      const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
-      let alts = [];
-      if (altKeys.length > 0) {
-        const infos = await rpcRaceTrade('getAlts',
-          c => c.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k))));
-        alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
-          key:   new PublicKey(k),
-          state: AddressLookupTableAccount.deserialize(infos[i].data),
-        }) : null).filter(Boolean);
-      }
-
-      const latest = await rpcRaceTrade('getLatestBlockhash',
-        c => c.getLatestBlockhash('confirmed'));
-      const message = new TransactionMessage({
-        payerKey:        userPk,
-        recentBlockhash: latest.blockhash,
-        instructions:    ixs,
-      }).compileToV0Message(alts);
-      const tx = new VersionedTransaction(message);
-
-      const mapSimErr = (logs) => {
-        const j = (logs || []).join('\n').toLowerCase();
-        if (j.includes('insufficient') || j.includes('0x1')) return 'Insufficient balance for this swap.';
-        if (j.includes('slippage') || j.includes('0x1771'))  return 'Price moved — try a higher slippage or smaller amount.';
-        if (j.includes('account not') || j.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
-        if (j.includes('blockhash') || j.includes('expired')) return 'Quote expired. Please refresh and retry.';
-        return null;
-      };
-      try {
-        const sim = await connection.simulateTransaction(tx, {
-          replaceRecentBlockhash: true,
-          sigVerify: false,
-        });
-        if (sim.value.err) {
-          throw new Error(mapSimErr(sim.value.logs) || 'Swap simulation failed — the price may have moved.');
-        }
-      } catch (simErr) {
-        if (simErr?.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) {
-          throw simErr;
-        }
-        console.warn('[swap] sim non-fatal', simErr);
-      }
-
-      tx.sign([keypair]); const signed = tx;
-      const serialized = signed.serialize();
-
-      // Send via trade RPC (Alchemy primary, Ankr fallback).
-      const sig = await rpcRaceTrade('sendTx', c => c.sendRawTransaction(serialized, {
-        skipPreflight: false,
-        maxRetries: 3,
-      }));
-
-      let confirmed = false;
-      try {
-        const conf = await Promise.race([
-          connection.confirmTransaction({
-            signature: sig,
-            blockhash: latest.blockhash,
-            lastValidBlockHeight: latest.lastValidBlockHeight,
-          }, 'confirmed'),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
-        ]);
-        if (conf?.value?.err) throw new Error('Swap tx failed on-chain: ' + JSON.stringify(conf.value.err));
-        confirmed = true;
-      } catch (cfErr) {
-        const deadline = Date.now() + 20_000;
-        while (Date.now() < deadline) {
-          await new Promise(r => setTimeout(r, 2000));
-          try {
-            const st = await rpcRaceTrade('getSigStatus',
-              c => c.getSignatureStatus(sig, { searchTransactionHistory: true }));
-            const cs = st?.value?.confirmationStatus;
-            if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
-            if (st?.value?.err) throw new Error('Swap tx failed on-chain.');
-          } catch (e) {
-            if (/failed on-chain/i.test(String(e.message))) throw e;
-          }
-        }
-      }
-
-      // onSuccess tail — verbatim from MemeWonderland handleSwap. The page-state
-      // setters it references (onSuccess UI toast, refreshBalances) are created
-      // locally here so this file needs no restructure; the sheet shows the
-      // result via handleConfirm's return handling.
-      const outputDecimals  = isBuy ? (token.decimals || 6) : 9;
-      const inputSymbol     = isBuy ? 'SOL' : (token.sym || 'TKN');
-      const outputSymbol    = isBuy ? (token.sym || 'TKN') : 'SOL';
-      const amtNum          = isBuy ? Number(swapParams.solAmount || 0) : Number(swapParams.tradeTokensUi || 0);
-      const format          = tradeFmtTokens;
-      const onSuccess       = () => {};
-      const refreshBalances = () => { refreshSol(); refreshOneToken(token.mint); };
-
-      const outUi = Number(build.outAmount) / Math.pow(10, outputDecimals);
-      onSuccess({
-        signature: sig,
-        pending: !confirmed,
-        paid: amtNum.toFixed(4) + ' ' + inputSymbol,
-        got:  format(outUi) + ' ' + outputSymbol,
-        price: token.price,
-      });
-      if (confirmed) setTimeout(() => refreshBalances(), 2000);
-
-      // log to referral / pnl ledger (fire and forget) — same as the pump path
-      try {
-        let volSol;
-        if (isBuy) {
-          volSol = Number(swapParams.tradeLamports) / 1e9;
-        } else {
-          volSol = (swapParams.tradeTokensUi * (token.price || 0)) / (solPrice || 1);
-        }
-        refLogTrade({ wallet: walletStr, mint: token.mint, sym: token.sym, side: mode, sol: volSol, sig, ts: Date.now() });
-      } catch (e) {}
-
-      return { sig, confirmed };
-}
-
 
 
 /* ============================================================
@@ -1680,59 +1441,6 @@ const AP_CSS = `
 .ap-safety-bar i{display:block;height:100%;border-radius:3px;background:linear-gradient(90deg,#0fae7d,var(--green))}
 .ap-safety-bar i.amber{background:linear-gradient(90deg,var(--ember2),var(--ember1))}
 .ap-safety-bar i.red{background:linear-gradient(90deg,#cc3450,var(--red))}
-
-/* ===== DENSE BOARD (new UI shell only — trade calls untouched) ===== */
-.apx-board{display:grid;grid-template-columns:repeat(3,1fr);gap:0;border:1px solid var(--border);border-radius:14px;overflow:hidden;background:var(--glass);min-height:520px}
-.apx-col{display:flex;flex-direction:column;border-right:1px solid var(--border);min-width:0}
-.apx-col:last-child{border-right:none}
-.apx-ch{display:flex;align-items:center;justify-content:space-between;padding:9px 12px;background:var(--fill2);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:5}
-.apx-chl{display:flex;align-items:center;gap:7px;font-size:11.5px;font-weight:800;letter-spacing:.3px;text-transform:uppercase;color:var(--ink)}
-.apx-cd{width:7px;height:7px;border-radius:2px;transform:rotate(45deg);flex-shrink:0}
-.apx-cd.new{background:var(--amber)}.apx-cd.stretch{background:var(--peach)}.apx-cd.migrated{background:var(--green)}
-.apx-cc{font-family:'JetBrains Mono',monospace;font-size:9.5px;font-weight:700;color:var(--ink3);background:var(--fill);border:1px solid var(--border);border-radius:5px;padding:1px 6px}
-.apx-csub{font-family:'JetBrains Mono',monospace;font-size:9.5px;color:var(--ink3);font-weight:600}
-.apx-cs{overflow-y:auto;flex:1;max-height:70vh}
-.apx-row{display:flex;align-items:center;gap:9px;padding:9px 11px;border-bottom:1px solid var(--hairline);cursor:pointer;position:relative}
-.apx-row:hover{background:var(--fill2)}
-.apx-row::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:transparent}
-.apx-row:hover::before{background:var(--amber)}
-.apx-row.fresh::before{background:var(--amber)}
-.apx-av{width:36px;height:36px;border-radius:9px;flex-shrink:0;display:grid;place-items:center;font-size:16px;overflow:hidden;background:var(--fill);border:1px solid var(--border);color:var(--ink)}
-.apx-av img{width:100%;height:100%;object-fit:cover}
-.apx-tk{flex:1;min-width:0}
-.apx-r1{display:flex;align-items:center;gap:6px;min-width:0}
-.apx-sym{font-weight:800;font-size:13px;letter-spacing:-.01em;flex-shrink:0;color:var(--ink)}
-.apx-name{font-size:10.5px;color:var(--ink3);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-.apx-r2{display:flex;align-items:center;gap:6px;margin-top:4px}
-.apx-age{font-family:'JetBrains Mono',monospace;font-size:9.5px;font-weight:700;color:var(--ink3)}
-.apx-age.hot{color:var(--green)}
-.apx-ca{font-family:'JetBrains Mono',monospace;font-size:9.5px;color:var(--ink3);font-weight:600;opacity:.7}
-.apx-bond{display:inline-flex;align-items:center;gap:4px;margin-left:auto}
-.apx-bw{width:38px;height:3px;background:var(--fill);border-radius:2px;overflow:hidden}
-.apx-bf{display:block;height:100%;background:var(--peach)}
-.apx-bp{font-family:'JetBrains Mono',monospace;font-size:8.5px;font-weight:700;color:var(--ink2)}
-.apx-grad{font-family:'JetBrains Mono',monospace;font-size:8.5px;font-weight:700;color:var(--green);margin-left:auto}
-.apx-r3{display:flex;gap:4px;margin-top:6px;flex-wrap:wrap}
-.apx-p{font-family:'JetBrains Mono',monospace;font-size:8.5px;font-weight:700;letter-spacing:.2px;padding:1px 5px;border-radius:4px;border:1px solid var(--border)}
-.apx-p.ok{color:var(--green);border-color:rgba(17,184,127,.3)}
-.apx-p.cau{color:var(--peach);border-color:rgba(245,146,27,.3)}
-.apx-p.bad{color:var(--red);border-color:rgba(240,66,90,.3)}
-.apx-st{display:flex;flex-direction:column;align-items:flex-end;gap:2px;flex-shrink:0;line-height:1.2}
-.apx-mc{font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:800;color:var(--ink);display:flex;align-items:baseline;gap:3px}
-.apx-mcl{font-size:8px;color:var(--ink3);font-weight:700}
-.apx-sub{font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--ink3);font-weight:600}
-.apx-chg{font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:800}
-.apx-chg.up{color:var(--green)}.apx-chg.dn{color:var(--red)}
-.apx-qb{display:flex;align-items:center;gap:3px;background:var(--green);color:#fff;border:none;border-radius:8px;padding:8px 11px;font-family:'JetBrains Mono',monospace;font-weight:800;font-size:12px;cursor:pointer;flex-shrink:0}
-.apx-qb:disabled{opacity:.55;cursor:default}
-.apx-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;padding:40px 18px;text-align:center;color:var(--ink3)}
-.apx-empty .g{font-size:24px;opacity:.5}
-.apx-empty b{color:var(--ink2);font-size:13px;font-weight:700}
-.apx-empty span{font-size:11px;color:var(--ink3)}
-.apx-colfoot{padding:8px 12px;border-top:1px solid var(--border);font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:600;color:var(--ink3);background:var(--fill2)}
-@media(max-width:1024px){.apx-board{grid-template-columns:repeat(2,1fr)}.apx-col:nth-child(3){grid-column:1/-1;border-right:none;border-top:1px solid var(--border)}}
-@media(max-width:680px){.apx-board{grid-template-columns:1fr}.apx-col{border-right:none;border-bottom:1px solid var(--border)}}
-
 `;
 
 function useApCSS() {
@@ -3033,92 +2741,6 @@ function WatchedWallets({ open, onClose, solPrice, resolveToken }) {
   );
 }
 
-
-/* ===== DENSE BOARD UI (new shell). Renders the existing `filtered`
-   tokens in the existing row data; ⚡ calls existing onApe, row tap
-   calls existing onOpen. No trade/data logic added. ===== */
-const ApxRow = React.memo(function ApxRow({ token, ageMs, busy, quickAmount, onApe, onOpen, isFresh }) {
-  const rr = riskRead({ ...token, ageMs });
-  const tierClass = rr.tier === 'low' ? 'ok' : rr.tier === 'med' ? 'cau' : 'bad';
-  const liq = token.liquidity || 0, hold = token.holders || 0, vol = token.volume24h || 0;
-  const up = (token.change || 0) >= 0;
-  const graduated = (Number.isFinite(token.bond) && token.bond >= 100) || (token.dex && !/^pump/i.test(String(token.dex)));
-  const liqTier = liq >= 30000 ? 'ok' : liq >= 5000 ? 'cau' : 'bad';
-  const holdTier = hold >= 500 ? 'ok' : hold >= 100 ? 'cau' : 'bad';
-  return (
-    <div className={'apx-row' + (isFresh ? ' fresh' : '')} onClick={() => onOpen(token)}>
-      <div className="apx-av"><TokenChip token={token} /></div>
-      <div className="apx-tk">
-        <div className="apx-r1"><span className="apx-sym">{token.sym}</span><span className="apx-name">{token.name}</span></div>
-        <div className="apx-r2">
-          <span className={'apx-age' + (Number.isFinite(ageMs) && ageMs < 180000 ? ' hot' : '')}>{Number.isFinite(ageMs) ? fmtAgeShort(ageMs) : '—'}</span>
-          <span className="apx-ca">{(token.mint || '').slice(0, 4)}…{(token.mint || '').slice(-4)}</span>
-          {graduated
-            ? <span className="apx-grad">✓ DEX</span>
-            : (Number.isFinite(token.bond)
-                ? <span className="apx-bond"><span className="apx-bw"><span className="apx-bf" style={{ width: token.bond + '%' }} /></span><span className="apx-bp">{token.bond.toFixed(0)}%</span></span>
-                : null)}
-        </div>
-        <div className="apx-r3">
-          <span className={'apx-p ' + liqTier}>LIQ {formatMoney(liq)}</span>
-          <span className={'apx-p ' + holdTier}>{format(hold)}H</span>
-          <span className={'apx-p ' + tierClass}>RISK {rr.score}</span>
-        </div>
-      </div>
-      <div className="apx-st">
-        <span className="apx-mc">{formatMoney(token.mcap || 0)}<span className="apx-mcl">MC</span></span>
-        <span className="apx-sub">V {formatMoney(vol)}</span>
-        <span className={'apx-chg ' + (up ? 'up' : 'dn')}>{formatPct(token.change)}</span>
-      </div>
-      <button className="apx-qb" disabled={busy} onClick={(e) => { e.stopPropagation(); onApe(token); }} title={'Buy ' + quickAmount + ' SOL'}>
-        <span>{busy ? '◌' : '⚡'}</span>{quickAmount}
-      </button>
-    </div>
-  );
-});
-
-function ApxColumn({ title, stageClass, sub, tokens, now, lastFreshMint, busyMints, quickAmount, onApe, onOpen, emptyMsg }) {
-  return (
-    <div className="apx-col">
-      <div className="apx-ch">
-        <div className="apx-chl"><span className={'apx-cd ' + stageClass} />{title}<span className="apx-cc">{tokens.length}</span></div>
-        <span className="apx-csub">{sub}</span>
-      </div>
-      <div className="apx-cs">
-        {tokens.length === 0
-          ? <div className="apx-empty"><span className="g">∅</span><b>Nothing here yet</b><span>{emptyMsg}</span></div>
-          : tokens.map(t => {
-              const ageMs = t.pairCreatedAtMs ? now - t.pairCreatedAtMs : NaN;
-              const isFresh = t.mint === lastFreshMint && Number.isFinite(ageMs) && ageMs < 60000;
-              return <ApxRow key={t.mint} token={t} ageMs={ageMs} busy={!!busyMints[t.mint]} quickAmount={quickAmount} onApe={onApe} onOpen={onOpen} isFresh={isFresh} />;
-            })}
-      </div>
-      <div className="apx-colfoot">Live</div>
-    </div>
-  );
-}
-
-function ApeBoard({ tokens, now, lastFreshMint, busyMints, quickAmount, onApe, onOpen }) {
-  const { newPairs, stretch, migrated } = useMemo(() => {
-    const a = [], b = [], c = [];
-    for (const t of tokens) {
-      const graduated = (Number.isFinite(t.bond) && t.bond >= 100) || (t.dex && !/^pump/i.test(String(t.dex)));
-      if (graduated) c.push(t);
-      else if (Number.isFinite(t.bond) && t.bond >= 50) b.push(t);
-      else a.push(t);
-    }
-    return { newPairs: a, stretch: b, migrated: c };
-  }, [tokens]);
-  return (
-    <div className="apx-board">
-      <ApxColumn title="New Pairs" stageClass="new" sub="just launched" tokens={newPairs} now={now} lastFreshMint={lastFreshMint} busyMints={busyMints} quickAmount={quickAmount} onApe={onApe} onOpen={onOpen} emptyMsg="Waiting for fresh launches…" />
-      <ApxColumn title="Final Stretch" stageClass="stretch" sub="about to migrate" tokens={stretch} now={now} lastFreshMint={lastFreshMint} busyMints={busyMints} quickAmount={quickAmount} onApe={onApe} onOpen={onOpen} emptyMsg="Nothing near migration." />
-      <ApxColumn title="Migrated" stageClass="migrated" sub="on a DEX" tokens={migrated} now={now} lastFreshMint={lastFreshMint} busyMints={busyMints} quickAmount={quickAmount} onApe={onApe} onOpen={onOpen} emptyMsg="No graduated tokens." />
-    </div>
-  );
-}
-
-
 /* ============================================================
    MAIN APE PAGE
    ============================================================ */
@@ -3513,35 +3135,17 @@ export default function Ape({ mainWalletPubkey }) {
     const params = swapParams || (mode === 'buy'
       ? { mode: 'buy', tradeLamports, feeLamports, totalLamports }
       : { mode: 'sell', tradeTokens: tradeTokensRaw, tradeTokensUi, feeLamports: feeLamports != null ? String(feeLamports) : '0', decimals: decimals != null ? Number(decimals) : 6 });
-    // Graduated/off-curve → burner Jupiter; else pump (unchanged).
-    const graduated = (token && Number.isFinite(token.bond) && token.bond >= 100)
-      || (token && token.dex && !/^pump/i.test(String(token.dex)));
-    let result;
-    if (graduated) {
-      result = await apeJupiterSwap({
-        mode: params.mode,
-        swapParams: params,
-        token,
-        keypair: wallet.keypair,
-        userPk: wallet.publicKey,
-        refreshSol,
-        refreshOneToken,
-        walletStr,
-        solPrice: solPriceRef.current,
-      });
-    } else {
-      result = await apeExecuteSwap({
-        mode: params.mode,
-        swapParams: params,
-        token,
-        keypair: wallet.keypair,
-        userPk: wallet.publicKey,
-        tradeConnection,
-        walletStr,
-        refWalletStr: mainWalletPubkey,
-        solPrice: solPriceRef.current,
-      });
-    }
+    const result = await apeExecuteSwap({
+      mode: params.mode,
+      swapParams: params,
+      token,
+      keypair: wallet.keypair,
+      userPk: wallet.publicKey,
+      tradeConnection,
+      walletStr,
+      refWalletStr: mainWalletPubkey,
+      solPrice: solPriceRef.current,
+    });
     try { localStorage.setItem(HAS_TRADED_KEY, '1'); } catch (e) {}
     setShowLure(false);
     setTimeout(() => { refreshSol(); refreshOneToken(token.mint); }, 800);
@@ -3820,22 +3424,126 @@ export default function Ape({ mainWalletPubkey }) {
 
           <OpenPositionsStrip walletStr={walletStr} solPrice={solPrice} onOpenStats={() => { setStatsTab('yourtrades'); setShowStats(true); }} />
 
-          {feedError ? (
-            <div className="apx-empty" style={{ border: '1px solid var(--border)', borderRadius: 14, margin: '4px 0' }}>
-              <span className="g">⊘</span><b>Couldn't reach the feed</b>
-              <span>Retrying every few seconds.</span>
+          {trending.length > 0 ? (
+            <div className="ap-trending">
+              <div className="ap-trending-head">
+                <span className="lbl">★ Trending now</span>
+                <span className="meta">Biggest moves · live</span>
+              </div>
+              <div className="ap-trending-rail">
+                {trending.map(t => {
+                  const c = colorFor(t.mint);
+                  const up = (t.change || 0) >= 0;
+                  return (
+                    <div className="ap-trend-card" key={t.mint} onClick={() => onRowClick(t)}>
+                      <div className="av" style={{background:'linear-gradient(135deg,'+c+','+shade(c,-30)+')'}}><TokenChip token={t} /></div>
+                      <div className="meta">
+                        <div className="sym">${t.sym}</div>
+                        <div className={'chg' + (up ? '' : ' dn')}>{formatPct(t.change)}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
-          ) : (
-            <ApeBoard
-              tokens={filtered}
-              now={now}
-              lastFreshMint={lastFreshMintRef.current}
-              busyMints={busyMints}
-              quickAmount={quickAmount}
-              onApe={onApe}
-              onOpen={onRowClick}
-            />
-          )}
+          ) : null}
+
+          <div className="ap-list-frame">
+            <div className="ap-list-head">
+              <div className="ap-list-title">
+                <span className="e">§ The feed</span>
+                <span className="t">{activeTab === 'owned' ? <>Your <span className="it">bag</span></> : activeTab === 'hot' ? <>Hot <span className="it">right now</span></> : activeTab === 'discovery' ? <>Discover <span className="it">tokens</span></> : <>Fresh <span className="it">tokens</span></>}</span>
+              </div>
+              <div className="ap-list-filters">
+                <button className={'ap-chip' + (activeTab === 'hot' ? ' on' : '')} onClick={() => setActiveTab('hot')}>🔥 Hot</button>
+                <button className={'ap-chip' + (activeTab === 'feed' ? ' on' : '')} onClick={() => setActiveTab('feed')}>All new</button>
+                <button className={'ap-chip' + (activeTab === 'discovery' ? ' on' : '')} onClick={() => setActiveTab('discovery')}>🔎 Discover</button>
+                <button className={'ap-chip owned' + (activeTab === 'owned' ? ' on' : '')} onClick={() => setActiveTab('owned')}>You own{ownedCount > 0 ? ' · ' + ownedCount : ''}</button>
+                <button className="ap-filter-btn" onClick={() => setShowFilters(true)}>
+                  <span>Filters</span>{activeFiltersCount > 0 ? <span className="ct">{activeFiltersCount}</span> : null}
+                </button>
+              </div>
+            </div>
+
+            {activeTab === 'discovery' ? (
+              <div className="ap-disc">
+                <div className="ap-disc-sorts">
+                  {[['new','New'],['hot','Hot'],['gainers','Gainers'],['safest','Safest']].map(([k,lbl]) => (
+                    <button key={k} className={'ap-disc-sort' + (discSort === k ? ' on' : '')} onClick={() => setDiscSort(k)}>{lbl}</button>
+                  ))}
+                  <button className={'ap-disc-ftoggle' + (discFiltersOpen ? ' on' : '')} onClick={() => setDiscFiltersOpen(v => !v)}>Filters {discActiveCount > 0 ? '· ' + discActiveCount : ''}</button>
+                </div>
+                {discFiltersOpen ? (
+                  <div className="ap-disc-filters">
+                    <label className="ap-disc-f"><span>Min liquidity</span><select value={discMinLiq} onChange={e => setDiscMinLiq(Number(e.target.value))}>
+                      <option value={0}>Any</option><option value={5000}>$5K+</option><option value={20000}>$20K+</option><option value={50000}>$50K+</option><option value={100000}>$100K+</option></select></label>
+                    <label className="ap-disc-f"><span>Min market cap</span><select value={discMinMcap} onChange={e => setDiscMinMcap(Number(e.target.value))}>
+                      <option value={0}>Any</option><option value={50000}>$50K+</option><option value={250000}>$250K+</option><option value={1000000}>$1M+</option></select></label>
+                    <label className="ap-disc-f"><span>Max market cap</span><select value={discMaxMcap} onChange={e => setDiscMaxMcap(Number(e.target.value))}>
+                      <option value={0}>Any</option><option value={250000}>$250K</option><option value={1000000}>$1M</option><option value={10000000}>$10M</option></select></label>
+                    <label className="ap-disc-f"><span>Min holders</span><select value={discMinHolders} onChange={e => setDiscMinHolders(Number(e.target.value))}>
+                      <option value={0}>Any</option><option value={50}>50+</option><option value={200}>200+</option><option value={500}>500+</option></select></label>
+                    <label className="ap-disc-f"><span>Min safety</span><select value={discMinScore} onChange={e => setDiscMinScore(Number(e.target.value))}>
+                      <option value={0}>Any</option><option value={40}>40+</option><option value={60}>60+</option><option value={75}>75+</option></select></label>
+                    <label className="ap-disc-f"><span>Age</span><select value={discAge} onChange={e => setDiscAge(e.target.value)}>
+                      <option value="any">Any</option><option value="5m">≤ 5m</option><option value="1h">≤ 1h</option><option value="6h">≤ 6h</option><option value="24h">≤ 24h</option></select></label>
+                    {discActiveCount > 0 ? <button className="ap-disc-clear" onClick={() => { setDiscMinLiq(0); setDiscMinMcap(0); setDiscMaxMcap(0); setDiscMinHolders(0); setDiscMinScore(0); setDiscAge('any'); }}>Clear filters</button> : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {activeTab === 'hot' ? (
+              <div className="ap-hotwin">
+                {['5m', '1h', '24h'].map(w => (
+                  <button key={w} className={'ap-hotwin-pill' + (hotWindow === w ? ' on' : '')} onClick={() => setHotWindow(w)}>{w}</button>
+                ))}
+                <span className="ap-hotwin-meta">Momentum · last {hotWindow}</span>
+              </div>
+            ) : null}
+
+            <div className="ap-list">
+              {feedError ? (
+                <div className="ap-empty"><span className="glyph">⊘</span><b>Couldn't reach the feed</b><span className="sub">Retrying every few seconds. Solana RPC sometimes hiccups.</span><div className="err">{feedError}</div></div>
+              ) : filtered.length === 0 ? (
+                <div className="ap-empty">
+                  <span className="glyph">∅</span>
+                  <b>{activeTab === 'owned' ? <>No tokens in your <span style={{fontStyle:'italic',color:'#86868b'}}>bag</span></> : <>Nothing matches</>}</b>
+                  <span className="sub">{activeTab === 'owned' ? <>Buy something and it'll appear here.</> : activeFiltersCount > 0 ? 'Try loosening filters.' : 'Waiting for fresh launches…'}</span>
+                </div>
+              ) : (
+                filtered.map(t => {
+                  const ageMsLive = t.pairCreatedAtMs ? now - t.pairCreatedAtMs : null;
+                  const isFresh = t.mint === lastFreshMintRef.current && ageMsLive != null && ageMsLive < 60000;
+                  return (
+                    <SpecimenRow
+                      key={t.mint}
+                      token={t}
+                      ageMsLive={ageMsLive}
+                      owned={balances[t.mint]}
+                      costBasis={pnlBasis[t.mint]}
+                      solPrice={solPrice}
+                      quickAmount={quickAmount + ' SOL'}
+                      busy={!!busyMints[t.mint]}
+                      onApe={onApe}
+                      onSell={onSell}
+                      onOpen={onRowClick}
+                      isFresh={isFresh}
+                      ownedMode={activeTab === 'owned'}
+                    />
+                  );
+                })
+              )}
+            </div>
+
+            <div className="ap-list-foot">
+              <span className={'live' + (feedError ? ' warn' : '')}>
+                <span className="d" />
+                <span>{feedError ? 'Reconnecting…' : 'Live · refreshing every ' + (POLL_RECENT / 1000) + 's'}</span>
+              </span>
+              <span>{activeTab === 'owned' ? (filtered.length + (filtered.length === 1 ? ' token held' : ' tokens held')) : activeTab === 'hot' ? (filtered.length + ' hot now') : activeTab === 'discovery' ? (discLoading && filtered.length === 0 ? 'Loading Solana…' : filtered.length + ' of ' + discTokens.length + (discActiveCount > 0 ? ' · ' + discActiveCount + ' filter' + (discActiveCount === 1 ? '' : 's') : '')) : (filtered.length + ' of ' + recent.length + ' shown')}</span>
+            </div>
+          </div>
         </div>
       </div>
 
