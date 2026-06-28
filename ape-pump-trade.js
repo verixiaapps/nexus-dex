@@ -47,7 +47,7 @@ const PUMPPORTAL_URL = 'https://pumpportal.fun/api/trade-local';
 const BASE58_RE      = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const SLIPPAGE_PCT   = 10;
 // Fast by default. Tunable via env so you can react to congestion without a
-// redeploy. Falls back to 0.005 SOL if the env var is unset/invalid.
+// redeploy. Falls back to 0.001 SOL if the env var is unset/invalid.
 const PRIORITY_FEE   = (() => {
   const v = Number(process.env.APE_PRIORITY_FEE);
   return Number.isFinite(v) && v > 0 ? v : 0.001;
