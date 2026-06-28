@@ -3792,7 +3792,7 @@ export default function Ape({ mainWalletPubkey }) {
             </div>
           ) : (
             <ApeBoard
-              tokens={recent}
+              tokens={filtered}
               now={now}
               lastFreshMint={lastFreshMintRef.current}
               busyMints={busyMints}
