@@ -960,6 +960,85 @@ function nxWarm(mints) {
   } catch (e) {}
 }
 
+/* ── Discover filter cache (client) ──────────────────────────────────────
+ * Module-level so it survives Discover/Launches tab flips and component
+ * remounts within the session — re-entering Discover is instant, never blank.
+ * Stale-while-revalidate: a cached lens renders immediately; if older than
+ * NXD_FRESH_MS the next load refreshes it in the background. The server already
+ * caches each lens (30s organic / 5s new), so refreshes are cheap.
+ * ---------------------------------------------------------------------- */
+const NXD_FRESH_MS = 20_000;
+const _nxdCache    = new Map(); // lens -> { at, tokens }
+const _nxdInflight = new Map(); // lens -> Promise
+
+function nxdGetCached(lens) {
+  const hit = _nxdCache.get(lens);
+  return hit ? hit.tokens : null;
+}
+
+async function nxdFetchLens(lens, limit = 80) {
+  if (_nxdInflight.has(lens)) return _nxdInflight.get(lens);
+  const job = (async () => {
+    try {
+      const r = await fetch('/api/nx/discover?lens=' + encodeURIComponent(lens) + '&limit=' + limit);
+      const d = await r.json();
+      const raw = Array.isArray(d?.tokens) ? d.tokens : [];
+      const tokens = _uniqMint(raw.map(normalize).filter(t => t && t.mint));
+      _nxdCache.set(lens, { at: Date.now(), tokens });
+      // Warm sparklines + charts for the whole lens immediately.
+      nxWarm(tokens.map(t => t.mint));
+      nxdPrimeSparks(tokens.map(t => t.mint));
+      return tokens;
+    } catch {
+      return _nxdCache.get(lens)?.tokens || [];
+    } finally {
+      _nxdInflight.delete(lens);
+    }
+  })();
+  _nxdInflight.set(lens, job);
+  return job;
+}
+
+// Prefetch every lens once, so the first tap on any filter is instant.
+function nxdPrefetchAll() {
+  ['popular', 'hot', 'new', 'gainers'].forEach(l => {
+    const hit = _nxdCache.get(l);
+    if (!hit || Date.now() - hit.at >= NXD_FRESH_MS) nxdFetchLens(l);
+  });
+}
+
+/* Batch sparkline primer: one POST returns every warm series at once; we seed
+ * the SAME _ohlcv cache MwSparkline already reads, so rows render their line
+ * with zero per-row network calls. Cold mints come back in `pending`; we poll
+ * a couple of times as the server's background drip warms them. */
+function nxdPrimeSparks(mints, _round = 0) {
+  try {
+    const list = Array.from(new Set((mints || []).filter(Boolean))).slice(0, 120);
+    if (!list.length) return;
+    fetch('/api/nx/discover-spark', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mints: list }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        const sparks = d && d.sparks ? d.sparks : {};
+        for (const m in sparks) {
+          const closes = sparks[m] && sparks[m].closes;
+          if (Array.isArray(closes) && closes.length >= 2) {
+            _ohlcv.set(m, { ts: Date.now(), closes: closes.map(Number).filter(n => n > 0) });
+          }
+        }
+        const pending = Array.isArray(d?.pending) ? d.pending : [];
+        // Poll a few more times for the ones still warming on the server.
+        if (pending.length && _round < 3) {
+          setTimeout(() => nxdPrimeSparks(pending, _round + 1), 1800);
+        }
+      })
+      .catch(() => {});
+  } catch (e) {}
+}
+
 function mwPtsFromAny(data) {
   let arr = null;
   if (Array.isArray(data)) arr = data;
@@ -1399,38 +1478,64 @@ function MwdRow({ t, i, onOpen, onTrade }) {
 }
 
 const MWD_LENSES = [
+  { id: 'popular', label: 'Popular' },
   { id: 'hot',     label: 'Hot' },
   { id: 'new',     label: 'New' },
   { id: 'gainers', label: 'Top gainers' },
-  { id: 'whale',   label: 'Whale activity' },
-  { id: 'yours',   label: 'Yours' },
 ];
 
 function MwDiscoverFeed({
-  tokens, balances,
+  fallbackTokens, chartChg,
   searchQuery, setSearchQuery, searchOpen, setSearchOpen, searchResults, searching,
   searchWrapRef, onSearchSelect,
   onOpen, onTrade,
 }) {
   useMwdCSS();
   const [lens, setLens] = useState('hot');
+  // Per-lens token sets pulled from the server (real, different data per lens),
+  // seeded instantly from the module cache so switching never blanks.
+  const [sets, setSets] = useState(() => {
+    const init = {};
+    for (const l of ['popular', 'hot', 'new', 'gainers']) {
+      const c = nxdGetCached(l);
+      if (c) init[l] = c;
+    }
+    return init;
+  });
+  const [loading, setLoading] = useState(false);
 
-  const whaleCount = useMemo(() => tokens.filter(t => t.whaleCount > 0).length, [tokens]);
-  const yoursCount = useMemo(
-    () => tokens.filter(t => balances && balances[t.mint] && balances[t.mint].amount > 0).length,
-    [tokens, balances]
-  );
+  // Prefetch every lens once on mount so the first tap on any filter is instant.
+  useEffect(() => { nxdPrefetchAll(); }, []);
 
+  // Load (or refresh) the active lens. Cached value shows immediately; a stale
+  // one refreshes in the background without clearing the screen.
+  useEffect(() => {
+    let cancelled = false;
+    const cached = nxdGetCached(lens);
+    if (cached) setSets(s => ({ ...s, [lens]: cached }));
+    if (!cached) setLoading(true);
+    nxdFetchLens(lens).then(tokens => {
+      if (cancelled) return;
+      setSets(s => ({ ...s, [lens]: tokens }));
+      setLoading(false);
+    });
+    // Light refresh while the lens is open.
+    const id = setInterval(() => {
+      nxdFetchLens(lens).then(tokens => { if (!cancelled) setSets(s => ({ ...s, [lens]: tokens })); });
+    }, 15_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [lens]);
+
+  // Active list: server-sorted for this lens, with the parent's chart-derived %
+  // overlaid so the number always matches the sparkline. Fall back to the
+  // parent's already-loaded feed if a lens hasn't returned yet.
   const list = useMemo(() => {
-    let xs = tokens.slice();
-    if (lens === 'new')      xs = xs.filter(t => t.fresh).sort((a, b) => (a.ageMs || 0) - (b.ageMs || 0));
-    else if (lens === 'gainers') xs = xs.filter(t => Number.isFinite(t.change)).sort((a, b) => (b.change || 0) - (a.change || 0));
-    else if (lens === 'whale')   xs = xs.filter(t => t.whaleCount > 0).sort((a, b) => (b.whaleSol || 0) - (a.whaleSol || 0));
-    else if (lens === 'yours')   xs = xs.filter(t => balances && balances[t.mint] && balances[t.mint].amount > 0);
-    return xs.slice(0, 50);
-  }, [tokens, lens, balances]);
-
-  const countFor = (id) => id === 'whale' ? whaleCount : id === 'yours' ? yoursCount : null;
+    const base = (sets[lens] && sets[lens].length) ? sets[lens] : (fallbackTokens || []);
+    return base.map(t => {
+      const cc = chartChg ? chartChg[t.mint] : undefined;
+      return Number.isFinite(cc) ? { ...t, change: cc } : t;
+    });
+  }, [sets, lens, fallbackTokens, chartChg]);
 
   return (
     <div className="mwd">
@@ -1470,19 +1575,16 @@ function MwDiscoverFeed({
         </div>
 
         <div className="mwd-chips">
-          {MWD_LENSES.map(l => {
-            const c = countFor(l.id);
-            return (
-              <button key={l.id} className={'mwd-chip' + (lens === l.id ? ' on' : '') + (l.id === 'hot' ? ' hot' : '')} onClick={() => setLens(l.id)}>
-                {l.label}{c != null && c > 0 ? <span className="ct">{c}</span> : null}
-              </button>
-            );
-          })}
+          {MWD_LENSES.map(l => (
+            <button key={l.id} className={'mwd-chip' + (lens === l.id ? ' on' : '') + (l.id === 'hot' ? ' hot' : '')} onClick={() => setLens(l.id)}>
+              {l.label}
+            </button>
+          ))}
         </div>
 
         <div className="mwd-feed">
           {list.length === 0
-            ? <div className="mwd-empty" style={{ padding: '40px 16px' }}>No tokens match this filter yet.</div>
+            ? <div className="mwd-empty" style={{ padding: '40px 16px' }}>{loading ? 'Loading…' : 'No tokens match this filter yet.'}</div>
             : list.map((t, i) => <MwdRow key={t.mint} t={t} i={i} onOpen={onOpen} onTrade={onTrade} />)}
         </div>
 
@@ -1847,8 +1949,8 @@ function MemeWonderland({ onConnectWallet } = {}) {
   return (
     <div className="mw-root">
       <MwDiscoverFeed
-        tokens={tokensWithWhale}
-        balances={balances}
+        fallbackTokens={tokensWithWhale}
+        chartChg={chartChg}
         searchQuery={searchQuery}
         setSearchQuery={(v) => { setSearchQuery(v); if (!v) setSearchResults(null); }}
         searchOpen={searchOpen}
