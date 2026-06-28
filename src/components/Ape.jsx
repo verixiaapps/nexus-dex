@@ -106,6 +106,35 @@ const getTradeConn = (commitment) => {
 };
 const balRpcRace = (op) => op(getConn(BAL_COMMITMENT));
 
+// ── Jupiter helpers, copied verbatim from App.js (needed by the burner
+//    Jupiter path for graduated tokens). Not present in original Ape. ──
+const SLIPPAGE_BPS = 500;
+const deserIx = (ix) => ({
+  programId: new PublicKey(ix.programId),
+  keys: ix.accounts.map(a => ({ pubkey: new PublicKey(a.pubkey), isSigner: a.isSigner, isWritable: a.isWritable })),
+  data: Buffer.from(ix.data, 'base64'),
+});
+const tradeGetConn = (commitment, url = RPC_URL) => {
+  let c = _connCache.get(commitment + '|' + url);
+  if (!c) { c = new Connection(url, commitment); _connCache.set(commitment + '|' + url, c); }
+  return c;
+};
+const rpcRaceTrade = (label, op, commitment = 'confirmed') => {
+  return op(getTradeConn(commitment)).catch(e => {
+    console.warn(`[trade-rpc] ${label} failed:`, e?.message);
+    throw new Error(`${label}: trade RPC failed`);
+  });
+};
+// Verbatim from App.js — used by the burner Jupiter onSuccess tail.
+function tradeFmtTokens(n) {
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return Math.round(n).toLocaleString();
+  if (n >= 1)   return n.toFixed(2);
+  return n.toPrecision(3);
+}
+
 /* ============================================================
    FORMATTERS
    ============================================================ */
@@ -630,156 +659,209 @@ async function apeExecuteSwap({ mode, swapParams, token, keypair, userPk, tradeC
 }
 
 /* ============================================================
-   BURNER JUPITER PATH — graduated / off-curve SPL tokens.
-   Adapted from App.js executeRegularSwap, with three burner changes:
-     · signs locally with the burner keypair (tx.sign([keypair])),
-     · NO simulateTransaction — straight build -> sign -> send,
-     · skipPreflight:true (fastest, same as the pump path).
-   Slippage = 1000 bps (10%) to match the pump server-side slippage; no
-   separate UI. Full 3% fee -> FEE_WALLET (+ 50% referral split), identical
-   to apeExecuteSwap. Reuses the pump confirmation loop for consistency.
-
-   Routing decision lives in the React executeSwap wrapper (token.route /
-   graduated). This function is only called for graduated tokens.
+   BURNER JUPITER PATH — graduated tokens.
+   App.js executeRegularSwap copied VERBATIM. Only changes:
+     • standalone fn taking the burner keypair/userPk (not the
+       useCallback wrapper / connected wallet),
+     • signer line: wallet.signTransaction(tx) -> tx.sign([keypair]).
+   Fee logic, sim, instruction assembly, send/confirm: unchanged.
    ============================================================ */
-const APE_JUP_SLIPPAGE_BPS = 1000; // 10% — matches pump server-side slippage
-const apeDeserIx = (ix) => ({
-  programId: new PublicKey(ix.programId),
-  keys: (ix.accounts || []).map(a => ({ pubkey: new PublicKey(a.pubkey), isSigner: a.isSigner, isWritable: a.isWritable })),
-  data: Buffer.from(ix.data, 'base64'),
-});
+async function apeJupiterSwap({ mode, swapParams, token, keypair, userPk, refreshSol, refreshOneToken, walletStr, solPrice }) {
+  if (!keypair || !userPk) throw new Error('Burner wallet not ready.');
+    if (!swapParams) throw new Error('Nothing to trade.');
+    const isBuy = mode === 'buy';
+    // userPk provided as arg (burner)
+    const connection = tradeGetConn('confirmed'); // /api/solana-rpc — MemeWonderland's `connection`
+    const inputMint  = isBuy ? SOL_MINT : token.mint;
+    const outputMint = isBuy ? token.mint : SOL_MINT;
+    const dec = isBuy ? 9 : (swapParams.decimals || token.decimals || 6);
+    // Ape fee model (matches the pump path): on BUY, tradeLamports is the SOL
+    // that goes INTO the swap and the 3% fee is added ON TOP (feeLamports).
+    // On SELL, tradeTokens is the full token amount; fee is taken in-token.
+    const swapInAmount = BigInt(isBuy ? swapParams.tradeLamports : swapParams.tradeTokens);
+    if (swapInAmount <= 0n) throw new Error('Amount too small.');
 
-async function apeJupiterSwap({ mode, swapParams, token, keypair, userPk, tradeConnection, walletStr, refWalletStr, solPrice }) {
-  if (!swapParams) throw new Error('No trade params.');
-  const isBuy = mode === 'buy';
-  const inputMint  = isBuy ? SOL_MINT : token.mint;
-  const outputMint = isBuy ? token.mint : SOL_MINT;
-  const dec = isBuy ? 9 : (swapParams.decimals || token.decimals || 6);
-  // On buy, swapParams.tradeLamports is the SOL that goes to the swap (fee is
-  // charged on top); on sell, tradeTokens is the token amount. Match App.js:
-  // it routes `net` (after fee) into Jupiter and transfers the fee separately.
-  const rawAmount = BigInt(isBuy ? swapParams.tradeLamports : swapParams.tradeTokens);
-  if (rawAmount <= 0n) throw new Error('Amount too small.');
+    // Jupiter swaps the full swap-in amount; the fee is a SEPARATE transfer
+    // (NOT carved out of the swap), exactly like apeExecuteSwap.
+    const net = swapInAmount;
+    if (net <= 0n) throw new Error('Amount too small.');
+    const params = new URLSearchParams({
+      inputMint,
+      outputMint,
+      amount:      net.toString(),
+      slippageBps: String(SLIPPAGE_BPS),
+      taker:       userPk
+        ? userPk.toBase58()
+        : '11111111111111111111111111111111',
+    });
+    const r = await fetch(`/api/jupiter/build?${params}`);
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body.error || `Quote failed (${r.status})`);
+    }
+    const build = await r.json();
 
-  // Jupiter swaps the post-fee amount; the 3% fee is a separate transfer.
-  const feeLamports = BigInt(swapParams.feeLamports || '0');
-  const swapAmount = isBuy ? rawAmount : rawAmount; // buy: SOL into swap is tradeLamports (fee on top); sell: full token amount
-  const params = new URLSearchParams({
-    inputMint, outputMint,
-    amount: swapAmount.toString(),
-    slippageBps: String(APE_JUP_SLIPPAGE_BPS),
-    taker: userPk.toBase58(),
-  });
+      // Full 3% fee → FEE_WALLET (from swapParams.feeLamports — Ape's model)
+      const feeAmount = isBuy
+        ? BigInt(swapParams.feeLamports || '0')
+        : (swapInAmount * BigInt(FEE_BPS)) / 10000n;
+      if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero — amount too small.');
 
-  // Run the three independent network calls in parallel (build, blockhash, ref).
-  const buildP = fetch('/api/jupiter/build?' + params.toString()).then(async r => {
-    if (!r.ok) { const b = await r.json().catch(() => ({})); throw new Error(b.error || ('Quote failed (' + r.status + ')')); }
-    return r.json();
-  });
-  const [build, latest, refData] = await Promise.all([
-    buildP,
-    tradeConnection.getLatestBlockhash('confirmed'),
-    feeLamports > 0n
-      ? refLookup(refWalletStr || walletStr).catch(() => ({ referrer: null, refSplitBps: 0 }))
-      : Promise.resolve({ referrer: null, refSplitBps: 0 }),
-  ]);
+      const feeIxs = [];
+      if (inputMint === SOL_MINT) {
+        feeIxs.push(SystemProgram.transfer({
+          fromPubkey: userPk,
+          toPubkey:   FEE_WALLET,
+          lamports:   Number(feeAmount),
+        }));
+      } else {
+        const mintPk = new PublicKey(inputMint);
+        // Buy/sell critical path → trade RPC (Alchemy primary, Ankr fallback).
+        const mintInfo = await rpcRaceTrade('getMintInfo', c => c.getAccountInfo(mintPk));
+        if (!mintInfo) throw new Error('Input mint not found on-chain.');
+        const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
+          ? TOKEN_2022_PROGRAM_ID
+          : TOKEN_PROGRAM_ID;
 
-  // ── Fee instructions: full 3% → FEE_WALLET (SOL on buy, token on sell) ──
-  const feeIxs = [];
-  if (feeLamports > 0n) {
-    if (isBuy) {
-      feeIxs.push(SystemProgram.transfer({ fromPubkey: userPk, toPubkey: FEE_WALLET, lamports: Number(feeLamports) }));
-      // referral split on the SOL fee
-      if (refData.referrer) {
-        const splitBps = (refData.refSplitBps && refData.refSplitBps > 0) ? BigInt(refData.refSplitBps) : 5000n;
-        const refLamports = (feeLamports * splitBps) / 10000n;
-        if (refLamports > 0n) feeIxs.push(SystemProgram.transfer({ fromPubkey: userPk, toPubkey: new PublicKey(refData.referrer), lamports: Number(refLamports) }));
-      }
-    } else {
-      // Sell fee is taken in the token being sold (matches App.js).
-      const mintPk = new PublicKey(inputMint);
-      const mintInfo = await tradeConnection.getAccountInfo(mintPk);
-      if (!mintInfo) throw new Error('Input mint not found on-chain.');
-      const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID) ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
-      // Fee in token base units: feeLamports is a SOL-denominated estimate; convert
-      // to token amount via the sell percentage of the trade (3% of tokens sold).
-      const feeTokens = (rawAmount * BigInt(FEE_BPS)) / 10000n;
-      if (feeTokens > 0n) {
         const sourceAta = getAssociatedTokenAddressSync(mintPk, userPk, true, tokenProgram);
-        const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET, true, tokenProgram);
-        feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(userPk, destAta, FEE_WALLET, mintPk, tokenProgram));
-        feeIxs.push(createTransferCheckedInstruction(sourceAta, mintPk, destAta, userPk, feeTokens, dec, [], tokenProgram));
+        const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET,       true, tokenProgram);
+
+        feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
+          userPk, destAta, FEE_WALLET, mintPk, tokenProgram,
+        ));
+        feeIxs.push(createTransferCheckedInstruction(
+          sourceAta, mintPk, destAta, userPk,
+          feeAmount, dec, [], tokenProgram,
+        ));
       }
-    }
-  }
 
-  // ── Assemble instructions in Jupiter's required order ──
-  const ixs = [];
-  if (Array.isArray(build.computeBudgetInstructions)) for (const ix of build.computeBudgetInstructions) ixs.push(apeDeserIx(ix));
-  for (const ix of feeIxs) ixs.push(ix);
-  if (Array.isArray(build.setupInstructions)) for (const ix of build.setupInstructions) ixs.push(apeDeserIx(ix));
-  if (build.swapInstruction) ixs.push(apeDeserIx(build.swapInstruction));
-  if (build.cleanupInstruction) ixs.push(apeDeserIx(build.cleanupInstruction));
-  if (Array.isArray(build.otherInstructions)) for (const ix of build.otherInstructions) ixs.push(apeDeserIx(ix));
+      const ixs = [];
+      if (Array.isArray(build.computeBudgetInstructions))
+        for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
+      for (const ix of feeIxs) ixs.push(ix);
+      if (Array.isArray(build.setupInstructions))
+        for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
+      if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
+      if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
+      if (Array.isArray(build.otherInstructions))
+        for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
 
-  // ── ALTs ──
-  const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
-  let alts = [];
-  if (altKeys.length > 0) {
-    const infos = await tradeConnection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
-    alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({ key: new PublicKey(k), state: AddressLookupTableAccount.deserialize(infos[i].data) }) : null).filter(Boolean);
-  }
+      const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
+      let alts = [];
+      if (altKeys.length > 0) {
+        const infos = await rpcRaceTrade('getAlts',
+          c => c.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k))));
+        alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
+          key:   new PublicKey(k),
+          state: AddressLookupTableAccount.deserialize(infos[i].data),
+        }) : null).filter(Boolean);
+      }
 
-  const message = new TransactionMessage({ payerKey: userPk, recentBlockhash: latest.blockhash, instructions: ixs }).compileToV0Message(alts);
-  const tx = new VersionedTransaction(message);
+      const latest = await rpcRaceTrade('getLatestBlockhash',
+        c => c.getLatestBlockhash('confirmed'));
+      const message = new TransactionMessage({
+        payerKey:        userPk,
+        recentBlockhash: latest.blockhash,
+        instructions:    ixs,
+      }).compileToV0Message(alts);
+      const tx = new VersionedTransaction(message);
 
-  // No sim — burner, straight to send.
-  tx.sign([keypair]);
-  const raw = tx.serialize();
+      const mapSimErr = (logs) => {
+        const j = (logs || []).join('\n').toLowerCase();
+        if (j.includes('insufficient') || j.includes('0x1')) return 'Insufficient balance for this swap.';
+        if (j.includes('slippage') || j.includes('0x1771'))  return 'Price moved — try a higher slippage or smaller amount.';
+        if (j.includes('account not') || j.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
+        if (j.includes('blockhash') || j.includes('expired')) return 'Quote expired. Please refresh and retry.';
+        return null;
+      };
+      try {
+        const sim = await connection.simulateTransaction(tx, {
+          replaceRecentBlockhash: true,
+          sigVerify: false,
+        });
+        if (sim.value.err) {
+          throw new Error(mapSimErr(sim.value.logs) || 'Swap simulation failed — the price may have moved.');
+        }
+      } catch (simErr) {
+        if (simErr?.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) {
+          throw simErr;
+        }
+        console.warn('[swap] sim non-fatal', simErr);
+      }
 
-  let sig;
-  try {
-    sig = await tradeConnection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 5 });
-  } catch (sendErr) {
-    let logs = (sendErr && sendErr.logs) || null;
-    if (!logs && sendErr && typeof sendErr.getLogs === 'function') { try { logs = await sendErr.getLogs(tradeConnection); } catch (e2) {} }
-    throw new Error(describeSimLogs(logs, sendErr && sendErr.message));
-  }
+      tx.sign([keypair]); const signed = tx;
+      const serialized = signed.serialize();
 
-  // ── Confirmation loop (same shape as the pump path) ──
-  let confirmed = false, onchainErr = null;
-  const startedAt = Date.now();
-  const HARD_CAP_MS = 60000, POLL_MS = 800, REBROADCAST_EVERY = 4, BLOCKHEIGHT_CHECK_EVERY = 6;
-  let pollCount = 0;
-  while (Date.now() - startedAt < HARD_CAP_MS) {
-    try {
-      const st = await tradeConnection.getSignatureStatus(sig, { searchTransactionHistory: false });
-      if (st && st.value && st.value.err) { onchainErr = st.value.err; break; }
-      const cs = st && st.value && st.value.confirmationStatus;
-      if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
-    } catch (e) {}
-    pollCount++;
-    if (pollCount % BLOCKHEIGHT_CHECK_EVERY === 0) {
-      try { const h = await tradeConnection.getBlockHeight('confirmed'); if (h > latest.lastValidBlockHeight) break; } catch (e) {}
-    }
-    if (pollCount % REBROADCAST_EVERY === 0) {
-      try { await tradeConnection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }); } catch (e) {}
-    }
-    await new Promise(r => setTimeout(r, POLL_MS));
-  }
-  if (onchainErr) throw new Error(describeOnChainErr(onchainErr));
-  if (!confirmed) throw new Error("Sent but didn't confirm in time — check Solscan before retrying.");
+      // Send via trade RPC (Alchemy primary, Ankr fallback).
+      const sig = await rpcRaceTrade('sendTx', c => c.sendRawTransaction(serialized, {
+        skipPreflight: false,
+        maxRetries: 3,
+      }));
 
-  // referral / pnl ledger (fire and forget)
-  try {
-    let volSol;
-    if (isBuy) volSol = Number(swapParams.tradeLamports) / 1e9;
-    else volSol = (swapParams.tradeTokensUi * (token.price || 0)) / (solPrice || 1);
-    refLogTrade({ wallet: walletStr, mint: token.mint, sym: token.sym, side: mode, sol: volSol, sig, ts: Date.now() });
-  } catch (e) {}
+      let confirmed = false;
+      try {
+        const conf = await Promise.race([
+          connection.confirmTransaction({
+            signature: sig,
+            blockhash: latest.blockhash,
+            lastValidBlockHeight: latest.lastValidBlockHeight,
+          }, 'confirmed'),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
+        ]);
+        if (conf?.value?.err) throw new Error('Swap tx failed on-chain: ' + JSON.stringify(conf.value.err));
+        confirmed = true;
+      } catch (cfErr) {
+        const deadline = Date.now() + 20_000;
+        while (Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 2000));
+          try {
+            const st = await rpcRaceTrade('getSigStatus',
+              c => c.getSignatureStatus(sig, { searchTransactionHistory: true }));
+            const cs = st?.value?.confirmationStatus;
+            if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
+            if (st?.value?.err) throw new Error('Swap tx failed on-chain.');
+          } catch (e) {
+            if (/failed on-chain/i.test(String(e.message))) throw e;
+          }
+        }
+      }
 
-  return { confirmed: true, sig };
+      // onSuccess tail — verbatim from MemeWonderland handleSwap. The page-state
+      // setters it references (onSuccess UI toast, refreshBalances) are created
+      // locally here so this file needs no restructure; the sheet shows the
+      // result via handleConfirm's return handling.
+      const outputDecimals  = isBuy ? (token.decimals || 6) : 9;
+      const inputSymbol     = isBuy ? 'SOL' : (token.sym || 'TKN');
+      const outputSymbol    = isBuy ? (token.sym || 'TKN') : 'SOL';
+      const amtNum          = isBuy ? Number(swapParams.solAmount || 0) : Number(swapParams.tradeTokensUi || 0);
+      const format          = tradeFmtTokens;
+      const onSuccess       = () => {};
+      const refreshBalances = () => { refreshSol(); refreshOneToken(token.mint); };
+
+      const outUi = Number(build.outAmount) / Math.pow(10, outputDecimals);
+      onSuccess({
+        signature: sig,
+        pending: !confirmed,
+        paid: amtNum.toFixed(4) + ' ' + inputSymbol,
+        got:  format(outUi) + ' ' + outputSymbol,
+        price: token.price,
+      });
+      if (confirmed) setTimeout(() => refreshBalances(), 2000);
+
+      // log to referral / pnl ledger (fire and forget) — same as the pump path
+      try {
+        let volSol;
+        if (isBuy) {
+          volSol = Number(swapParams.tradeLamports) / 1e9;
+        } else {
+          volSol = (swapParams.tradeTokensUi * (token.price || 0)) / (solPrice || 1);
+        }
+        refLogTrade({ wallet: walletStr, mint: token.mint, sym: token.sym, side: mode, sol: volSol, sig, ts: Date.now() });
+      } catch (e) {}
+
+      return { sig, confirmed };
 }
+
 
 
 /* ============================================================
@@ -1599,31 +1681,23 @@ const AP_CSS = `
 .ap-safety-bar i.amber{background:linear-gradient(90deg,var(--ember2),var(--ember1))}
 .ap-safety-bar i.red{background:linear-gradient(90deg,#cc3450,var(--red))}
 
-/* ============================================================
-   DENSE BOARD — complete Ape page surface. Three lifecycle
-   columns (New / Final Stretch / Migrated). Namespaced .apx-*
-   so it can't collide with the legacy .ap-* feed styles.
-   Inherits the .ap-root dark tokens.
-   ============================================================ */
-.apx-board{display:grid;grid-template-columns:repeat(3,1fr);gap:0;border:1px solid var(--border);border-radius:14px;overflow:hidden;background:var(--glass);height:calc(100dvh - 170px);min-height:520px}
+/* ===== DENSE BOARD (new UI shell only — trade calls untouched) ===== */
+.apx-board{display:grid;grid-template-columns:repeat(3,1fr);gap:0;border:1px solid var(--border);border-radius:14px;overflow:hidden;background:var(--glass);min-height:520px}
 .apx-col{display:flex;flex-direction:column;border-right:1px solid var(--border);min-width:0}
 .apx-col:last-child{border-right:none}
 .apx-ch{display:flex;align-items:center;justify-content:space-between;padding:9px 12px;background:var(--fill2);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:5}
 .apx-chl{display:flex;align-items:center;gap:7px;font-size:11.5px;font-weight:800;letter-spacing:.3px;text-transform:uppercase;color:var(--ink)}
 .apx-cd{width:7px;height:7px;border-radius:2px;transform:rotate(45deg);flex-shrink:0}
-.apx-cd.new{background:var(--amber)}.apx-cd.stretch{background:var(--ember2)}.apx-cd.migrated{background:var(--green)}
+.apx-cd.new{background:var(--amber)}.apx-cd.stretch{background:var(--peach)}.apx-cd.migrated{background:var(--green)}
 .apx-cc{font-family:'JetBrains Mono',monospace;font-size:9.5px;font-weight:700;color:var(--ink3);background:var(--fill);border:1px solid var(--border);border-radius:5px;padding:1px 6px}
 .apx-csub{font-family:'JetBrains Mono',monospace;font-size:9.5px;color:var(--ink3);font-weight:600}
-.apx-cs{overflow-y:auto;flex:1;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
-.apx-cs::-webkit-scrollbar{width:7px}.apx-cs::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
-.apx-cs::-webkit-scrollbar-track{background:transparent}
-
-.apx-row{display:flex;align-items:center;gap:9px;padding:9px 11px;border-bottom:1px solid var(--hairline);cursor:pointer;position:relative;transition:background .1s}
+.apx-cs{overflow-y:auto;flex:1;max-height:70vh}
+.apx-row{display:flex;align-items:center;gap:9px;padding:9px 11px;border-bottom:1px solid var(--hairline);cursor:pointer;position:relative}
 .apx-row:hover{background:var(--fill2)}
 .apx-row::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:transparent}
 .apx-row:hover::before{background:var(--amber)}
-.apx-row.fresh::before{background:linear-gradient(180deg,#ffb020,#ff7a3c)}
-.apx-av{width:36px;height:36px;border-radius:9px;flex-shrink:0;display:grid;place-items:center;font-size:16px;font-weight:700;overflow:hidden;background:var(--fill);border:1px solid var(--border);color:var(--ink)}
+.apx-row.fresh::before{background:var(--amber)}
+.apx-av{width:36px;height:36px;border-radius:9px;flex-shrink:0;display:grid;place-items:center;font-size:16px;overflow:hidden;background:var(--fill);border:1px solid var(--border);color:var(--ink)}
 .apx-av img{width:100%;height:100%;object-fit:cover}
 .apx-tk{flex:1;min-width:0}
 .apx-r1{display:flex;align-items:center;gap:6px;min-width:0}
@@ -1635,42 +1709,30 @@ const AP_CSS = `
 .apx-ca{font-family:'JetBrains Mono',monospace;font-size:9.5px;color:var(--ink3);font-weight:600;opacity:.7}
 .apx-bond{display:inline-flex;align-items:center;gap:4px;margin-left:auto}
 .apx-bw{width:38px;height:3px;background:var(--fill);border-radius:2px;overflow:hidden}
-.apx-bf{display:block;height:100%;background:linear-gradient(90deg,var(--ember1),var(--ember2))}
+.apx-bf{display:block;height:100%;background:var(--peach)}
 .apx-bp{font-family:'JetBrains Mono',monospace;font-size:8.5px;font-weight:700;color:var(--ink2)}
 .apx-grad{font-family:'JetBrains Mono',monospace;font-size:8.5px;font-weight:700;color:var(--green);margin-left:auto}
 .apx-r3{display:flex;gap:4px;margin-top:6px;flex-wrap:wrap}
 .apx-p{font-family:'JetBrains Mono',monospace;font-size:8.5px;font-weight:700;letter-spacing:.2px;padding:1px 5px;border-radius:4px;border:1px solid var(--border)}
-.apx-p.ok{color:var(--green);background:rgba(22,209,150,.07);border-color:rgba(22,209,150,.22)}
-.apx-p.cau{color:var(--ember1);background:rgba(255,176,32,.07);border-color:rgba(255,176,32,.22)}
-.apx-p.bad{color:var(--red);background:rgba(255,77,106,.07);border-color:rgba(255,77,106,.22)}
+.apx-p.ok{color:var(--green);border-color:rgba(17,184,127,.3)}
+.apx-p.cau{color:var(--peach);border-color:rgba(245,146,27,.3)}
+.apx-p.bad{color:var(--red);border-color:rgba(240,66,90,.3)}
 .apx-st{display:flex;flex-direction:column;align-items:flex-end;gap:2px;flex-shrink:0;line-height:1.2}
 .apx-mc{font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:800;color:var(--ink);display:flex;align-items:baseline;gap:3px}
 .apx-mcl{font-size:8px;color:var(--ink3);font-weight:700}
 .apx-sub{font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--ink3);font-weight:600}
 .apx-chg{font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:800}
 .apx-chg.up{color:var(--green)}.apx-chg.dn{color:var(--red)}
-.apx-qb{display:flex;align-items:center;gap:3px;background:var(--green);color:#06120c;border:none;border-radius:8px;padding:8px 11px;font-family:'JetBrains Mono',monospace;font-weight:800;font-size:12px;cursor:pointer;flex-shrink:0;transition:filter .1s}
-.apx-qb:hover{filter:brightness(1.08)}
+.apx-qb{display:flex;align-items:center;gap:3px;background:var(--green);color:#fff;border:none;border-radius:8px;padding:8px 11px;font-family:'JetBrains Mono',monospace;font-weight:800;font-size:12px;cursor:pointer;flex-shrink:0}
 .apx-qb:disabled{opacity:.55;cursor:default}
-.apx-qb .b{font-size:10px}
 .apx-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;padding:40px 18px;text-align:center;color:var(--ink3)}
 .apx-empty .g{font-size:24px;opacity:.5}
 .apx-empty b{color:var(--ink2);font-size:13px;font-weight:700}
 .apx-empty span{font-size:11px;color:var(--ink3)}
-.apx-colfoot{padding:8px 12px;border-top:1px solid var(--border);font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:600;color:var(--ink3);display:flex;align-items:center;gap:6px;background:var(--fill2)}
-.apx-colfoot .d{width:5px;height:5px;border-radius:50%;background:var(--green);animation:ap-pulse 1.5s infinite}
+.apx-colfoot{padding:8px 12px;border-top:1px solid var(--border);font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:600;color:var(--ink3);background:var(--fill2)}
+@media(max-width:1024px){.apx-board{grid-template-columns:repeat(2,1fr)}.apx-col:nth-child(3){grid-column:1/-1;border-right:none;border-top:1px solid var(--border)}}
+@media(max-width:680px){.apx-board{grid-template-columns:1fr}.apx-col{border-right:none;border-bottom:1px solid var(--border)}}
 
-@media(max-width:1024px){
-  .apx-board{grid-template-columns:repeat(2,1fr);height:auto}
-  .apx-col:nth-child(3){border-right:none;grid-column:1 / -1;border-top:1px solid var(--border)}
-  .apx-cs{max-height:60dvh}
-}
-@media(max-width:680px){
-  .apx-board{grid-template-columns:1fr}
-  .apx-col{border-right:none;border-bottom:1px solid var(--border)}
-  .apx-col:nth-child(3){grid-column:auto}
-  .apx-cs{max-height:none}
-}
 `;
 
 function useApCSS() {
@@ -2971,33 +3033,25 @@ function WatchedWallets({ open, onClose, solPrice, resolveToken }) {
   );
 }
 
-/* ============================================================
-   DENSE BOARD — presentation layer over the live feed. Pure UI:
-   takes the same normalized tokens + the same handlers (onApe quick
-   buy, onOpen trade sheet, onSell) the legacy feed used. No trade
-   logic here. Columns are derived from `bond` (lifecycle stage);
-   safety pills come from riskRead(); graduated tokens are tradable
-   via the burner Jupiter path, so they get a live ⚡ too.
-   ============================================================ */
+
+/* ===== DENSE BOARD UI (new shell). Renders the existing `filtered`
+   tokens in the existing row data; ⚡ calls existing onApe, row tap
+   calls existing onOpen. No trade/data logic added. ===== */
 const ApxRow = React.memo(function ApxRow({ token, ageMs, busy, quickAmount, onApe, onOpen, isFresh }) {
   const rr = riskRead({ ...token, ageMs });
   const tierClass = rr.tier === 'low' ? 'ok' : rr.tier === 'med' ? 'cau' : 'bad';
   const liq = token.liquidity || 0, hold = token.holders || 0, vol = token.volume24h || 0;
   const up = (token.change || 0) >= 0;
   const graduated = (Number.isFinite(token.bond) && token.bond >= 100) || (token.dex && !/^pump/i.test(String(token.dex)));
-  const ageStr = Number.isFinite(ageMs) ? fmtAgeShort(ageMs) : '—';
   const liqTier = liq >= 30000 ? 'ok' : liq >= 5000 ? 'cau' : 'bad';
   const holdTier = hold >= 500 ? 'ok' : hold >= 100 ? 'cau' : 'bad';
   return (
     <div className={'apx-row' + (isFresh ? ' fresh' : '')} onClick={() => onOpen(token)}>
       <div className="apx-av"><TokenChip token={token} /></div>
       <div className="apx-tk">
-        <div className="apx-r1">
-          <span className="apx-sym">{token.sym}</span>
-          <span className="apx-name">{token.name}</span>
-        </div>
+        <div className="apx-r1"><span className="apx-sym">{token.sym}</span><span className="apx-name">{token.name}</span></div>
         <div className="apx-r2">
-          <span className={'apx-age' + (Number.isFinite(ageMs) && ageMs < 180000 ? ' hot' : '')}>{ageStr}</span>
+          <span className={'apx-age' + (Number.isFinite(ageMs) && ageMs < 180000 ? ' hot' : '')}>{Number.isFinite(ageMs) ? fmtAgeShort(ageMs) : '—'}</span>
           <span className="apx-ca">{(token.mint || '').slice(0, 4)}…{(token.mint || '').slice(-4)}</span>
           {graduated
             ? <span className="apx-grad">✓ DEX</span>
@@ -3016,13 +3070,8 @@ const ApxRow = React.memo(function ApxRow({ token, ageMs, busy, quickAmount, onA
         <span className="apx-sub">V {formatMoney(vol)}</span>
         <span className={'apx-chg ' + (up ? 'up' : 'dn')}>{formatPct(token.change)}</span>
       </div>
-      <button
-        className="apx-qb"
-        disabled={busy}
-        onClick={(e) => { e.stopPropagation(); onApe(token); }}
-        title={'Buy ' + quickAmount + ' SOL'}
-      >
-        <span className="b">{busy ? '◌' : '⚡'}</span>{quickAmount}
+      <button className="apx-qb" disabled={busy} onClick={(e) => { e.stopPropagation(); onApe(token); }} title={'Buy ' + quickAmount + ' SOL'}>
+        <span>{busy ? '◌' : '⚡'}</span>{quickAmount}
       </button>
     </div>
   );
@@ -3036,35 +3085,20 @@ function ApxColumn({ title, stageClass, sub, tokens, now, lastFreshMint, busyMin
         <span className="apx-csub">{sub}</span>
       </div>
       <div className="apx-cs">
-        {tokens.length === 0 ? (
-          <div className="apx-empty"><span className="g">∅</span><b>Nothing here yet</b><span>{emptyMsg}</span></div>
-        ) : tokens.map(t => {
-          const ageMs = t.pairCreatedAtMs ? now - t.pairCreatedAtMs : NaN;
-          const isFresh = t.mint === lastFreshMint && Number.isFinite(ageMs) && ageMs < 60000;
-          return (
-            <ApxRow
-              key={t.mint}
-              token={t}
-              ageMs={ageMs}
-              busy={!!busyMints[t.mint]}
-              quickAmount={quickAmount}
-              onApe={onApe}
-              onOpen={onOpen}
-              isFresh={isFresh}
-            />
-          );
-        })}
+        {tokens.length === 0
+          ? <div className="apx-empty"><span className="g">∅</span><b>Nothing here yet</b><span>{emptyMsg}</span></div>
+          : tokens.map(t => {
+              const ageMs = t.pairCreatedAtMs ? now - t.pairCreatedAtMs : NaN;
+              const isFresh = t.mint === lastFreshMint && Number.isFinite(ageMs) && ageMs < 60000;
+              return <ApxRow key={t.mint} token={t} ageMs={ageMs} busy={!!busyMints[t.mint]} quickAmount={quickAmount} onApe={onApe} onOpen={onOpen} isFresh={isFresh} />;
+            })}
       </div>
-      <div className="apx-colfoot"><span className="d" />Live · refreshing</div>
+      <div className="apx-colfoot">Live</div>
     </div>
   );
 }
 
 function ApeBoard({ tokens, now, lastFreshMint, busyMints, quickAmount, onApe, onOpen }) {
-  // Split the live feed by lifecycle stage off `bond`:
-  //   New Pairs      → no bond yet, or bond < 50
-  //   Final Stretch  → bond 50–99 (about to migrate)
-  //   Migrated       → bond >= 100 or a non-pump dex tag (graduated)
   const { newPairs, stretch, migrated } = useMemo(() => {
     const a = [], b = [], c = [];
     for (const t of tokens) {
@@ -3075,24 +3109,15 @@ function ApeBoard({ tokens, now, lastFreshMint, busyMints, quickAmount, onApe, o
     }
     return { newPairs: a, stretch: b, migrated: c };
   }, [tokens]);
-
   return (
     <div className="apx-board">
-      <ApxColumn title="New Pairs" stageClass="new" sub="just launched"
-        tokens={newPairs} now={now} lastFreshMint={lastFreshMint} busyMints={busyMints}
-        quickAmount={quickAmount} onApe={onApe} onOpen={onOpen}
-        emptyMsg="Waiting for fresh launches…" />
-      <ApxColumn title="Final Stretch" stageClass="stretch" sub="about to migrate"
-        tokens={stretch} now={now} lastFreshMint={lastFreshMint} busyMints={busyMints}
-        quickAmount={quickAmount} onApe={onApe} onOpen={onOpen}
-        emptyMsg="Nothing near migration." />
-      <ApxColumn title="Migrated" stageClass="migrated" sub="on a DEX · Jupiter"
-        tokens={migrated} now={now} lastFreshMint={lastFreshMint} busyMints={busyMints}
-        quickAmount={quickAmount} onApe={onApe} onOpen={onOpen}
-        emptyMsg="No graduated tokens in the feed." />
+      <ApxColumn title="New Pairs" stageClass="new" sub="just launched" tokens={newPairs} now={now} lastFreshMint={lastFreshMint} busyMints={busyMints} quickAmount={quickAmount} onApe={onApe} onOpen={onOpen} emptyMsg="Waiting for fresh launches…" />
+      <ApxColumn title="Final Stretch" stageClass="stretch" sub="about to migrate" tokens={stretch} now={now} lastFreshMint={lastFreshMint} busyMints={busyMints} quickAmount={quickAmount} onApe={onApe} onOpen={onOpen} emptyMsg="Nothing near migration." />
+      <ApxColumn title="Migrated" stageClass="migrated" sub="on a DEX" tokens={migrated} now={now} lastFreshMint={lastFreshMint} busyMints={busyMints} quickAmount={quickAmount} onApe={onApe} onOpen={onOpen} emptyMsg="No graduated tokens." />
     </div>
   );
 }
+
 
 /* ============================================================
    MAIN APE PAGE
@@ -3488,25 +3513,35 @@ export default function Ape({ mainWalletPubkey }) {
     const params = swapParams || (mode === 'buy'
       ? { mode: 'buy', tradeLamports, feeLamports, totalLamports }
       : { mode: 'sell', tradeTokens: tradeTokensRaw, tradeTokensUi, feeLamports: feeLamports != null ? String(feeLamports) : '0', decimals: decimals != null ? Number(decimals) : 6 });
-    // Route by token lifecycle: graduated/off-curve → Jupiter; otherwise the
-    // pump.fun bonding-curve path. A token is "graduated" when its bond is
-    // complete (>=100) or it carries a non-pump dex tag. Both sign with the
-    // burner keypair; only the route differs.
+    // Graduated/off-curve → burner Jupiter; else pump (unchanged).
     const graduated = (token && Number.isFinite(token.bond) && token.bond >= 100)
-      || (token && token.route === 'jupiter')
       || (token && token.dex && !/^pump/i.test(String(token.dex)));
-    const swapFn = graduated ? apeJupiterSwap : apeExecuteSwap;
-    const result = await swapFn({
-      mode: params.mode,
-      swapParams: params,
-      token,
-      keypair: wallet.keypair,
-      userPk: wallet.publicKey,
-      tradeConnection,
-      walletStr,
-      refWalletStr: mainWalletPubkey,
-      solPrice: solPriceRef.current,
-    });
+    let result;
+    if (graduated) {
+      result = await apeJupiterSwap({
+        mode: params.mode,
+        swapParams: params,
+        token,
+        keypair: wallet.keypair,
+        userPk: wallet.publicKey,
+        refreshSol,
+        refreshOneToken,
+        walletStr,
+        solPrice: solPriceRef.current,
+      });
+    } else {
+      result = await apeExecuteSwap({
+        mode: params.mode,
+        swapParams: params,
+        token,
+        keypair: wallet.keypair,
+        userPk: wallet.publicKey,
+        tradeConnection,
+        walletStr,
+        refWalletStr: mainWalletPubkey,
+        solPrice: solPriceRef.current,
+      });
+    }
     try { localStorage.setItem(HAS_TRADED_KEY, '1'); } catch (e) {}
     setShowLure(false);
     setTimeout(() => { refreshSol(); refreshOneToken(token.mint); }, 800);
@@ -3788,7 +3823,7 @@ export default function Ape({ mainWalletPubkey }) {
           {feedError ? (
             <div className="apx-empty" style={{ border: '1px solid var(--border)', borderRadius: 14, margin: '4px 0' }}>
               <span className="g">⊘</span><b>Couldn't reach the feed</b>
-              <span>Retrying every few seconds. Solana RPC sometimes hiccups.</span>
+              <span>Retrying every few seconds.</span>
             </div>
           ) : (
             <ApeBoard
