@@ -153,10 +153,10 @@ input[type="text"],input[type="number"],input[type="email"],input[type="password
 function EcoStrip({ active, onGo }) {
   const items = [
     { ic: '⇅',  lbl: 'Swap',    tab: 'swap' },
-    { ic: '⚡', lbl: 'Launches', tab: 'ape' },
+    { ic: '⚡', lbl: 'Pump.fun', tab: 'ape' },
     { ic: '✨', lbl: 'Memes',   tab: 'wonderland' },
     { ic: '📈', lbl: 'Stocks',  tab: 'markets' },
-    { ic: '👜', lbl: 'Wallet',  tab: 'holdings' },
+    { ic: '👜', lbl: 'Portfolio', tab: 'holdings' },
   ];
   return (
     <div className="hide-scrollbar" style={{ display: 'flex', gap: 8, overflowX: 'auto', padding: '0 0 4px' }}>
@@ -2132,23 +2132,23 @@ function HomeBelow({ onSwitchTab, walletAddress, onOpenToken }) {
 
   // Build the card list. Order: primary products first, then utility, then meta.
   const products = [
-    { tab: 'wonderland',  icon: '✨', name: 'Wonderland',     desc: 'Meme signal scanner. Catch runners before the herd.',           live: 'TRENDING',  grad: 'linear-gradient(135deg,#7c5cff,#5a3ed1)' },
-    { tab: 'markets',     icon: '📈', name: 'Markets',         desc: 'Tokenized Tesla, Apple, NVIDIA — trade 24/7 in USDC.',          live: '18 STOCKS', grad: 'linear-gradient(135deg,#2f6bff,#1e49c9)' },
-    { tab: 'ape',         icon: '⚡', name: 'Ape',             desc: 'Fresh pump.fun launches with burner-wallet one-tap trades.',    live: 'EARLY',     grad: 'linear-gradient(135deg,#f5921b,#d4760a)' },
-    { tab: 'holdings',    icon: '👜', name: 'Bags',            desc: 'Every token you own. Live prices. Buy SOL with USD.',           live: 'PORTFOLIO', grad: 'linear-gradient(135deg,#16c08a,#0f8f67)' },
-    { tab: 'buysol',      icon: '💳', name: 'Buy Solana',      desc: 'Buy SOL with card or bank — trusted providers.',                live: 'FIAT',      grad: 'linear-gradient(135deg,#14f195,#0fa968)' },
-    { tab: 'bridge',      icon: '🌉', name: 'Cross-Chain',     desc: 'Move any token across 71 chains. Native, ~2 min.',              live: '71 CHAINS', grad: 'linear-gradient(135deg,#2f6bff,#7c5cff)' },
-    { tab: 'solbtc',      icon: '₿',  name: 'SOL → BTC',       desc: 'Swap Solana straight to real Bitcoin on the BTC network.',      live: 'NATIVE',    grad: 'linear-gradient(135deg,#f5921b,#a67200)' },
-    { tab: 'launchradar', icon: '🚀', name: 'Radar',           desc: 'Every new token, the moment it lands on Solana.',               live: 'FRESH',     grad: 'linear-gradient(135deg,#f5921b,#a67200)' },
-    { tab: 'referrals',   icon: '§',  name: 'Referrals',       desc: '50% of every fee, on-chain, same block. Forever.',              live: '50% RATE',  grad: 'linear-gradient(135deg,#16c08a,#2f6bff)' },
-    { tab: 'why',         icon: '◌',  name: 'Why Nexus',       desc: 'No email, no KYC, no limits. The three things we never do.',   live: 'READ',      grad: 'linear-gradient(135deg,#7c5cff,#2f6bff)' },
+    { tab: 'wonderland',  icon: '✨', accent: '#7c5cff', name: 'Meme Coins',  desc: 'Discover trending memes',          live: 'TRENDING',  grad: 'linear-gradient(135deg,#7c5cff,#5a3ed1)' },
+    { tab: 'markets',     icon: '📈', accent: '#2f6bff', name: 'Stocks',      desc: 'Tesla, Apple, NVIDIA · 24/7',       live: '18 STOCKS', grad: 'linear-gradient(135deg,#2f6bff,#1e49c9)' },
+    { tab: 'ape',         icon: '⚡', accent: '#2f6bff', name: 'Pump.fun',    desc: 'New launches, one-tap trades',      live: 'EARLY',     grad: 'linear-gradient(135deg,#f5921b,#d4760a)' },
+    { tab: 'holdings',    icon: '👜', accent: '#2f6bff', name: 'Portfolio',   desc: 'Every token you own, live value',   live: 'YOUR BAGS', grad: 'linear-gradient(135deg,#16c08a,#0f8f67)' },
+    { tab: 'buysol',      icon: '💳', accent: '#2f6bff', name: 'Buy Solana',  desc: 'Card or bank → SOL',                live: 'FIAT',      grad: 'linear-gradient(135deg,#14f195,#0fa968)' },
+    { tab: 'bridge',      icon: '🌉', accent: '#7c5cff', name: 'Cross-Chain', desc: 'Move tokens across 71 chains',       live: '71 CHAINS', grad: 'linear-gradient(135deg,#2f6bff,#7c5cff)' },
+    { tab: 'solbtc',      icon: '₿',  accent: '#7c5cff', name: 'SOL → BTC',   desc: 'Solana straight to Bitcoin',         live: 'NATIVE',    grad: 'linear-gradient(135deg,#f5921b,#a67200)' },
+    { tab: 'launchradar', icon: '🚀', accent: '#7c5cff', name: 'New Tokens',  desc: 'Every Solana launch, live',          live: 'FRESH',     grad: 'linear-gradient(135deg,#f5921b,#a67200)' },
+    { tab: 'referrals',   icon: '§',  accent: '#13b87f', name: 'Referrals',   desc: '50% of fees, same block, forever',   live: '50% RATE',  grad: 'linear-gradient(135deg,#16c08a,#2f6bff)' },
+    { tab: 'why',         icon: '◌',  accent: '#13b87f', name: 'Why Nexus',   desc: 'No email, no KYC, no limits',        live: 'READ',      grad: 'linear-gradient(135deg,#7c5cff,#2f6bff)' },
   ];
 
   if (canSeeFlipsy) {
     products.splice(4, 0, {
-      tab: 'flipsy', icon: '🎯', name: 'Flipsy',
-      desc: 'Predictions market. Currently in development.',
-      live: 'BETA · YOU', grad: 'linear-gradient(135deg,#16c08a,#3ee07f)',
+      tab: 'flipsy', icon: '🎯', accent: '#13b87f', name: 'Flipsy',
+      desc: 'Predictions market · in development',
+      live: 'BETA', grad: 'linear-gradient(135deg,#16c08a,#3ee07f)',
     });
   }
 
@@ -2180,35 +2180,41 @@ function HomeBelow({ onSwitchTab, walletAddress, onOpenToken }) {
       {/* EXPANDED PRODUCT GRID */}
       {sectionHead('Explore the', 'super-app', 'TOOLS')}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
-        {products.filter(p => p.tab !== 'markets' && p.tab !== 'launchradar').map((p, i) => (
+        {products.map((p, i) => (
           <button
             key={p.tab}
             onClick={() => onSwitchTab(p.tab)}
             style={{
               background: C.glassStrong, backdropFilter: 'blur(10px)',
-              border: `1px solid ${C.border}`, borderRadius: 14,
-              padding: '11px 10px', textAlign: 'left', cursor: 'pointer',
+              border: `1px solid ${C.border}`, borderRadius: 13,
+              position: 'relative',
+              padding: '10px', textAlign: 'left', cursor: 'pointer',
               fontFamily: 'inherit', color: 'inherit',
-              transition: 'transform .15s, box-shadow .15s',
-              display: 'flex', flexDirection: 'column', gap: 7,
+              transition: 'transform .15s, box-shadow .15s, border-color .15s',
+              display: 'flex', flexDirection: 'column', gap: 3,
               animation: `nx-rise .45s cubic-bezier(.2,1,.4,1) ${i * 0.03}s backwards`,
             }}
-            onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 10px 22px rgba(160,231,255,.16)'; }}
+            onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 10px 20px rgba(47,107,255,.10)'; }}
             onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'none'; }}
           >
             <div style={{
-              width: 30, height: 30, borderRadius: 9,
-              display: 'grid', placeItems: 'center', fontSize: 14,
-              background: p.grad, color: '#fff',
-            }}>{p.icon}</div>
+              width: 27, height: 27, borderRadius: 8,
+              display: 'grid', placeItems: 'center',
+              background: (p.accent || '#2f6bff') + '14', color: p.accent || '#2f6bff',
+            }}><NxIcon id={p.tab} size={15} /></div>
+            <span style={{
+              position: 'absolute', top: 10, right: 9,
+              fontFamily: "'JetBrains Mono', monospace", fontSize: 7, fontWeight: 700, color: '#bfc4cd',
+              letterSpacing: '0.06em',
+            }}>{p.live}</span>
             <div style={{
-              fontFamily: "'Instrument Serif', serif", fontSize: 15, lineHeight: 1,
+              fontSize: 12.5, fontWeight: 600, lineHeight: 1.1, marginTop: 6,
               color: C.ink, letterSpacing: '-0.01em',
             }}>{p.name}</div>
-            <span style={{
-              fontFamily: "'JetBrains Mono', monospace", fontSize: 8, fontWeight: 700, color: C.cyan,
-              letterSpacing: '0.08em',
-            }}>{p.live}</span>
+            <div style={{
+              fontSize: 10, lineHeight: 1.3, color: '#9097a1',
+              display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+            }}>{p.desc}</div>
           </button>
         ))}
       </div>
@@ -2322,25 +2328,39 @@ async function screenAddress(address) {
       if (Date.now() - ts < SANCTIONS_CACHE_TTL) return result;
     }
   } catch {}
-  try {
-    const controller = new AbortController();
-    const timeoutId  = setTimeout(() => controller.abort(), SANCTIONS_TIMEOUT);
-    const res = await fetch(SANCTIONS_URL + encodeURIComponent(address), {
-      signal: controller.signal, headers: { Accept: 'application/json' },
-    });
-    clearTimeout(timeoutId);
-    if (!res.ok) return { clean: true };
-    const data = await res.json();
-    const ids = Array.isArray(data?.identifications) ? data.identifications : [];
-    const result = ids.length > 0
-      ? { clean: false, reason: ids[0]?.name || ids[0]?.category || 'Sanctioned' }
-      : { clean: true };
-    try { localStorage.setItem(SANCTIONS_CACHE_PREFIX + address, JSON.stringify({ result, ts: Date.now() })); } catch {}
-    return result;
-  } catch (e) {
-    console.warn('[sanctions screen]', e?.message || e);
-    return { clean: true };
+  // Fail CLOSED: a wallet is allowed through ONLY on a definitive clean result
+  // from Chainalysis. A network error, timeout, or non-200 returns `unverified`
+  // so the caller denies access (with a retry path) instead of letting an
+  // unscreened wallet in during an outage. Retry a few times first so a
+  // transient blip doesn't block a legitimate user. Only definitive
+  // clean/sanctioned verdicts are cached; `unverified` is never cached.
+  const MAX_ATTEMPTS = 3;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId  = setTimeout(() => controller.abort(), SANCTIONS_TIMEOUT);
+      const res = await fetch(SANCTIONS_URL + encodeURIComponent(address), {
+        signal: controller.signal, headers: { Accept: 'application/json' },
+      });
+      clearTimeout(timeoutId);
+      if (!res.ok) {
+        if (attempt < MAX_ATTEMPTS) { await new Promise(r => setTimeout(r, 600 * attempt)); continue; }
+        return { clean: false, unverified: true, reason: 'Screening service unavailable' };
+      }
+      const data = await res.json();
+      const ids = Array.isArray(data?.identifications) ? data.identifications : [];
+      const result = ids.length > 0
+        ? { clean: false, reason: ids[0]?.name || ids[0]?.category || 'Sanctioned' }
+        : { clean: true };
+      try { localStorage.setItem(SANCTIONS_CACHE_PREFIX + address, JSON.stringify({ result, ts: Date.now() })); } catch {}
+      return result;
+    } catch (e) {
+      if (attempt < MAX_ATTEMPTS) { await new Promise(r => setTimeout(r, 600 * attempt)); continue; }
+      console.warn('[sanctions screen]', e?.message || e);
+      return { clean: false, unverified: true, reason: 'Screening service unavailable' };
+    }
   }
+  return { clean: false, unverified: true, reason: 'Screening service unavailable' };
 }
 
 // =====================================================================
@@ -2547,17 +2567,23 @@ function WalletModal({ open, onClose }) {
     if (mState.kind !== 'screening') return;
     if (!walletAddress) return;
     let cancelled = false;
-    screenAddress(walletAddress).then(({ clean }) => {
+    screenAddress(walletAddress).then((r) => {
       if (cancelled) return;
-      if (clean) { dispatch({ type: 'SUCCESS' }); onClose(); }
+      if (r.clean) { dispatch({ type: 'SUCCESS' }); onClose(); }
       else {
+        // Fail closed: deny on a sanctions hit AND when screening couldn't be
+        // completed (unverified). The unverified message points the user to
+        // retry rather than implying the wallet itself is flagged.
         disconnectAll().catch(() => {});
-        dispatch({ type: 'BLOCKED', message: 'This wallet is on a sanctioned addresses list. Access is denied.' });
+        dispatch({ type: 'BLOCKED', message: r.unverified
+          ? "Couldn't verify this wallet against sanctions lists right now. Please try connecting again in a moment."
+          : 'This wallet is on a sanctioned addresses list. Access is denied.' });
       }
     }).catch(() => {
       if (cancelled) return;
-      dispatch({ type: 'SUCCESS' });
-      onClose();
+      // Fail closed: if screening itself throws, deny rather than allow through.
+      disconnectAll().catch(() => {});
+      dispatch({ type: 'BLOCKED', message: "Couldn't verify this wallet against sanctions lists right now. Please try connecting again in a moment." });
     });
     return () => { cancelled = true; };
   }, [mState.kind, walletAddress, disconnectAll, onClose]);
@@ -2728,12 +2754,35 @@ const NAV_ICONS = { swap: IconSwap, ape: IconApe, wonderland: IconWonderland, ma
 
 // Primary nav: five tabs by default, plus Admin which is only visible
 // to wallets in ADMIN_WALLETS. The filter in AppInner handles the gating.
+const NX_ICON_PATHS = {
+  swap: '<path d="M7 7h11l-3-3M17 17H6l3 3" stroke-linecap="round" stroke-linejoin="round"/>',
+  ape: '<path d="M12 3c3 2 4.5 5 4.5 8a4.5 4.5 0 1 1-9 0c0-1.6.6-3 1.5-4 .2 1.2 1 2 2 2-1-2 0-4.5 1-6Z" stroke-linejoin="round"/>',
+  wonderland: '<circle cx="12" cy="12" r="8.5"/><path d="M8.5 14c1 1.4 2.2 2 3.5 2s2.5-.6 3.5-2M9 9.5h.01M15 9.5h.01" stroke-linecap="round"/>',
+  markets: '<path d="M4 19V5M4 19h16M8 15l3-4 3 2 4-6" stroke-linecap="round" stroke-linejoin="round"/>',
+  holdings: '<rect x="3" y="6.5" width="18" height="13" rx="3"/><path d="M3 9.5h18M16 14h2" stroke-linecap="round"/>',
+  buysol: '<rect x="3" y="5.5" width="18" height="13" rx="3"/><path d="M3 10h18" stroke-linecap="round"/>',
+  bridge: '<path d="M9.5 14.5l5-5M8 12l-2 2a3 3 0 0 0 4.2 4.2l2-2M16 12l2-2a3 3 0 0 0-4.2-4.2l-2 2" stroke-linecap="round" stroke-linejoin="round"/>',
+  solbtc: '<circle cx="12" cy="12" r="8.5"/><path d="M10 8v8M10 8h3a2 2 0 0 1 0 4h-3m0 0h3.3a2 2 0 0 1 0 4H10M11.5 6.5v1.5M11.5 16v1.5" stroke-linecap="round" stroke-linejoin="round"/>',
+  launchradar: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1"/>',
+  flipsy: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4"/>',
+  referrals: '<path d="M7 16.5l10-9M8.5 9a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3ZM15.5 18a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Z" stroke-linecap="round" stroke-linejoin="round"/>',
+  why: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01" stroke-linecap="round"/>',
+  getstarted: '<path d="M5 12h12M13 7l5 5-5 5" stroke-linecap="round" stroke-linejoin="round"/>',
+};
+function NxIcon({ id, size = 19, color = 'currentColor' }) {
+  return React.createElement('svg', {
+    viewBox: '0 0 24 24', fill: 'none', stroke: color, strokeWidth: 1.7,
+    width: size, height: size,
+    dangerouslySetInnerHTML: { __html: NX_ICON_PATHS[id] || '' },
+  });
+}
+
 const PRIMARY_NAV_TABS = [
   { id: 'swap',       label: 'Swap' },
-  { id: 'ape',        label: 'Launches' },
+  { id: 'ape',        label: 'Pump.fun' },
   { id: 'wonderland', label: 'Memes' },
   { id: 'markets',    label: 'Stocks' },
-  { id: 'holdings',   label: 'Wallet' },
+  { id: 'holdings',   label: 'Portfolio' },
   { id: 'admin',      label: 'Admin' },
 ];
 
@@ -2956,7 +3005,6 @@ function AppInner() {
               <SwapWidget key={swapOutputMint || 'default'} defaultOutputMint={swapOutputMint || undefined} {...sharedProps} />
             </div>
             <HomeReferralBanner onSwitchTab={switchTab} />
-            <XStocksStrip onSwitchTab={switchTab} onOpenToken={openToken} onOpenStock={openStockTrade} />
             <HomeBelow onSwitchTab={switchTab} walletAddress={wallet.walletAddress} onOpenToken={openToken} />
           </>
         )}
@@ -3031,18 +3079,25 @@ function AppInner() {
               <button onClick={() => setMenuOpen(false)} aria-label="Close" style={{ width: 30, height: 30, borderRadius: 9, background: '#f4f4f5', border: 'none', fontSize: 16, color: '#0b0b0c', cursor: 'pointer' }}>×</button>
             </div>
             {[
-              { grp: 'Trade', items: [['swap', 'Swap'], ['ape', 'Ape'], ['wonderland', 'Wonderland'], ['markets', 'Markets'], ['holdings', 'Bags'], ['buysol', 'Buy Solana']] },
-              { grp: 'Tools', items: [['bridge', 'Cross-Chain'], ['solbtc', 'SOL → BTC'], ['launchradar', 'Radar'], ['flipsy', 'Flipsy']] },
-              { grp: 'Earn & info', items: [['referrals', 'Referrals'], ['why', 'Why Nexus'], ['getstarted', 'Get Started']] },
+              { grp: 'Trade', accent: '#2f6bff', items: [['swap', 'Swap', 'Trade any Solana token'], ['ape', 'Pump.fun', 'New launches · one-tap trades'], ['wonderland', 'Meme Coins', 'Discover trending memes'], ['markets', 'Stocks', 'Tesla, Apple, NVIDIA · 24/7'], ['holdings', 'Portfolio', 'Your tokens, live value'], ['buysol', 'Buy Solana', 'Card or bank → SOL']] },
+              { grp: 'Tools', accent: '#7c5cff', items: [['bridge', 'Cross-Chain', 'Move tokens across 71 chains'], ['solbtc', 'SOL → BTC', 'Solana straight to Bitcoin'], ['launchradar', 'New Tokens', 'Every Solana launch, live'], ['flipsy', 'Flipsy', 'Predictions · beta']] },
+              { grp: 'Earn & info', accent: '#13b87f', items: [['referrals', 'Referrals', 'Earn 50% of fees, forever'], ['why', 'Why Nexus', 'No email, no KYC, no limits'], ['getstarted', 'Get Started', 'New here? Start in 60s']] },
             ].map(section => (
               <div key={section.grp}>
-                <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#aeaeb2', padding: '12px 18px 4px' }}>{section.grp}</div>
-                {section.items.map(([id, label]) => (
+                <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#aeaeb2', padding: '14px 18px 4px' }}>{section.grp}</div>
+                {section.items.map(([id, label, desc]) => (
                   <button key={id} onClick={() => { switchTab(id); setMenuOpen(false); }} style={{
-                    width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '12px 18px',
-                    background: tab === id ? '#fafafa' : 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left',
-                    fontFamily: 'inherit', fontSize: 14, fontWeight: 700, letterSpacing: '-0.01em', color: '#0b0b0c',
-                  }}>{label}</button>
+                    width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px',
+                    background: tab === id ? '#f6f7f9' : 'transparent', border: 'none', borderRadius: 12, cursor: 'pointer', textAlign: 'left',
+                    fontFamily: 'inherit', color: '#0b0b0c',
+                  }}>
+                    <span style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, display: 'grid', placeItems: 'center', background: section.accent + '14', color: section.accent }}><NxIcon id={id} size={19} /></span>
+                    <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <span style={{ fontSize: 14.5, fontWeight: 600, letterSpacing: '-0.01em' }}>{label}</span>
+                      <span style={{ fontSize: 11.5, color: '#8a909b' }}>{desc}</span>
+                    </span>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="#cbd0d8" strokeWidth="1.7" width="15" height="15" style={{ flexShrink: 0 }}><path d="M9 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  </button>
                 ))}
               </div>
             ))}
