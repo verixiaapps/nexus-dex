@@ -391,7 +391,31 @@ export async function fetchBrandPrices(mints) {
   }
 }
 
-// Brand icons via Jupiter token search — mirrors Holdings.jsx pattern.
+// Price + 24h change in one call (Jupiter price v3 returns both). Returns
+// { [mint]: { price, change } }. `change` is null when the feed omits it, so
+// callers must treat it as optional. fetchBrandPrices (above) is left intact
+// for any other importers that expect the price-only shape.
+export async function fetchBrandQuotes(mints) {
+  if (!mints.length) return {};
+  try {
+    const url = `https://lite-api.jup.ag/price/v3?ids=${mints.join(',')}`;
+    const res = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 8_000);
+    if (!res.ok) return {};
+    const json = await res.json();
+    const out = {};
+    Object.entries(json || {}).forEach(([mint, info]) => {
+      const p = Number(info?.usdPrice);
+      if (!(Number.isFinite(p) && p > 0)) return;
+      const rawChg = info?.priceChange24h ?? info?.priceChange ?? info?.change24h ?? info?.change;
+      const c = Number(rawChg);
+      out[mint] = { price: p, change: Number.isFinite(c) ? c : null };
+    });
+    return out;
+  } catch (e) {
+    console.warn('[jupiter quotes]', e?.message || e);
+    return {};
+  }
+}
 // Same /api/jupiter/tokens/search?query=<mints> endpoint as elsewhere.
 export async function fetchBrandIcons(mints) {
   if (!mints.length) return {};
@@ -685,8 +709,106 @@ function useStocksCSS() {
 }
 
 // =====================================================================
-// SUB-COMPONENTS
+// EXCHANGE BOARD — new browse UI (dark board). Scoped under .xb-* so it
+// coexists with the existing st-* trade sheet styles above.
 // =====================================================================
+const XB_CSS = `
+.xb-page{--bg:#0a0d12;--surf:#11151b;--surf2:#161b22;--line:#1f262e;--line2:#2b333d;--ink:#eaeff5;--ink2:#8e99a6;--ink3:#5a6470;--up:#34d8a0;--down:#ff6b6b;--gold:#f5b544;
+  --mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;--disp:'Space Grotesk',system-ui,sans-serif;--body:'Inter',system-ui,sans-serif;
+  background:var(--bg);color:var(--ink);font-family:var(--body);min-height:100%;-webkit-font-smoothing:antialiased}
+.xb-page *{box-sizing:border-box}
+.xb-wrap{max-width:520px;margin:0 auto}
+.xb-tape{overflow:hidden;border-bottom:1px solid var(--line);background:linear-gradient(180deg,#0d1117,#0a0d12)}
+.xb-tape-track{display:inline-flex;gap:26px;white-space:nowrap;padding:9px 0;animation:xb-tape 38s linear infinite;will-change:transform}
+@keyframes xb-tape{to{transform:translateX(-50%)}}
+.xb-tape-item{font-family:var(--mono);font-size:11px;display:inline-flex;gap:7px;align-items:center;color:var(--ink2)}
+.xb-tape-item b{color:var(--ink);font-weight:600}.xb-tape-item i{font-style:normal;font-weight:600}
+.xb-tape-item i.u{color:var(--up)}.xb-tape-item i.d{color:var(--down)}
+@media (prefers-reduced-motion:reduce){.xb-tape-track{animation:none}}
+.xb-hd{padding:18px 18px 10px;display:flex;align-items:flex-end;justify-content:space-between}
+.xb-ey{font-family:var(--mono);font-size:10px;letter-spacing:.22em;text-transform:uppercase;color:var(--gold);font-weight:600}
+.xb-hd h1{font-family:var(--disp);font-size:30px;font-weight:700;letter-spacing:-.02em;margin:3px 0 0;line-height:1}
+.xb-status{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:10.5px;font-weight:600;color:var(--ink2);background:var(--surf);border:1px solid var(--line);border-radius:999px;padding:6px 11px}
+.xb-dot{width:6px;height:6px;border-radius:50%;background:var(--up);box-shadow:0 0 9px -1px var(--up);animation:xb-pulse 2s ease-in-out infinite}
+@keyframes xb-pulse{50%{opacity:.45}}
+.xb-breadth{margin:6px 18px 2px;display:flex;align-items:center;gap:10px}
+.xb-breadth .bar{flex:1;height:5px;border-radius:3px;background:var(--down);overflow:hidden}
+.xb-breadth .bar i{display:block;height:100%;background:var(--up);border-radius:3px;transition:width .5s}
+.xb-breadth .lab{font-family:var(--mono);font-size:10px;color:var(--ink2);white-space:nowrap}
+.xb-breadth .lab b{color:var(--up)}.xb-breadth .lab u{color:var(--down);text-decoration:none}
+.xb-seclbl{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink3);font-weight:600;padding:16px 20px 9px;display:flex;justify-content:space-between}
+.xb-seclbl .r{color:var(--ink3)}
+.xb-movers{display:flex;gap:11px;padding:0 18px 4px;overflow-x:auto;scrollbar-width:none}.xb-movers::-webkit-scrollbar{display:none}
+.xb-mv{flex:0 0 168px;background:var(--surf);border:1px solid var(--line);border-radius:16px;padding:13px;cursor:pointer;text-align:left;transition:border-color .14s,transform .14s}
+.xb-mv:hover{border-color:var(--line2);transform:translateY(-2px)}
+.xb-mv-top{display:flex;align-items:center;justify-content:space-between}
+.xb-mv-chip{font-family:var(--mono);font-size:11px;font-weight:700;padding:3px 8px;border-radius:7px}
+.xb-mv-chip.u{color:var(--up);background:color-mix(in srgb,var(--up) 14%,transparent)}
+.xb-mv-chip.d{color:var(--down);background:color-mix(in srgb,var(--down) 14%,transparent)}
+.xb-mv-name{font-family:var(--disp);font-size:14px;font-weight:600;margin-top:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.xb-mv-spark{margin:8px 0 6px;height:40px}
+.xb-mv-price{font-family:var(--mono);font-size:15px;font-weight:600;font-variant-numeric:tabular-nums}
+.xb-tile{font-family:var(--mono);font-weight:700;font-size:11px;letter-spacing:-.01em;display:grid;place-items:center;flex:0 0 auto;overflow:hidden;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.16),0 2px 8px rgba(0,0,0,.32)}
+.xb-tile img{width:100%;height:100%;object-fit:cover}
+.xb-search{margin:6px 18px 12px;display:flex;align-items:center;gap:9px;background:var(--surf);border:1px solid var(--line);border-radius:12px;padding:11px 13px;transition:border-color .14s}
+.xb-search:focus-within{border-color:var(--line2)}
+.xb-search svg{width:15px;height:15px;color:var(--ink3);flex:0 0 auto}
+.xb-search input{flex:1;min-width:0;background:none;border:none;outline:none;color:var(--ink);font-family:var(--body);font-size:13.5px}
+.xb-search input::placeholder{color:var(--ink3)}
+.xb-clear{background:none;border:none;color:var(--ink3);font-size:16px;cursor:pointer;padding:0 2px;line-height:1}
+.xb-chips{display:flex;gap:7px;padding:0 18px 4px;overflow-x:auto;scrollbar-width:none}.xb-chips::-webkit-scrollbar{display:none}
+.xb-chip{flex:0 0 auto;font-family:var(--mono);font-size:11.5px;font-weight:600;color:var(--ink2);background:transparent;border:1px solid var(--line);border-radius:999px;padding:8px 14px;cursor:pointer;transition:.14s}
+.xb-chip:hover{color:var(--ink);border-color:var(--line2)}
+.xb-chip.on{background:var(--gold);border-color:var(--gold);color:#1a1405}
+.xb-board{padding:0 8px 10px}
+.xb-row{width:100%;display:grid;grid-template-columns:44px 1fr 72px auto;align-items:center;gap:12px;background:none;border:none;border-bottom:1px solid var(--line);padding:11px 12px;cursor:pointer;text-align:left;transition:background .14s}
+.xb-row:hover{background:var(--surf)}.xb-row:last-child{border-bottom:none}
+.xb-id{min-width:0;display:flex;flex-direction:column;gap:2px}
+.xb-nm{font-family:var(--disp);font-size:14px;font-weight:600;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.xb-sy{font-family:var(--mono);font-size:10px;color:var(--ink3);letter-spacing:.02em}
+.xb-num{display:flex;flex-direction:column;align-items:flex-end;gap:4px;min-width:92px}
+.xb-pr{font-family:var(--mono);font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.xb-pr.muted{color:var(--ink3)}
+.xb-chg{font-family:var(--mono);font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:6px;font-variant-numeric:tabular-nums}
+.xb-chg.u{color:var(--up);background:color-mix(in srgb,var(--up) 13%,transparent)}
+.xb-chg.d{color:var(--down);background:color-mix(in srgb,var(--down) 13%,transparent)}
+.xb-chg.flat{color:var(--ink3);background:var(--surf2)}
+.xb-spark-wrap{height:34px;display:flex;align-items:center}
+.xb-empty{font-family:var(--mono);font-size:12px;color:var(--ink3);text-align:center;padding:40px 20px}
+.xb-foot{padding:18px 20px 34px;text-align:center;font-family:var(--mono);font-size:10px;color:var(--ink3);letter-spacing:.04em}
+.xb-foot b{color:var(--gold)}
+`;
+function useXbCSS() {
+  useEffect(() => {
+    const id = 'nexus-xb-css';
+    if (document.getElementById(id)) return;
+    // Pull the two display/mono faces (Inter is a safe system fallback).
+    const fid = 'nexus-xb-fonts';
+    if (!document.getElementById(fid)) {
+      const link = document.createElement('link');
+      link.id = fid; link.rel = 'stylesheet';
+      link.href = 'https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap';
+      document.head.appendChild(link);
+    }
+    const el = document.createElement('style');
+    el.id = id; el.textContent = XB_CSS;
+    document.head.appendChild(el);
+    return () => { /* leave injected */ };
+  }, []);
+}
+
+// Brand signature colors for the lettermark fallback (used only until the real
+// Jupiter icon loads). { bg, fg } per ticker.
+const BRAND_COLORS = {
+  TSLA:['#e82127','#fff'], NVDA:['#76b900','#0c1400'], AAPL:['#d6dadd','#15171a'],
+  META:['#0866ff','#fff'], GOOGL:['#4285f4','#fff'], AMZN:['#ff9900','#1a1200'],
+  MSFT:['#00a4ef','#04121c'], NFLX:['#e50914','#fff'], PLTR:['#19c3d6','#04181c'],
+  AVGO:['#cc092f','#fff'], COIN:['#0052ff','#fff'], MSTR:['#f7931a','#1a1100'],
+  CRCL:['#1aab9b','#02140f'], HOOD:['#00c805','#03130a'], SPY:['#5b7cfa','#fff'],
+  QQQ:['#9b7cff','#fff'], GLD:['#d4af37','#1a1400'], TBLL:['#7b8794','#fff'],
+};
+function brandColors(b){ return BRAND_COLORS[b.ticker] || ['#222a33','#eaeff5']; }
 // BrandBadge now accepts an optional `icon` (Jupiter token icon URL). If
 // provided, we render the real image and fall back to the sector-letter
 // gradient on load error. Same shape & size in both modes.
@@ -1091,106 +1213,122 @@ function StockChart({ mint, price, symbol }) {
   );
 }
 
-function StockSparkline({ mint }) {
+// Fast sparkline. Draws an instant line from the live price + 24h change the
+// moment it mounts (stkEndpointSeries), so the board is never blank. When the
+// row scrolls near view it upgrades to real OHLCV in place (throttled, cached,
+// deduped). Never shows a skeleton or a flat blank.
+function StockSparkline({ mint, price, change, w = 72, h = 34, sw = 1.6, color }) {
   const [pts, setPts] = useState(null);
   const ref = useRef(null);
   const doneRef = useRef(false);
-  const gidRef = useRef('stk-sp-' + Math.random().toString(36).slice(2));
+  const gidRef = useRef('xb-sp-' + Math.random().toString(36).slice(2));
 
   useEffect(() => {
-    if (!mint || !ref.current || typeof IntersectionObserver === 'undefined') return;
+    if (!mint || !ref.current || typeof IntersectionObserver === 'undefined') {
+      // No IO support → just fetch once.
+      if (mint && !doneRef.current) {
+        doneRef.current = true;
+        stkThrottle(() => stkFetchSeries(mint, '1M')).then(s => { if (s && s.length >= 2) setPts(s); }).catch(() => {});
+      }
+      return;
+    }
     const el = ref.current;
     const io = new IntersectionObserver((entries) => {
       entries.forEach(e => {
         if (e.isIntersecting && !doneRef.current) {
           doneRef.current = true;
           io.disconnect();
-          stkThrottle(() => stkFetchSeries(mint, '1M')).then(s => setPts(s || []));
+          stkThrottle(() => stkFetchSeries(mint, '1M')).then(s => { if (s && s.length >= 2) setPts(s); }).catch(() => {});
         }
       });
-    }, { rootMargin: '140px' });
+    }, { rootMargin: '220px' });
     io.observe(el);
     return () => io.disconnect();
   }, [mint]);
 
-  const series = (pts && pts.length >= 2) ? pts : null;
-  const W = 54, H = 28;
-  const built = series ? stkBuildPath(series, W, H, 2) : null;
-  const chg = series ? ((series[series.length - 1].c - series[0].c) / series[0].c) * 100 : null;
-  const up = chg == null ? true : chg >= 0;
-  const col = up ? '#11b87f' : '#fb7185';
-  const gid = gidRef.current;
+  // Real OHLCV once loaded; otherwise the instant endpoint line from price+change.
+  const series = (pts && pts.length >= 2) ? pts
+               : (stkEndpointSeries(price, change) || null);
+  const built  = series ? stkBuildPath(series, w, h, 2) : null;
+  // Direction: prefer the real 24h change; fall back to the series' own slope.
+  const up = Number.isFinite(change) ? change >= 0
+           : (series ? series[series.length - 1].c >= series[0].c : true);
+  const col = color || (up ? '#34d8a0' : '#ff6b6b');
+  const gid = gidRef.current + (up ? 'u' : 'd');
 
   return (
-    <div className="st-spark" ref={ref}>
+    <div className="xb-spark-wrap" ref={ref}>
       {built ? (
-        <svg className="st-spark-svg" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+        <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" width={w} height={h} style={{ display: 'block' }}>
           <defs>
             <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stopColor={col} stopOpacity="0.20" />
+              <stop offset="0" stopColor={col} stopOpacity="0.22" />
               <stop offset="1" stopColor={col} stopOpacity="0" />
             </linearGradient>
           </defs>
           <path d={built.area} fill={`url(#${gid})`} />
-          <path d={built.line} fill="none" stroke={col} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          <path d={built.line} fill="none" stroke={col} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round" />
+          <circle cx={built.lastX.toFixed(1)} cy={built.lastY.toFixed(1)} r={sw + 0.3} fill={col} />
         </svg>
-      ) : (pts === null ? <span className="st-sk st-spark-sk" /> : <span className="st-spark-ph" />)}
-      {chg != null && <span className={'st-spark-chg ' + (up ? 'up' : 'dn')}>{(up ? '+' : '') + chg.toFixed(2) + '%'}</span>}
+      ) : null}
     </div>
   );
 }
 
-function BrandBadge({ brand, icon, size = 42 }) {
-  const letter = (brand.ticker || brand.symbol || '?').charAt(0).toUpperCase();
-  const fontSize = Math.round(size * 0.52);
-  const radius   = Math.round(size * 0.31);
+function BrandBadge({ brand, icon, size = 44 }) {
+  const radius = Math.round(size * 0.29);
   const [errored, setErrored] = useState(false);
-  // Reset error when the icon URL changes (different brand opened).
   useEffect(() => { setErrored(false); }, [icon]);
+  const [bg, fg] = brandColors(brand);
+  const label = (brand.ticker || brand.symbol || '?').slice(0, 4).toUpperCase();
 
   if (icon && !errored) {
     return (
-      <img
-        src={icon}
-        alt={brand.symbol || ''}
-        onError={() => setErrored(true)}
-        className="st-badge-img"
-        style={{ width: size, height: size, borderRadius: radius }}
-      />
+      <span className="xb-tile" style={{ width: size, height: size, borderRadius: radius }}>
+        <img src={icon} alt={brand.symbol || ''} onError={() => setErrored(true)} style={{ borderRadius: radius }} />
+      </span>
     );
   }
   return (
-    <div
-      className={'st-badge ' + sectorClass(brand.sector)}
-      style={{ width: size, height: size, fontSize, borderRadius: radius }}
-    >
-      {letter}
-    </div>
+    <span
+      className="xb-tile"
+      style={{ width: size, height: size, borderRadius: radius, background: bg, color: fg, fontSize: Math.round(size * 0.25) }}
+    >{label}</span>
   );
 }
 
-function BrandTile({ brand, icon, price, onClick, idx }) {
+function BrandRow({ brand, icon, price, change, onClick }) {
+  const hasChg = Number.isFinite(change);
+  const up = hasChg ? change >= 0 : true;
   return (
-    <button
-      onClick={onClick}
-      className="st-tile"
-      style={{ animationDelay: (idx * 0.03) + 's' }}
-    >
-      <BrandBadge brand={brand} icon={icon} size={42}/>
-      <div className="st-tile-mid">
-        <div className="st-tile-row">
-          <span className="st-tile-sym">{brand.symbol}</span>
-          <span className="st-tile-ticker">{brand.ticker}</span>
-        </div>
-        <div className="st-tile-name">{brand.name}</div>
+    <button className="xb-row" onClick={onClick}>
+      <BrandBadge brand={brand} icon={icon} size={44} />
+      <span className="xb-id">
+        <span className="xb-nm">{brand.name}</span>
+        <span className="xb-sy">{brand.symbol} · {brand.sector}</span>
+      </span>
+      <StockSparkline mint={brand.mint} price={price} change={change} w={72} h={34} />
+      <span className="xb-num">
+        <span className={'xb-pr' + (price > 0 ? '' : ' muted')}>{price > 0 ? fmtUsd(price) : '—'}</span>
+        <span className={'xb-chg ' + (hasChg ? (up ? 'u' : 'd') : 'flat')}>
+          {hasChg ? <>{up ? '▲' : '▼'} {Math.abs(change).toFixed(2)}%</> : '—'}
+        </span>
+      </span>
+    </button>
+  );
+}
+
+function MoverCard({ brand, icon, price, change, onClick }) {
+  const up = change >= 0;
+  return (
+    <button className="xb-mv" onClick={onClick}>
+      <div className="xb-mv-top">
+        <BrandBadge brand={brand} icon={icon} size={34} />
+        <span className={'xb-mv-chip ' + (up ? 'u' : 'd')}>{up ? '▲' : '▼'} {Math.abs(change).toFixed(2)}%</span>
       </div>
-      <StockSparkline mint={brand.mint} />
-      <div className="st-tile-right">
-        <div className={'st-tile-price' + (price > 0 ? '' : ' st-muted')}>
-          {price > 0 ? fmtUsd(price) : '—'}
-        </div>
-        <div className="st-tile-cta">TAP TO TRADE</div>
-      </div>
+      <div className="xb-mv-name">{brand.name}</div>
+      <div className="xb-mv-spark"><StockSparkline mint={brand.mint} price={price} change={change} w={150} h={40} sw={1.8} /></div>
+      <div className="xb-mv-price">{price > 0 ? fmtUsd(price) : '—'}</div>
     </button>
   );
 }
@@ -1612,105 +1750,166 @@ function BrandsRegionBlock() {
 // =====================================================================
 function BrandsInner({ onConnectWallet }) {
   useStocksCSS();
+  useXbCSS();
 
   const [filter, setFilter] = useState('All');
-  const [prices, setPrices] = useState({});
+  const [query,  setQuery]  = useState('');
+  const [quotes, setQuotes] = useState({});   // mint -> { price, change }
   const [icons,  setIcons]  = useState({});
   const [active, setActive] = useState(null);
 
   const { publicKey: solPk } = useWallet();
   const walletPubkey = useMemo(() => solPk ? solPk.toString() : null, [solPk]);
 
-  // PRICES — poll every 30s.
+  // QUOTES (price + 24h change) — poll every 30s.
   useEffect(() => {
     let alive = true;
     const mints = BRANDS.map(s => s.mint);
     const tick = async () => {
-      const result = await fetchBrandPrices(mints);
+      const result = await fetchBrandQuotes(mints);
       if (!alive) return;
-      setPrices(result);
+      if (Object.keys(result).length) setQuotes(result);
     };
     tick();
     const id = setInterval(tick, 30_000);
     return () => { alive = false; clearInterval(id); };
   }, []);
 
-  // ICONS — one-shot fetch on mount. xStocks icons come from Backed Finance
-  // via Jupiter's token search; falls back to letter badge if any fail.
+  // ICONS — one-shot on mount. Real logos replace the brand-colored tiles.
   useEffect(() => {
     let alive = true;
     (async () => {
-      const mints = BRANDS.map(s => s.mint);
-      const result = await fetchBrandIcons(mints);
+      const result = await fetchBrandIcons(BRANDS.map(s => s.mint));
       if (alive && Object.keys(result).length > 0) setIcons(result);
     })();
     return () => { alive = false; };
   }, []);
 
-  // SPARKLINE WARM-UP — kick off every tile's series on mount (parallel, throttled)
-  // so the whole grid fills top-to-bottom immediately instead of each tile waiting
-  // to scroll into view. stkFetchSeries dedups + caches, so the per-tile observer
-  // fetch then resolves instantly from cache.
+  // SPARKLINE WARM-UP — kick off every series on mount (parallel, throttled,
+  // cached + deduped) so real OHLCV is ready by the time a row scrolls in.
   useEffect(() => {
     BRANDS.forEach(b => { stkThrottle(() => stkFetchSeries(b.mint, '1M')).catch(() => {}); });
   }, []);
 
+  const priceOf  = (m) => quotes[m]?.price ?? 0;
+  const changeOf = (m) => quotes[m]?.change;
+
   const filtered = useMemo(() => {
-    if (filter === 'All')      return BRANDS;
-    if (filter === 'Trending') return BRANDS.filter(s => ['TSLA','NVDA','SPY','MSTR','AAPL','COIN','CRCL'].includes(s.ticker));
-    return BRANDS.filter(s => s.sector === filter);
-  }, [filter]);
+    const base = filter === 'All' ? BRANDS
+      : filter === 'Trending' ? BRANDS.filter(s => ['TSLA','NVDA','SPY','MSTR','AAPL','COIN','CRCL'].includes(s.ticker))
+      : BRANDS.filter(s => s.sector === filter);
+    const q = query.trim().toLowerCase();
+    if (!q) return base;
+    return base.filter(s => (s.name + ' ' + s.ticker + ' ' + s.symbol).toLowerCase().includes(q));
+  }, [filter, query]);
+
+  const movers = useMemo(() => BRANDS
+    .filter(b => Number.isFinite(quotes[b.mint]?.change))
+    .sort((a, b) => Math.abs(quotes[b.mint].change) - Math.abs(quotes[a.mint].change))
+    .slice(0, 5), [quotes]);
+
+  const breadth = useMemo(() => {
+    let up = 0, dn = 0;
+    BRANDS.forEach(b => { const c = quotes[b.mint]?.change; if (Number.isFinite(c)) { c >= 0 ? up++ : dn++; } });
+    return { up, dn, total: up + dn };
+  }, [quotes]);
+
+  const searching = query.trim().length > 0;
 
   return (
     <>
-      <div className="st-page">
-        <div className="st-blob" style={{ width: 380, height: 380, background: '#FF8FBE', top: -80, left: -120 }}/>
-        <div className="st-blob" style={{ width: 440, height: 440, background: '#A0E7FF', top: '30%', right: -160, animationDelay: '3s' }}/>
-        <div className="st-blob" style={{ width: 320, height: 320, background: '#B794F6', bottom: '10%', left: -100, animationDelay: '6s' }}/>
+      <div className="xb-page">
+        <div className="xb-wrap">
 
-        <div className="st-inner">
-          <div className="st-trust">
-            <span>No KYC</span><span className="sep">·</span>
-            <span>No Account</span><span className="sep">·</span>
-            <span>No Limits</span>
+          {/* ticker tape */}
+          {breadth.total > 0 && (
+            <div className="xb-tape">
+              <div className="xb-tape-track">
+                {[...BRANDS, ...BRANDS].map((b, i) => {
+                  const c = quotes[b.mint]?.change;
+                  return (
+                    <span className="xb-tape-item" key={b.mint + i}>
+                      <b>{b.ticker}</b>
+                      {Number.isFinite(c) ? <i className={c >= 0 ? 'u' : 'd'}>{(c >= 0 ? '+' : '') + c.toFixed(2)}%</i> : null}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* header */}
+          <div className="xb-hd">
+            <div>
+              <div className="xb-ey">Tokenized · Solana</div>
+              <h1>Exchange</h1>
+            </div>
+            <div className="xb-status"><span className="xb-dot" />OPEN 24/7</div>
           </div>
 
-          <div className="st-section">
-            <div className="st-section-title">browse</div>
-            <div className="st-section-meta">JUPITER PRICES</div>
+          {/* market breadth */}
+          {breadth.total > 0 && (
+            <div className="xb-breadth">
+              <span className="lab"><b>{breadth.up} up</b></span>
+              <div className="bar"><i style={{ width: Math.round(breadth.up / breadth.total * 100) + '%' }} /></div>
+              <span className="lab"><u>{breadth.dn} down</u></span>
+            </div>
+          )}
+
+          {/* top movers */}
+          {!searching && movers.length >= 3 && (
+            <>
+              <div className="xb-seclbl"><span>Top movers</span><span className="r">24h</span></div>
+              <div className="xb-movers">
+                {movers.map(b => (
+                  <MoverCard key={b.mint} brand={b} icon={icons[b.mint]} price={priceOf(b.mint)} change={changeOf(b.mint)} onClick={() => setActive(b)} />
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* search */}
+          <div className="xb-search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
+            <input
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder="Search by name or ticker"
+              aria-label="Search stocks"
+            />
+            {searching && <button className="xb-clear" onClick={() => setQuery('')} aria-label="Clear search">×</button>}
           </div>
 
-          <div className="st-filters">
-            {FILTERS.map(f => (
-              <button
-                key={f.id}
-                onClick={() => setFilter(f.id)}
-                className={'st-filter' + (filter === f.id ? ' st-active' : '')}
-              >{f.label}</button>
-            ))}
-          </div>
+          {/* sector filters (hidden while searching) */}
+          {!searching && (
+            <div className="xb-chips">
+              {FILTERS.map(f => (
+                <button key={f.id} onClick={() => setFilter(f.id)} className={'xb-chip' + (filter === f.id ? ' on' : '')}>{f.label}</button>
+              ))}
+            </div>
+          )}
 
-          <div className="st-list">
+          {/* board */}
+          <div className="xb-seclbl">
+            <span>{searching ? 'Results' : 'Market board'}</span>
+            <span className="r">{filtered.length} listed · live</span>
+          </div>
+          <div className="xb-board">
             {filtered.length === 0 ? (
-              <div className="st-empty">No brands in this category.</div>
-            ) : filtered.map((s, i) => (
-              <BrandTile
+              <div className="xb-empty">No stocks match "{query}".</div>
+            ) : filtered.map(s => (
+              <BrandRow
                 key={s.mint}
                 brand={s}
                 icon={icons[s.mint]}
-                price={prices[s.mint] || 0}
+                price={priceOf(s.mint)}
+                change={changeOf(s.mint)}
                 onClick={() => setActive(s)}
-                idx={i}
               />
             ))}
           </div>
 
-          <div className="st-foot">
-            <span className="st-foot-label">powered by</span>
-            <span className="st-foot-name">jupiter</span>
-            <span className="st-foot-sep">·</span>
-            <span className="st-foot-label">non-custodial</span>
-          </div>
+          <div className="xb-foot">Routed on-chain via <b>Jupiter</b> · your keys, your coins</div>
         </div>
       </div>
 
@@ -1718,7 +1917,7 @@ function BrandsInner({ onConnectWallet }) {
         open={!!active}
         brand={active}
         icon={active ? icons[active.mint] : null}
-        price={active ? prices[active.mint] || 0 : 0}
+        price={active ? priceOf(active.mint) : 0}
         onClose={() => setActive(null)}
         walletPubkey={walletPubkey}
         onConnectWallet={onConnectWallet}
