@@ -3296,6 +3296,12 @@ const MWD_LR_CSS = `
 .mwd-bond{margin-top:6px;height:4px;border-radius:3px;background:var(--line);overflow:hidden;max-width:148px}
 .mwd-bond i{display:block;height:100%;border-radius:3px;background:linear-gradient(90deg,var(--ember),var(--amber2))}
 .mwd-bondlab{font-family:'JetBrains Mono',monospace;font-size:8.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;margin-top:4px;color:var(--ink3)}
+.mwd-sig{display:flex;align-items:center;gap:2.5px;margin-top:5px}
+.mwd-sig i{width:13px;height:3px;border-radius:2px;background:var(--line2)}
+.mwd-sig .lab{font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;margin-left:6px}
+.mwd-sig.high i.on{background:var(--up);box-shadow:0 0 5px -1px var(--up)} .mwd-sig.high .lab{color:var(--up)}
+.mwd-sig.mid i.on{background:var(--amber);box-shadow:0 0 5px -1px var(--amber)} .mwd-sig.mid .lab{color:var(--amber)}
+.mwd-sig.low i.on{background:var(--ink3)} .mwd-sig.low .lab{color:var(--ink3)}
 .mwd-spark{flex-shrink:0;width:66px;height:32px;display:flex;align-items:center}
 .mwd-right{flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end;gap:6px;min-width:74px}
 .mwd-price{font-family:'JetBrains Mono',monospace;font-size:12.5px;font-weight:700}
@@ -3341,6 +3347,17 @@ function LrFeedRow({ t, i, owned, isFresh, onOpen, onBuy, onSell }) {
           : bond != null
           ? <><div className="mwd-bond"><i style={{ width: bond + '%' }} /></div><div className="mwd-bondlab">{bond.toFixed(0)}% bonded</div></>
           : null}
+        {(() => {
+          const sig = signalScore(t);
+          const dots = Math.max(1, Math.round(sig / 20));
+          const tier = sig >= 70 ? 'high' : sig >= 40 ? 'mid' : 'low';
+          return (
+            <div className={'mwd-sig ' + tier}>
+              {[0,1,2,3,4].map(d => <i key={d} className={d < dots ? 'on' : ''} />)}
+              <span className="lab">signal {sig}</span>
+            </div>
+          );
+        })()}
       </div>
       <div className="mwd-spark"><LrSparkline mint={t.mint} price={t.price} change={t.change} pool={t.pool} w={66} h={32} full /></div>
       <div className="mwd-right">
@@ -4042,6 +4059,7 @@ function TradeModal({
   token, initialMode, onClose, onConfirm,
   buyPresets, sellPresets,
   solBalance, tokenBalance, solPrice,
+  connected = true, onConnect,
 }) {
   const [mode, setMode] = useState(initialMode || 'buy');
   const [amount, setAmount] = useState('');
@@ -4137,6 +4155,7 @@ function TradeModal({
   })();
 
   const handleConfirm = async () => {
+    if (!connected) { if (onConnect) onConnect(); return; }
     if (!swapParams || confirming) return;
     setConfirming(true);
     setError(null);
@@ -4153,7 +4172,11 @@ function TradeModal({
     setAmount(String(Math.floor(Math.max(0, availSol - 0.002) * 10000) / 10000));
   };
 
-  const confirmDisabled = confirming || !swapParams || !hasFunds || !!error;
+  // When no wallet is connected the button stays enabled and prompts to connect
+  // (viewing a token never requires a wallet; only confirming a trade does).
+  const confirmDisabled = connected
+    ? (confirming || !swapParams || !hasFunds || !!error)
+    : confirming;
 
   return (
     <div className="lr-trade-overlay" onClick={onClose}>
@@ -4316,7 +4339,9 @@ function TradeModal({
             onClick={handleConfirm}>
             {confirming
               ? (isBuy ? 'Buying…' : 'Selling…')
-              : !amount || Number(amount) <= 0
+              : !connected
+                ? 'Connect wallet'
+                : !amount || Number(amount) <= 0
                 ? (isBuy ? 'Enter SOL amount' : 'Enter percentage')
                 : !hasFunds
                   ? (isBuy
@@ -4373,6 +4398,29 @@ function endpointSeries(price, change) {
   return out;
 }
 
+// Self-contained smooth path builder (Catmull-Rom -> Bezier). No Stocks.jsx
+// dependency, and never returns null -- a flat baseline draws when there are
+// <2 points, so the sparkline is never blank.
+function lrSparkPath(pts, w, h) {
+  const vals = (pts || []).map(p => Number(typeof p === 'number' ? p : (p && p.c))).filter(Number.isFinite);
+  if (vals.length < 2) {
+    const midY = h / 2;
+    return { line: `M 0 ${midY} L ${w} ${midY}`, area: `M 0 ${midY} L ${w} ${midY} L ${w} ${h} L 0 ${h} Z`, lastX: w, lastY: midY, up: true };
+  }
+  const min = Math.min(...vals), max = Math.max(...vals), span = (max - min) || 1, pad = 2.5, ih = h - pad * 2;
+  const P = vals.map((v, i) => [ (i / (vals.length - 1)) * w, pad + (1 - (v - min) / span) * ih ]);
+  let line = `M ${P[0][0].toFixed(2)} ${P[0][1].toFixed(2)}`;
+  for (let i = 0; i < P.length - 1; i++) {
+    const p0 = P[i - 1] || P[i], p1 = P[i], p2 = P[i + 1], p3 = P[i + 2] || p2;
+    const c1x = p1[0] + (p2[0] - p0[0]) / 6, c1y = p1[1] + (p2[1] - p0[1]) / 6;
+    const c2x = p2[0] - (p3[0] - p1[0]) / 6, c2y = p2[1] - (p3[1] - p1[1]) / 6;
+    line += ` C ${c1x.toFixed(2)} ${c1y.toFixed(2)} ${c2x.toFixed(2)} ${c2y.toFixed(2)} ${p2[0].toFixed(2)} ${p2[1].toFixed(2)}`;
+  }
+  const area = `${line} L ${w.toFixed(2)} ${h.toFixed(2)} L 0 ${h.toFixed(2)} Z`;
+  const [lastX, lastY] = P[P.length - 1];
+  return { line, area, lastX, lastY, up: vals[vals.length - 1] >= vals[0] };
+}
+
 function LrSparkline({ mint, price, change, pool, w = 280, h = 40, full = true }) {
   const [series, setSeries] = useState(null);
   useEffect(() => {
@@ -4385,15 +4433,23 @@ function LrSparkline({ mint, price, change, pool, w = 280, h = 40, full = true }
   }, [mint, pool]);
   const hist = lrRecordSpark(mint, Number(price));
   const obs = hist.length >= 2 ? hist.map(c => ({ c })) : null;
-  // REAL data, in priority: GeckoTerminal OHLCV → live observed ticks → the two
-  // real endpoints from price + 24h change. Always a line the moment a price
-  // exists; OHLCV upgrades it in place. Never synthetic, never blank.
-  const pts = (series && series.length >= 2) ? series
-            : (obs || endpointSeries(price, change));
-  if (!pts) return null;
-  const path = stkSmoothPath(pts, w, h, 2, stkSeed(mint));
+  // REAL data, in priority: GeckoTerminal OHLCV (from stkFetchSeries) -> live
+  // observed ticks -> the two real endpoints from price + 24h change. Whatever
+  // the source's element shape, normalize to {c}. A flat baseline draws if none
+  // resolve, so the sparkline is never blank.
+  const norm = (arr) => (Array.isArray(arr) ? arr
+    .map(p => (typeof p === 'number'
+      ? { c: p }
+      : { c: Number(p && (p.c ?? p.close ?? p.value ?? p.price ?? (Array.isArray(p) ? p[4] : undefined))) }))
+    .filter(p => Number.isFinite(p.c)) : null);
+  const pts = ((series && series.length >= 2) ? norm(series) : null)
+            || obs
+            || endpointSeries(price, change);
+  const path = lrSparkPath(pts || [], w, h);
   const up = Number.isFinite(change) ? change >= 0 : path.up;
-  const col = up ? 'var(--green)' : 'var(--red)';
+  // Up = green, down = neutral gray (never red). Explicit hex so the color
+  // always resolves regardless of which CSS vars the theme defines.
+  const col = up ? '#3ddc84' : '#8b93a3';
   const id = 'lrs' + (up ? 'u' : 'd') + (mint ? String(mint).slice(0, 8) : '');
   return (
     <svg width={full ? '100%' : w} height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: 'block', marginTop: 10, overflow: 'visible' }}>
@@ -4874,7 +4930,16 @@ function LaunchRadar({ onConnectWallet } = {}) {
     refreshOneToken(token.mint);
   }, [requireWallet, refreshSol, refreshOneToken]);
 
+  // Tapping a token opens it for viewing (chart + info) WITHOUT requiring a
+  // wallet. The wallet is only needed to actually confirm a buy/sell.
+  const onView = useCallback((token) => {
+    setTradeOpen({ token, mode: 'buy' });
+    refreshSol();
+    refreshOneToken(token.mint);
+  }, [refreshSol, refreshOneToken]);
+
   const handleTradeConfirm = useCallback(async ({ mode, swapParams, token }) => {
+    if (!requireWallet()) return { closed: false };
     const { sig, confirmed } = await executeSwap({ mode, swapParams, token });
 
     // Estimated output for the toast, from current price feed.
@@ -4923,7 +4988,7 @@ function LaunchRadar({ onConnectWallet } = {}) {
     aggressiveRefresh();
     setTradeOpen(null);
     return { closed: true };
-  }, [executeSwap, fireConfetti, pushToast, aggressiveRefresh, refreshSol, refreshOneToken, solPrice]);
+  }, [requireWallet, executeSwap, fireConfetti, pushToast, aggressiveRefresh, refreshSol, refreshOneToken, solPrice]);
 
   /* ──── derived display ──── */
   const deriveDisplayValues = useCallback(
@@ -5044,7 +5109,7 @@ function LaunchRadar({ onConnectWallet } = {}) {
                 i={i}
                 owned={balances[t.mint]}
                 isFresh={Number.isFinite(t.ageMs) && t.ageMs < freshThresholdMs}
-                onOpen={onCardBuy}
+                onOpen={onView}
                 onBuy={onCardBuy}
                 onSell={onCardSell}
               />
@@ -5072,6 +5137,8 @@ function LaunchRadar({ onConnectWallet } = {}) {
           solBalance={solBalance}
           tokenBalance={balances[tradeOpen.token.mint]}
           solPrice={solPrice}
+          connected={!!wallet.publicKey}
+          onConnect={requireWallet}
         />
       )}
 
