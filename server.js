@@ -2287,6 +2287,158 @@ app.post('/api/ape/enrich', async (req, res) => {
   }
 });
 
+/* ========================================================================
+ * NEXUS DISCOVER — added section (self-contained; nothing else is modified).
+ *
+ * Place this block IMMEDIATELY BEFORE  app.all('/api/*', ...)  so it is not
+ * shadowed by that 404 catch-all. It must sit AFTER the NEXUS CHARTS and
+ * APE ENRICH sections because it reuses helpers defined there.
+ *
+ * Gives the Discover page fast, ready-to-render, server-sorted token lists for
+ * its four filters, plus a single batched sparkline call so the feed never
+ * makes one request per row.
+ *
+ *   GET  /api/nx/discover?lens=popular|hot|new|gainers&limit=80
+ *        -> { lens, tokens: [ normalized token, ... ] }
+ *
+ *        popular -> Jupiter top-organic, sorted by mcap, liquidity floor
+ *                   (the established / obvious Solana tokens)
+ *        hot     -> Jupiter top-organic, sorted by momentum
+ *                   (24h volume ÷ mcap, blended with organicScore)
+ *        gainers -> Jupiter top-organic, sorted by 24h price change
+ *        new     -> Jupiter recent (freshest mints), newest first
+ *
+ *   POST /api/nx/discover-spark   body { mints: [...] }
+ *        -> { sparks: { <mint>: { closes:[...], change, price } }, pending:[...] }
+ *
+ *        Returns every sparkline series already warm in _nxCache in ONE call.
+ *        Cold mints are queued (background) via the existing _nxWarm drip and
+ *        returned in `pending` so the client can poll again shortly. This turns
+ *        N per-row chart calls into a single request that hits warm cache.
+ *
+ * Reuses ONLY existing helpers: fetchWithTimeout, getCachedJson, setCachedJson,
+ * _normalizeJupToken, _nxCache, _nxWarm, NX_B58, JUPITER_TOKENS_BASE. All new
+ * names are prefixed _nxd to avoid collisions. No existing route is touched.
+ * ===================================================================== */
+const _NXD_LIMIT_DEFAULT = 80;
+const _NXD_LIMIT_MAX     = 120;
+const _NXD_TTL_ORGANIC   = 30_000;  // matches /api/dex/discover organic cache
+const _NXD_TTL_NEW       = 5_000;   // fresh mints move fast
+const _NXD_POPULAR_LIQ   = 25_000;  // "established" liquidity floor (USD)
+const _NXD_POPULAR_MCAP  = 1_000_000;
+
+// Fetch + normalize a Jupiter v2 ranked list (same upstreams /api/dex/discover
+// uses). Cached under its own key so popular/hot/gainers share one organic
+// fetch instead of hitting Jupiter three times.
+async function _nxdFetchList(kind) {
+  const cacheKey = 'nxd:src:' + kind;
+  const cached = getCachedJson(cacheKey);
+  if (cached) return cached.payload;
+
+  const upstream = (kind === 'new')
+    ? `${JUPITER_TOKENS_BASE}/recent`
+    : `${JUPITER_TOKENS_BASE}/toporganicscore/24h`;
+
+  let tokens = [];
+  try {
+    const r = await fetchWithTimeout(upstream, { headers: { Accept: 'application/json' } }, 12_000);
+    if (r.ok) {
+      const d = await r.json();
+      const raw = Array.isArray(d) ? d : (d && Array.isArray(d.tokens) ? d.tokens : (d && Array.isArray(d.data) ? d.data : []));
+      tokens = raw.map(_normalizeJupToken).filter(Boolean)
+        .filter(t => t.mint !== 'So11111111111111111111111111111111111111112'
+                  && t.sym !== 'SOL' && t.sym !== 'WSOL');
+    }
+  } catch (e) { /* fail soft → empty list */ }
+
+  setCachedJson(cacheKey, 200, tokens, kind === 'new' ? _NXD_TTL_NEW : _NXD_TTL_ORGANIC);
+  return tokens;
+}
+
+// Momentum proxy: how much it's traded relative to its size, nudged by
+// Jupiter's organic score. Not a true rolling-momentum engine, but it
+// surfaces "being actively traded right now" distinctly from raw % gainers.
+function _nxdHotScore(t) {
+  const mc = t.mcap > 0 ? t.mcap : (t.fdv || 0);
+  const volRatio = mc > 0 ? (t.volume24h || 0) / mc : 0;
+  return volRatio * 100 + (Number(t.organicScore) || 0);
+}
+
+app.get('/api/nx/discover', async (req, res) => {
+  try {
+    const lens  = String(req.query.lens || 'hot').toLowerCase();
+    const limit = Math.min(_NXD_LIMIT_MAX, Math.max(10, Number(req.query.limit) || _NXD_LIMIT_DEFAULT));
+
+    const cacheKey = 'nxd:list:' + lens + ':' + limit;
+    const cached = getCachedJson(cacheKey);
+    if (cached) return res.status(cached.status).json(cached.payload);
+
+    let tokens;
+    if (lens === 'new') {
+      tokens = (await _nxdFetchList('new')).slice()
+        .sort((a, b) => (b.pairCreatedAtMs || 0) - (a.pairCreatedAtMs || 0));
+    } else {
+      const src = await _nxdFetchList('organic');
+      if (lens === 'popular') {
+        tokens = src
+          .filter(t => (t.liquidity || 0) >= _NXD_POPULAR_LIQ || (t.mcap || 0) >= _NXD_POPULAR_MCAP)
+          .sort((a, b) => (b.mcap || 0) - (a.mcap || 0));
+      } else if (lens === 'gainers') {
+        tokens = src
+          .filter(t => Number.isFinite(t.change))
+          .sort((a, b) => (b.change || 0) - (a.change || 0));
+      } else { // hot (default)
+        tokens = src.slice().sort((a, b) => _nxdHotScore(b) - _nxdHotScore(a));
+      }
+    }
+
+    tokens = tokens.slice(0, limit);
+
+    // Pre-warm sparklines for the whole list in the background (steady drip via
+    // the existing NEXUS CHARTS queue), so the batch-spark call below hits cache.
+    try { _nxWarm(tokens.map(t => t.mint)); } catch (e) {}
+
+    const payload = { lens, tokens };
+    setCachedJson(cacheKey, 200, payload, lens === 'new' ? _NXD_TTL_NEW : _NXD_TTL_ORGANIC);
+    return res.json(payload);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'Discover lens timed out' });
+    logError('nxd-discover', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+
+app.post('/api/nx/discover-spark', async (req, res) => {
+  try {
+    const body  = req.body || {};
+    const mints = Array.isArray(body.mints)
+      ? [...new Set(body.mints.map(String).filter(m => NX_B58.test(m)))].slice(0, _NXD_LIMIT_MAX)
+      : [];
+
+    const sparks = {};
+    const pending = [];
+    for (const m of mints) {
+      const hit = _nxCache.get(m);
+      const p = hit && hit.payload;
+      if (p && Array.isArray(p.closes) && p.closes.length >= 2) {
+        sparks[m] = { closes: p.closes, change: p.change, price: p.price };
+      } else {
+        pending.push(m);
+      }
+    }
+
+    // Queue the cold ones; they'll be warm on the next poll. Non-blocking, so
+    // this endpoint always returns instantly with whatever is already cached.
+    if (pending.length) { try { _nxWarm(pending); } catch (e) {} }
+
+    return res.json({ sparks, pending });
+  } catch (e) {
+    logError('nxd-discover-spark', e);
+    return res.json({ sparks: {}, pending: [] });
+  }
+});
+
+
 app.all('/api/*', (req, res) => res.status(404).json({ error: 'API route not found: ' + req.path }));
 
 /* ========================================================================
