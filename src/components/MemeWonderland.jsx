@@ -1252,6 +1252,247 @@ function ActivityFeed({ tokens, whaleEvents, onOpen }) {
 }
 
 /* ════════════════════════════════════════════════════════════════════
+   DISCOVER FEED — DeFi-dark redesign (presentation only).
+   Consumes the EXACT same token objects + handlers as the original sections.
+   No data fetching here; everything is passed in from MemeWonderland.
+   ════════════════════════════════════════════════════════════════════ */
+const MWD_CSS = `
+.mwd{
+  --bg:#060708; --bg2:#0a0b0d; --panel:#0d0f12; --panel2:#111317; --hover:#13151a;
+  --line:#191c22; --line2:#262a33;
+  --ink:#f2f4f8; --ink2:#838a98; --ink3:#4c525f;
+  --amber:#f5a623; --amber2:#ffc24d; --ember:#ff7a3c;
+  --up:#3ddc84; --down:#ff5466; --glass:rgba(13,15,18,.72);
+  min-height:100vh;color:var(--ink);
+  font-family:'Space Grotesk',-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+  background-color:var(--bg);
+  background-image:
+    radial-gradient(900px 420px at 50% -8%,rgba(245,166,35,.07),transparent 70%),
+    radial-gradient(700px 500px at 100% 0%,rgba(61,220,132,.04),transparent 70%),
+    linear-gradient(rgba(255,255,255,.014) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(255,255,255,.014) 1px,transparent 1px);
+  background-size:auto,auto,40px 40px,40px 40px;background-attachment:fixed;
+}
+.mwd,.mwd *{box-sizing:border-box}
+.mwd-mono{font-family:'JetBrains Mono','SF Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.mwd-wrap{max-width:480px;margin:0 auto;padding-bottom:40px}
+
+.mwd-bar{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:7px;padding:10px 13px 0}
+.mwd-search{flex:1;min-width:0;display:flex;align-items:center;gap:8px;padding:8px 11px;border-radius:8px;
+  background:linear-gradient(180deg,var(--panel),var(--bg2));border:1px solid var(--line)}
+.mwd-search:focus-within{border-color:var(--line2);box-shadow:0 0 0 3px rgba(245,166,35,.07)}
+.mwd-search svg{width:14px;height:14px;color:var(--ink3);flex-shrink:0}
+.mwd-search input{flex:1;background:none;border:none;outline:none;color:var(--ink);font-family:inherit;font-size:13px;min-width:0}
+.mwd-search input::placeholder{color:var(--ink3)}
+.mwd-search .x{background:none;border:none;color:var(--ink3);font-size:17px;cursor:pointer;padding:0 2px;line-height:1}
+
+.mwd-results{position:absolute;top:calc(100% + 6px);left:13px;right:13px;background:var(--panel2);
+  border:1px solid var(--line2);border-radius:10px;padding:6px;max-height:380px;overflow-y:auto;
+  box-shadow:0 20px 48px rgba(0,0,0,.55);z-index:30}
+.mwd-rr{display:flex;align-items:center;gap:10px;padding:8px 9px;border-radius:8px;cursor:pointer}
+.mwd-rr:hover{background:var(--hover)}
+.mwd-empty{padding:16px;text-align:center;color:var(--ink3);font-size:12.5px}
+
+.mwd-chips{display:flex;gap:6px;padding:10px 13px;overflow-x:auto;scrollbar-width:none;border-bottom:1px solid var(--line)}
+.mwd-chips::-webkit-scrollbar{display:none}
+.mwd-chip{flex-shrink:0;display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:7px;
+  background:linear-gradient(180deg,var(--panel),var(--bg2));border:1px solid var(--line);cursor:pointer;
+  font-family:inherit;font-size:12px;font-weight:600;color:var(--ink2);transition:.16s}
+.mwd-chip:hover{color:var(--ink);border-color:var(--line2)}
+.mwd-chip.on{background:var(--panel2);border-color:var(--line2);color:var(--ink)}
+.mwd-chip.on.hot{border-color:rgba(245,166,35,.45);box-shadow:0 0 14px -4px rgba(245,166,35,.4),inset 0 0 0 1px rgba(245,166,35,.12)}
+.mwd-chip.on.hot::before{content:"";width:5px;height:5px;border-radius:50%;background:var(--amber);box-shadow:0 0 8px var(--amber)}
+.mwd-chip .ct{display:grid;place-items:center;min-width:16px;height:16px;padding:0 4px;border-radius:999px;
+  background:rgba(245,166,35,.16);color:var(--amber);font-family:'JetBrains Mono',monospace;font-weight:800;font-size:8.5px}
+
+.mwd-feed{padding:3px 8px 0}
+.mwd-row{position:relative;display:flex;align-items:center;gap:10px;padding:8px 7px;cursor:pointer;border-radius:8px;
+  transition:background .14s;animation:mwdRise .4s cubic-bezier(.2,.9,.3,1) backwards}
+.mwd-row::after{content:"";position:absolute;left:7px;right:7px;bottom:0;height:1px;background:var(--line)}
+.mwd-row:last-child::after{display:none}
+.mwd-row:hover{background:var(--hover)}
+.mwd-row:hover::after{opacity:0}
+@keyframes mwdRise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.mwd-av{position:relative;flex-shrink:0}
+.mwd-av .sq{width:36px;height:36px;font-size:14px;border-radius:9px;display:grid;place-items:center;font-weight:800;
+  color:#fff;overflow:hidden;box-shadow:inset 0 1px 0 rgba(255,255,255,.22),inset 0 -2px 6px rgba(0,0,0,.4),0 2px 7px rgba(0,0,0,.35)}
+.mwd-av .sq img{width:100%;height:100%;object-fit:cover}
+.mwd-age{position:absolute;bottom:-4px;left:50%;transform:translateX(-50%);font-family:'JetBrains Mono',monospace;
+  font-size:7.5px;font-weight:800;color:#1a1205;padding:1px 5px;border-radius:5px;background:var(--amber);
+  white-space:nowrap;box-shadow:0 0 0 2px var(--bg),0 0 7px -1px rgba(245,166,35,.6)}
+.mwd-age.old{background:var(--ink3);color:#fff;box-shadow:0 0 0 2px var(--bg)}
+.mwd-mid{flex:1;min-width:0}
+.mwd-sym{display:flex;align-items:center;gap:7px}
+.mwd-sym .s{font-size:15px;font-weight:700;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px}
+.mwd-sym .pc{font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700}
+.mwd-meta{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink2);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mwd-meta .k{color:var(--ink3)}
+.mwd-risk{display:flex;align-items:center;gap:2.5px;margin-top:5px}
+.mwd-risk i{width:13px;height:3px;border-radius:2px;background:var(--line2)}
+.mwd-risk .lab{font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;margin-left:6px}
+.mwd-risk.low i.on{background:var(--up);box-shadow:0 0 5px -1px var(--up)} .mwd-risk.low .lab{color:var(--up)}
+.mwd-risk.med i.on{background:var(--amber);box-shadow:0 0 5px -1px var(--amber)} .mwd-risk.med .lab{color:var(--amber)}
+.mwd-risk.high i.on{background:var(--down);box-shadow:0 0 5px -1px var(--down)} .mwd-risk.high .lab{color:var(--down)}
+.mwd-spark{flex-shrink:0;width:66px;height:32px;display:flex;align-items:center}
+.mwd-right{flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end;gap:6px;min-width:74px}
+.mwd-price{font-family:'JetBrains Mono',monospace;font-size:12.5px;font-weight:700}
+.mwd-buy{padding:6px 14px;border-radius:7px;border:none;cursor:pointer;font-family:inherit;font-size:12px;font-weight:700;
+  background:linear-gradient(140deg,var(--amber2),var(--amber));color:#1a1205;transition:.16s;white-space:nowrap;
+  box-shadow:0 0 12px -4px rgba(245,166,35,.45)}
+.mwd-buy:hover{filter:brightness(1.07);box-shadow:0 0 16px -3px rgba(245,166,35,.55)}
+.mwd-buy:active{transform:scale(.97)}
+.mwd-end{padding:22px 16px;text-align:center;color:var(--ink3);font-size:11.5px}
+`;
+
+function useMwdCSS() {
+  useEffect(() => {
+    const ID = 'mwd-defi-css';
+    if (document.getElementById(ID)) return;
+    const el = document.createElement('style');
+    el.id = ID; el.textContent = MWD_CSS;
+    document.head.appendChild(el);
+  }, []);
+}
+
+// Risk tier from real fields: liquidity vs mcap + age. Mirrors the preview's
+// segmented meter (low/med/high). Pure presentation — no new data.
+function mwdRisk(t) {
+  const liq = Number(t.liquidity || 0);
+  const mc  = Number(t.mcap || 0);
+  const ratio = mc > 0 ? liq / mc : 0;
+  const young = Number.isFinite(t.ageMs) && t.ageMs < 6 * 3600 * 1000;
+  if (liq >= 50000 && ratio >= 0.12) return { dots: 5, tier: 'low' };
+  if (liq >= 12000 && ratio >= 0.05) return { dots: young ? 3 : 4, tier: 'med' };
+  return { dots: young ? 2 : 1, tier: 'high' };
+}
+
+function MwdRow({ t, i, onOpen, onTrade }) {
+  const up = Number.isFinite(t.change) ? t.change >= 0 : true;
+  const r = mwdRisk(t);
+  const old = !t.fresh;
+  return (
+    <div className="mwd-row" style={{ animationDelay: `${Math.min(i, 12) * 0.03}s` }} onClick={() => onOpen && onOpen(t.mint)}>
+      <div className="mwd-av">
+        <div className="sq"><TokenIcon token={t} /></div>
+        {t.age ? <span className={'mwd-age' + (old ? ' old' : '')}>{t.age}</span> : null}
+      </div>
+      <div className="mwd-mid">
+        <div className="mwd-sym">
+          <span className="s">${t.sym}</span>
+          <span className="pc" style={{ color: up ? 'var(--up)' : 'var(--down)' }}>{formatPct(t.change)}</span>
+        </div>
+        <div className="mwd-meta">
+          <span className="k">MC</span> {format(t.mcap)} <span className="k">LP</span> {format(t.liquidity)}{t.holders ? <> {format(t.holders)} <span className="k">hold</span></> : null}
+        </div>
+        <div className={'mwd-risk ' + r.tier}>
+          {[0,1,2,3,4].map(d => <i key={d} className={d < r.dots ? 'on' : ''} />)}
+          <span className="lab">{r.tier} risk</span>
+        </div>
+      </div>
+      <div className="mwd-spark"><MwSparkline mint={t.mint} price={t.price} change={t.change} pool={t.pool} w={66} h={32} full /></div>
+      <div className="mwd-right">
+        <div className="mwd-price">{formatPrice(t.price)}</div>
+        <button className="mwd-buy" onClick={(e) => { e.stopPropagation(); onTrade && onTrade(t, 'buy'); }}>Buy</button>
+      </div>
+    </div>
+  );
+}
+
+const MWD_LENSES = [
+  { id: 'hot',     label: 'Hot' },
+  { id: 'new',     label: 'New' },
+  { id: 'gainers', label: 'Top gainers' },
+  { id: 'whale',   label: 'Whale activity' },
+  { id: 'yours',   label: 'Yours' },
+];
+
+function MwDiscoverFeed({
+  tokens, balances,
+  searchQuery, setSearchQuery, searchOpen, setSearchOpen, searchResults, searching,
+  searchWrapRef, onSearchSelect,
+  onOpen, onTrade,
+}) {
+  useMwdCSS();
+  const [lens, setLens] = useState('hot');
+
+  const whaleCount = useMemo(() => tokens.filter(t => t.whaleCount > 0).length, [tokens]);
+  const yoursCount = useMemo(
+    () => tokens.filter(t => balances && balances[t.mint] && balances[t.mint].amount > 0).length,
+    [tokens, balances]
+  );
+
+  const list = useMemo(() => {
+    let xs = tokens.slice();
+    if (lens === 'new')      xs = xs.filter(t => t.fresh).sort((a, b) => (a.ageMs || 0) - (b.ageMs || 0));
+    else if (lens === 'gainers') xs = xs.filter(t => Number.isFinite(t.change)).sort((a, b) => (b.change || 0) - (a.change || 0));
+    else if (lens === 'whale')   xs = xs.filter(t => t.whaleCount > 0).sort((a, b) => (b.whaleSol || 0) - (a.whaleSol || 0));
+    else if (lens === 'yours')   xs = xs.filter(t => balances && balances[t.mint] && balances[t.mint].amount > 0);
+    return xs.slice(0, 50);
+  }, [tokens, lens, balances]);
+
+  const countFor = (id) => id === 'whale' ? whaleCount : id === 'yours' ? yoursCount : null;
+
+  return (
+    <div className="mwd">
+      <div className="mwd-wrap">
+        <div className="mwd-bar" ref={searchWrapRef}>
+          <div className="mwd-search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+            <input
+              placeholder="Search token, ticker, or contract"
+              value={searchQuery}
+              onChange={(e) => { setSearchQuery(e.target.value); setSearchOpen(true); }}
+              onFocus={() => setSearchOpen(true)}
+            />
+            {searchQuery ? <button className="x" onClick={() => { setSearchQuery(''); }}>×</button> : null}
+          </div>
+          {searchOpen && searchQuery.trim() ? (
+            <div className="mwd-results">
+              {searching && (!searchResults || searchResults.length === 0)
+                ? <div className="mwd-empty">Searching Jupiter…</div>
+                : !searchResults || searchResults.length === 0
+                ? <div className="mwd-empty">No tokens found.</div>
+                : searchResults.map(t => (
+                  <div key={t.mint} className="mwd-rr" onClick={() => onSearchSelect(t)}>
+                    <div className="mwd-av"><div className="sq" style={{ width: 32, height: 32 }}><TokenIcon token={t} /></div></div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13.5, fontWeight: 700 }}>${t.sym}</div>
+                      <div className="mwd-mono" style={{ fontSize: 10.5, color: 'var(--ink3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 }}>{t.name}</div>
+                    </div>
+                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                      <div className="mwd-mono" style={{ fontSize: 12, fontWeight: 700 }}>{formatPrice(t.price)}</div>
+                      <div className="mwd-mono" style={{ fontSize: 10, fontWeight: 700, marginTop: 2, color: t.change >= 0 ? 'var(--up)' : 'var(--down)' }}>{formatPct(t.change)}</div>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="mwd-chips">
+          {MWD_LENSES.map(l => {
+            const c = countFor(l.id);
+            return (
+              <button key={l.id} className={'mwd-chip' + (lens === l.id ? ' on' : '') + (l.id === 'hot' ? ' hot' : '')} onClick={() => setLens(l.id)}>
+                {l.label}{c != null && c > 0 ? <span className="ct">{c}</span> : null}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mwd-feed">
+          {list.length === 0
+            ? <div className="mwd-empty" style={{ padding: '40px 16px' }}>No tokens match this filter yet.</div>
+            : list.map((t, i) => <MwdRow key={t.mint} t={t} i={i} onOpen={onOpen} onTrade={onTrade} />)}
+        </div>
+
+        {list.length > 0 ? <div className="mwd-end">Showing {list.length} markets · live</div> : null}
+      </div>
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════
    MAIN
    ════════════════════════════════════════════════════════════════════ */
 function MemeWonderland({ onConnectWallet } = {}) {
@@ -1605,106 +1846,20 @@ function MemeWonderland({ onConnectWallet } = {}) {
 
   return (
     <div className="mw-root">
-      <div className="mw-blob" style={{ width: 400, height: 400, background: '#FF8FBE', top: -80, left: -120 }} />
-      <div className="mw-blob" style={{ width: 500, height: 500, background: '#A0E7FF', top: '30%', right: -180, animationDelay: '3s' }} />
-      <div className="mw-blob" style={{ width: 340, height: 340, background: '#B794F6', bottom: '10%', left: -100, animationDelay: '6s' }} />
-      <div className="mw-blob" style={{ width: 260, height: 260, background: '#FFD46B', bottom: '30%', right: '10%', animationDelay: '9s' }} />
-
-      <div className="mw-ambient">
-        <span>🐸</span><span>🚀</span><span>💎</span><span>🍭</span>
-      </div>
-
-      <div className="mw-phone">
-
-
-        <div className="mw-search-wrap" ref={searchWrapRef}>
-          <div className="mw-search">
-            <span className="mw-search-ico">🔍</span>
-            <input
-              placeholder="Search any token, ticker, or contract"
-              value={searchQuery}
-              onChange={(e) => { setSearchQuery(e.target.value); setSearchOpen(true); }}
-              onFocus={() => setSearchOpen(true)}
-            />
-            {searchQuery && (
-              <button type="button" className="mw-search-clear" onClick={() => { setSearchQuery(''); setSearchResults(null); }}>×</button>
-            )}
-          </div>
-          {searchOpen && searchQuery.trim() && (
-            <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 18, right: 18, background: 'var(--glass-strong)', backdropFilter: 'blur(20px)', border: '1px solid var(--border)', borderRadius: 24, padding: 8, maxHeight: 380, overflowY: 'auto', boxShadow: '0 20px 48px rgba(183,148,246,0.25)', zIndex: 30 }}>
-              {searching && (!searchResults || searchResults.length === 0) ? (
-                <div className="mw-empty">Searching Jupiter…</div>
-              ) : !searchResults || searchResults.length === 0 ? (
-                <div className="mw-empty">No tokens found.</div>
-              ) : (
-                searchResults.map(t => (
-                  <div key={t.mint} onClick={() => handleSearchSelect(t)}
-                    style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 14, cursor: 'pointer' }}>
-                    <div className="mw-mini-avatar" style={{ width: 36, height: 36 }}>
-                      <div className="mw-inner" style={{ fontSize: 16 }}><TokenIcon token={t} /></div>
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 14, fontWeight: 700 }}>${t.sym}</div>
-                      <div style={{ fontSize: 11, color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 }}>{t.name}</div>
-                    </div>
-                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                      <div style={{ fontSize: 12, fontWeight: 600 }}>{formatPrice(t.price)}</div>
-                      <div style={{ fontSize: 10, color: t.change >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 600, marginTop: 2 }}>{formatPct(t.change)}</div>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
-        </div>
-
-        <StatsOrbs tokens={tokensWithWhale} whaleCount={whaleEvents.length} freshCount={freshCount} />
-
-        {ticker.length > 0 && (
-          <div className="mw-ticker-strip">
-            <div className="mw-ticker-track">
-              {[...ticker, ...ticker].map(([sym, change, up], i) => (
-                <span className="mw-ticker-item" key={i}>
-                  <span className="mw-sym">{sym}</span>
-                  <span className={up ? 'mw-up' : 'mw-down'}>{change}</span>
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div className="mw-section-head">
-          <div className="mw-section-title"><span className="mw-ico">🔥</span>narratives</div>
-        </div>
-        <NarrativesStrip tokens={tokensWithWhale} whaleMints={whaleMints} />
-
-        <div className="mw-section-head">
-          <div className="mw-section-title"><span className="mw-ico">🐋</span>whale radar</div>
-          <div className="mw-section-meta"><span className="mw-live-dot" /> {whaleTokens.length} ACTIVE</div>
-        </div>
-        <WhaleRadar whaleTokens={whaleTokens} onOpen={openDetail} onTrade={openSheet} />
-
-        <div className="mw-section-head">
-          <div className="mw-section-title"><span className="mw-ico">🚀</span>breaking out</div>
-        </div>
-        <BreakingOut tokens={tokensWithWhale} whaleByMint={whaleByMint} excludeMint={topToken?.mint} onOpen={openDetail} onTrade={openSheet} />
-
-        <div className="mw-section-head">
-          <div className="mw-section-title"><span className="mw-ico">✨</span>new launches</div>
-        </div>
-        <NewLaunches tokens={tokensWithWhale} onOpen={openDetail} onTrade={openSheet} />
-
-        <div className="mw-section-head">
-          <div className="mw-section-title"><span className="mw-ico">📈</span>trending now</div>
-        </div>
-        <TrendingNow tokens={tokensWithWhale} onOpen={openDetail} />
-
-        <div className="mw-section-head">
-          <div className="mw-section-title"><span className="mw-ico">⚡</span>live feed</div>
-          <div className="mw-section-meta"><span className="mw-live-dot" /> LIVE</div>
-        </div>
-        <ActivityFeed tokens={tokensWithWhale} whaleEvents={whaleEvents} onOpen={openDetail} />
-      </div>
+      <MwDiscoverFeed
+        tokens={tokensWithWhale}
+        balances={balances}
+        searchQuery={searchQuery}
+        setSearchQuery={(v) => { setSearchQuery(v); if (!v) setSearchResults(null); }}
+        searchOpen={searchOpen}
+        setSearchOpen={setSearchOpen}
+        searchResults={searchResults}
+        searching={searching}
+        searchWrapRef={searchWrapRef}
+        onSearchSelect={handleSearchSelect}
+        onOpen={openDetail}
+        onTrade={openSheet}
+      />
 
       {detailMint && tokenByMint(detailMint) && (
         <DetailView
