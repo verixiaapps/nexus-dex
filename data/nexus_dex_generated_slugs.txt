@@ -407,6 +407,7 @@ buy-near-with-solana
 buy-netflix-with-crypto
 buy-nvidia-with-crypto
 buy-op-with-solana
+buy-orca-with-solana
 buy-solana-tokens
 buy-tesla-with-crypto
 chainlink-exchange
