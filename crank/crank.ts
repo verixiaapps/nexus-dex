@@ -6,10 +6,10 @@
  *    (receives the pot only on an AllLost round). Renamed to `authority` and now
  *    pass `config.authority` (fetched in the loop). The old SUPER_ADMIN const was
  *    removed — it was the wrong account/value and would have failed every endRound.
- * 2. startRound(): the program's StartRound context requires a `previousRound`
- *    account (UncheckedAccount, verified in-handler when current_epoch > 0). It was
- *    missing entirely, which would fail on the first round. Now derived as
- *    pdaRound(currentEpoch) and passed.
+ * 2. startRound(): accounts are config, round, vault, cranker, systemProgram —
+ *    matching this program version (StartRound has NO previous_round account).
+ *    (An earlier draft added a previousRound account based on a different build;
+ *    that was removed after confirming it against the complete lib.rs.)
  * 3. PROGRAM_ID: now read from env (FLIPSY_PROGRAM_ID) with a system-program
  *    placeholder so Railway can deploy before the on-chain ID is finalized. Set the
  *    real ID in Railway -> Variables. CRANK_KEYPAIR is also read from env.
@@ -77,13 +77,10 @@ function pdaVault(epoch: number): PublicKey {
 async function startRound(program: any, configPda: PublicKey, cranker: Keypair, nextEpoch: number) {
  const roundPda = pdaRound(nextEpoch);
  const vaultPda = pdaVault(nextEpoch);
- // previous_round PDA: epoch-1 (or this same round for epoch 1; handler ignores it when current_epoch == 0)
- const prevRoundPda = pdaRound(nextEpoch > 1 ? nextEpoch - 1 : nextEpoch);
  const lockPrice = await fetchSolPriceI64();
  console.log("[crank] startRound epoch=" + nextEpoch + " lockPrice=" + lockPrice.toString());
  const tx = await program.methods.startRound(lockPrice).accounts({
    config: configPda,
-   previousRound: prevRoundPda,
    round: roundPda,
    vault: vaultPda,
    cranker: cranker.publicKey,
