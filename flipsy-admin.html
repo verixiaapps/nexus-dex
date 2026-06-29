@@ -328,6 +328,7 @@ function __flipsyAdmin() {
   // Computed offline and hardcoded so we don't need a sha256 lib in browser.
   // method => 8-byte hex
   var DISCRIMINATORS = {
+    initialize:          '0000000000000000', // overwritten at runtime by computeDiscriminators()
     set_authority:       'a78fcb7c00310bdc',
     set_cranker:         '8b3a3eaa0f1d8a85',
     set_bet_limits:      'ce5fd25c5b9d9d2e',
@@ -344,7 +345,7 @@ function __flipsyAdmin() {
   // with the real sha256 hash, since Anchor wants exact bytes.
   // ============================================================
   async function computeDiscriminators() {
-    var methods = ['set_authority','set_cranker','set_bet_limits','set_program_params','set_paused','force_refund','sweep_unclaimed','super_sweep'];
+    var methods = ['initialize','set_authority','set_cranker','set_bet_limits','set_program_params','set_paused','force_refund','sweep_unclaimed','super_sweep'];
     for (var i = 0; i < methods.length; i++) {
       var m = methods[i];
       var data = new TextEncoder().encode('global:' + m);
@@ -459,6 +460,33 @@ function __flipsyAdmin() {
   // INSTRUCTION BUILDERS
   // Account orders must match lib.rs #[derive(Accounts)] structs exactly.
   // ============================================================
+  // initialize(cranker, min_bet, max_bet, fee_bps, betting_duration, gap_duration,
+  //            max_future_rounds, claim_forfeit_delay, force_refund_delay)
+  // Accounts (must match Initialize struct order): config (PDA, init), payer (signer = authority), system_program
+  function ixInitialize(crankerStr, minBet, maxBet, feeBps, bettingDuration, gapDuration, maxFutureRounds, claimForfeitDelay, forceRefundDelay) {
+    var crankerPk = new PublicKey(crankerStr);
+    var args = concatBytes([
+      crankerPk.toBytes(),
+      u64ToBytes(minBet),
+      u64ToBytes(maxBet),
+      u64ToBytes(feeBps),
+      i64ToBytes(bettingDuration),
+      i64ToBytes(gapDuration),
+      u64ToBytes(maxFutureRounds),
+      i64ToBytes(claimForfeitDelay),
+      i64ToBytes(forceRefundDelay),
+    ]);
+    return new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: findConfigPda(), isSigner: false, isWritable: true },
+        { pubkey: S.publicKey,     isSigner: true,  isWritable: true },
+        { pubkey: new PublicKey('11111111111111111111111111111111'), isSigner: false, isWritable: false },
+      ],
+      data: buildIxData('initialize', args),
+    });
+  }
+
   function ixSetPaused(paused) {
     var args = new Uint8Array(1);
     args[0] = paused ? 1 : 0;
@@ -740,7 +768,14 @@ function __flipsyAdmin() {
     }
 
     if (!S.config) {
-      content.innerHTML = '<div class="card danger"><div class="card-title red">Config not found</div><div class="card-desc">Could not load program config. Is the program initialized? Has the PROGRAM_ID been set in this file?</div></div>';
+      if (CFG.programId === 'REPLACE_WITH_PROGRAM_ID') {
+        content.innerHTML = '<div class="card danger"><div class="card-title red">Not configured</div><div class="card-desc">PROGRAM_ID is not set. Open flipsy-admin.html and replace REPLACE_WITH_PROGRAM_ID with your deployed program ID.</div></div>';
+      } else if (!S.publicKey) {
+        content.innerHTML = '<div class="card danger"><div class="card-title red">Program not initialized</div><div class="card-desc">No config account found at this program ID. Connect the authority wallet to initialize the program.</div></div>';
+      } else {
+        content.innerHTML = '';
+        renderInitializePanel(content);
+      }
       return;
     }
 
@@ -762,6 +797,78 @@ function __flipsyAdmin() {
     renderAuthorityTransfer(content);
   }
 
+  function renderInitializePanel(container) {
+    var card = document.createElement('div');
+    card.className = 'card';
+    var defaultCranker = S.publicKey ? S.publicKey.toBase58() : '';
+    var ownerNote = (OWNER_WALLET ? ' It should be your owner wallet (' + esc(shortAddr(OWNER_WALLET)) + ').' : '');
+    card.innerHTML = '<div class="card-title gold">Initialize Program</div>' +
+      '<div class="card-desc">One-time setup. The <b>connected wallet becomes the authority</b> and pays rent.' + ownerNote + '</div>' +
+      '<div class="label">Cranker wallet (bot that starts/ends rounds)</div>' +
+      '<input class="input" data-cranker type="text" value="' + esc(defaultCranker) + '" placeholder="cranker pubkey">' +
+      '<div class="label">Min Bet (SOL)</div>' +
+      '<input class="input" data-min type="number" value="0.01">' +
+      '<div class="label">Max Bet (SOL)</div>' +
+      '<input class="input" data-max type="number" value="10">' +
+      '<div class="label">Win Fee (%) — max 90</div>' +
+      '<input class="input" data-fee type="number" value="25">' +
+      '<div class="label">Round Length (minutes) — 1 min to 24 h</div>' +
+      '<input class="input" data-betmin type="number" value="5">' +
+      '<div class="label">Gap Between Rounds (seconds) — 0 to 3600</div>' +
+      '<input class="input" data-gap type="number" value="30">' +
+      '<div class="label">Max Future Rounds — 1 to 100</div>' +
+      '<input class="input" data-future type="number" value="10">' +
+      '<div class="label">Claim Window (hours) — 0.17 to 720 h</div>' +
+      '<input class="input" data-claim type="number" value="24">' +
+      '<div class="label">Force Refund Delay (hours) — 1 to 720 h</div>' +
+      '<input class="input" data-refund type="number" value="24">' +
+      '<button class="btn gold full" disabled>Initialize Program</button>';
+    container.appendChild(card);
+
+    var cranker = card.querySelector('[data-cranker]');
+    var minEl = card.querySelector('[data-min]');
+    var maxEl = card.querySelector('[data-max]');
+    var fee = card.querySelector('[data-fee]');
+    var betmin = card.querySelector('[data-betmin]');
+    var gap = card.querySelector('[data-gap]');
+    var future = card.querySelector('[data-future]');
+    var claim = card.querySelector('[data-claim]');
+    var refund = card.querySelector('[data-refund]');
+    var btn = card.querySelector('button');
+
+    function validate() {
+      var crankerStr = (cranker.value || '').trim();
+      var crankerOk = false;
+      try { new PublicKey(crankerStr); crankerOk = crankerStr.length > 0; } catch (e) { crankerOk = false; }
+      var minBet = Math.round(parseFloat(minEl.value) * LAMPORTS_PER_SOL);
+      var maxBet = Math.round(parseFloat(maxEl.value) * LAMPORTS_PER_SOL);
+      var feeBps = Math.round(parseFloat(fee.value) * 100);
+      var bettingDuration = Math.round(parseFloat(betmin.value) * 60);
+      var gapDuration = Math.round(parseFloat(gap.value));
+      var maxFutureRounds = parseInt(future.value, 10);
+      var claimForfeitDelay = Math.round(parseFloat(claim.value) * 3600);
+      var forceRefundDelay = Math.round(parseFloat(refund.value) * 3600);
+      var ok = (crankerOk &&
+        Number.isFinite(minBet) && minBet > 0 &&
+        Number.isFinite(maxBet) && maxBet >= minBet &&
+        feeBps >= 0 && feeBps <= 9000 &&
+        bettingDuration >= 60 && bettingDuration <= 86400 &&
+        gapDuration >= 0 && gapDuration <= 3600 &&
+        maxFutureRounds >= 1 && maxFutureRounds <= 100 &&
+        claimForfeitDelay >= 600 && claimForfeitDelay <= 2592000 &&
+        forceRefundDelay >= 3600 && forceRefundDelay <= 2592000);
+      btn.disabled = !ok;
+      return { ok: ok, crankerStr: crankerStr, minBet: minBet, maxBet: maxBet, feeBps: feeBps, bettingDuration: bettingDuration, gapDuration: gapDuration, maxFutureRounds: maxFutureRounds, claimForfeitDelay: claimForfeitDelay, forceRefundDelay: forceRefundDelay };
+    }
+    [cranker, minEl, maxEl, fee, betmin, gap, future, claim, refund].forEach(function(el) { el.oninput = validate; });
+    validate();
+    btn.onclick = function() {
+      var v = validate();
+      if (!v.ok) return;
+      sendIx('Initialize program', ixInitialize(v.crankerStr, v.minBet, v.maxBet, v.feeBps, v.bettingDuration, v.gapDuration, v.maxFutureRounds, v.claimForfeitDelay, v.forceRefundDelay));
+    };
+  }
+
   function renderConfigView(container) {
     var c = S.config;
     var minUsd = S.solPrice > 0 ? ((c.minBet / LAMPORTS_PER_SOL) * S.solPrice).toFixed(2) : '—';
@@ -770,6 +877,7 @@ function __flipsyAdmin() {
     var card = document.createElement('div');
     card.className = 'card';
     card.innerHTML = '<div class="card-title cyan">Program State</div>' +
+      '<div class="card-desc">Read-only snapshot of the live on-chain config. Nothing in this card changes anything — it just shows the current settings and status.</div>' +
       '<div class="row"><span class="row-label">Status</span><span class="row-val ' + (c.paused ? 'red' : 'green') + '">' + (c.paused ? '● PAUSED' : '● LIVE') + '</span></div>' +
       '<div class="row"><span class="row-label">Current Epoch</span><span class="row-val">#' + c.currentEpoch + '</span></div>' +
       '<div class="row"><span class="row-label">Authority</span><span class="row-val mono">' + esc(shortAddr(c.authority)) + '</span></div>' +
@@ -805,6 +913,7 @@ function __flipsyAdmin() {
     var card = document.createElement('div');
     card.className = 'card';
     card.innerHTML = '<div class="card-title violet">Bet Limits (USD)</div>' +
+      '<div class="card-desc">The smallest and largest amount a player can wager on a single bet. Entered in USD here; stored on-chain in lamports (converted at the live SOL price).</div>' +
       '<div class="label">Min Bet (USD)</div>' +
       '<input class="input" data-min type="number" placeholder="1.00" value="' + esc(minUsd) + '">' +
       '<div class="label">Max Bet (USD)</div>' +
@@ -886,7 +995,7 @@ function __flipsyAdmin() {
     var card = document.createElement('div');
     card.className = 'card';
     card.innerHTML = '<div class="card-title violet">Update Cranker Wallet</div>' +
-      '<div class="card-desc">Current: <span style="font-family:\'JetBrains Mono\';color:var(--text);">' + esc(shortAddr(S.config.cranker)) + '</span></div>' +
+      '<div class="card-desc">The bot wallet allowed to start and end rounds (you, the authority, always can too). Change it if you rotate the crank bot\'s key. Current: <span style="font-family:\'JetBrains Mono\';color:var(--text);">' + esc(shortAddr(S.config.cranker)) + '</span></div>' +
       '<input class="input" data-cranker placeholder="New cranker pubkey">' +
       '<button class="btn full" disabled>Update Cranker</button>';
     container.appendChild(card);
