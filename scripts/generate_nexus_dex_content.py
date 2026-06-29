@@ -674,4 +674,4 @@ if __name__ == "__main__":
         tpl = load_template()
         ok = process_keyword(args.keyword, tpl)
         sys.exit(0 if ok else 1)
-    sys.exit(main(limit=args.limit, reset=not args.no_reset))
+    sys.exit(main(limit=args.limit, reset=not args.no_reset)) 
