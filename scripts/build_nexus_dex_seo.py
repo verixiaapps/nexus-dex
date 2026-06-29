@@ -1067,3 +1067,4 @@ print("AI generations rejected:", ai_failure_count)
 print("Rejected keywords logged:", rejected_count)
 print("Validation warnings:", validation_error_count)
 print("Write errors:", error_count)
+ 
