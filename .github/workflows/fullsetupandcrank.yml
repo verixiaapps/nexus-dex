@@ -1,3 +1,16 @@
+# ============================================================================
+# fullsetupandcrank.yml — REVIEW NOTES (read me) — no logic changed
+# ----------------------------------------------------------------------------
+# - SECURITY: this passes the cranker key as a PLAINTEXT workflow_dispatch input,
+#   visible in the Actions UI / run logs / history. Prefer an encrypted repo
+#   secret (secrets.CRANK_KEYPAIR) and trigger without exposing the key. Always
+#   use a DEDICATED, low-funded cranker wallet — never your main wallet.
+# - This is an 8-minute SMOKE TEST (timeout 480s; exit 124 or 0 counts as pass),
+#   not continuous cranking. For that, run crank.ts as a long-lived service
+#   (e.g. Railway) with FLIPSY_PROGRAM_ID and CRANK_KEYPAIR set as variables.
+# - Requires the program deployed + IDL published on-chain (anchor idl init) and
+#   the config PDA initialized, or the crank idles / errors on boot.
+# ============================================================================
 name: Crank Smoke Test
 
 on:
