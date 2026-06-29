@@ -1,18 +1,30 @@
 #!/usr/bin/env python3
 """
-build_nexus_dex_seo_incremental.py -- v4.3 (sitemap-in-public fix)
+build_nexus_dex_seo_incremental.py -- v4.4 (Verixia cleanup)
 
-WHAT CHANGED vs v4.2
+WHAT CHANGED vs v4.3
 --------------------
-SITEMAP_FILE now points at public/nexus-sitemap.xml (same file the GitHub
-Actions workflow writes). Previously it wrote to nexus-sitemap.xml at the
-repo root on every checkpoint, which left a stale root-level sitemap that
-shadowed the one in public/.
+  - Removed the hardcoded fake AggregateRating (4.8 / 2847). Self-assigned
+    review schema is structured-data spam and a manual-action risk. The
+    constant, the substitution, and the REQUIRED_TEMPLATE_PLACEHOLDERS entry
+    are all gone. The v4 template no longer renders an aggregateRating, so
+    REQUIRED_TEMPLATE_PLACEHOLDERS now matches the template exactly (no more
+    "missing placeholder" crash at load_template()).
+  - Hub routing (HUB_MATCH_RULES / HUB_TITLE_OVERRIDES / the hub entries in
+    PROTECTED_SLUGS) realigned to the 11 hubs that build_nexus_dex_hubs.py +
+    nexus_dex_clusters.py actually build. Dropped hyperliquid-frontend, the
+    perps market hubs, the six legacy stock hubs, solana-swap, and buy-token,
+    which were never built and produced 404 {{HUB_LINK}}s.
+  - Ranking signals (NEXUS_DEX_CLUSTER_TERMS / HIGH_INTENT_TERMS /
+    keyword_quality_score) de-perped: removed perps/leverage/hyperliquid/
+    insider/sniper/deployer/kol/stock-broker terms so internal-link ranking
+    reflects the cleaned product surface.
 
-Everything else is unchanged from v4.2:
-  - Pages still ship to public/<slug>/index.html
-  - Canonical/og/JSON-LD URLs still use swap.verixiaapps.com
-  - Sitemap is still rebuilt on every COMMIT_EVERY-page checkpoint
+Unchanged from v4.3:
+  - Pages ship to public/<slug>/index.html
+  - Canonical/og/JSON-LD URLs use swap.verixiaapps.com
+  - Sitemap rebuilt to public/nexus-sitemap.xml on every COMMIT_EVERY checkpoint
+  - Engine score gate (is_publishable), resume, git checkpoint/push
 """
 
 import os
@@ -51,10 +63,9 @@ TEMPLATE_FILE = os.path.join(BASE_DIR, "template", "defi-template.html")
 OUTPUT_DIR    = os.path.join(BASE_DIR, "public")
 SITEMAP_FILE  = os.path.join(OUTPUT_DIR, "nexus-sitemap.xml")
 
-# SITE is the parent brand origin. Used for og:image and any
-# parent-brand asset references that intentionally stay cross-origin.
-# SWAP_SITE is the origin the SEO pages are now SERVED FROM (same origin as
-# the approved swap dApp), so canonical/og/JSON-LD URLs point here.
+# SITE is the parent brand origin (used for og:image). SWAP_SITE is where the
+# SEO pages are served from (same origin as the approved swap dApp), so
+# canonical/og/JSON-LD URLs point there.
 SITE      = "https://verixiaapps.com"
 SWAP_SITE = "https://swap.verixiaapps.com"
 OG_IMAGE  = f"{SITE}/og/nexus-dex.png"
@@ -66,45 +77,33 @@ COMMIT_EVERY        = int(os.getenv("COMMIT_EVERY", "30"))
 RESUME              = os.getenv("RESUME", "true").lower() == "true"
 RESET_ENGINE        = os.getenv("RESET_ENGINE", "false").lower() == "true"
 
-# Slugs we never overwrite. These are either CRA-managed (the SPA shell lives
-# in public/index.html, favicon, etc.) or reserved server routes (server.js
-# binds /nexus-dex, /health, /api/*, /embed/*) or React Router routes inside
-# the swap app. If a generated keyword happens to slugify into one of these,
-# we skip it to avoid shadowing real routes.
+# Slugs we never overwrite: CRA-managed public/ files, reserved server.js
+# routes, and the 11 SEO hub slugs (built by build_nexus_dex_hubs.py). If a
+# generated keyword slugifies into one of these, skip it so we never shadow a
+# real route or a hub landing page.
 PROTECTED_SLUGS = {
     # CRA public/ entries -- never overwrite these
     "index.html", "favicon.ico", "manifest.json", "robots.txt",
     "asset-manifest.json", "logo192.png", "logo512.png",
     # Reserved server.js routes
     "nexus-dex", "health", "api", "embed",
-    # SEO hub slugs (built by build_nexus_dex_hubs.py)
+    # SEO hub slugs (the 11 hubs build_nexus_dex_hubs.py builds)
     "crypto-markets",
-    "bitcoin-markets",
-    "ethereum-markets",
-    "solana-markets",
-    "altcoin-markets",
-    "hyperliquid-frontend",
-    "global-markets",
-    "tokenized-stocks",
-    "buy-stocks-onchain",
-    "stocks-no-kyc",
-    "stocks-24-7",
-    "global-stock-access",
-    "solana-swap",
-    "buy-token",
-    "no-kyc-trading",
-    "whale-tracking",
-    "token-launch",
-    "wallet-trading",
-    "how-to-guides",
     "wonderland-memes",
     "live-signals",
     "brand-tokens",
     "solana-bridges",
     "solana-swaps",
+    "no-kyc-trading",
+    "wallet-trading",
+    "whale-tracking",
+    "token-launch",
+    "how-to-guides",
 }
 FALLBACK_HUB_SLUG = "crypto-markets"
 
+# v4 template placeholder set (exactly matches defi-template.html). No
+# {{AGGREGATE_RATING_JSON}} -- that schema was removed.
 REQUIRED_TEMPLATE_PLACEHOLDERS = {
     "{{TITLE}}",
     "{{DESCRIPTION}}",
@@ -118,7 +117,7 @@ REQUIRED_TEMPLATE_PLACEHOLDERS = {
     "{{MODIFIED_DATE}}",
     "{{BREADCRUMB_NAME}}",
     "{{SCHEMA_FAQ}}",
-    "{{AGGREGATE_RATING_JSON}}",
+    "{{FAQ_STATIC}}",
     "{{STATIC_H1}}",
     "{{STATIC_INTRO}}",
     "{{SUPP_HEADING}}",
@@ -126,24 +125,21 @@ REQUIRED_TEMPLATE_PLACEHOLDERS = {
     "{{PAGE_META_SCRIPT}}",
 }
 
+# Ranking-only signal sets (used for internal-link relatedness + ordering).
+# De-perped: no perps/leverage/hyperliquid/insider/sniper/deployer/kol or
+# stock-broker terms -- those product surfaces no longer exist.
 NEXUS_DEX_CLUSTER_TERMS = {
-    "perps", "perp", "perpetual", "leverage", "leveraged", "long", "short",
-    "hedge", "amplify", "swap", "buy", "sell", "trade", "trading", "dex",
-    "cex", "kyc", "wallet", "mobile", "app", "self", "custodial", "non",
-    "phantom", "backpack", "solflare", "metamask", "jupiter", "raydium",
-    "orca", "drift", "hyperliquid", "kamino", "whale", "smart", "money",
-    "insider", "deployer", "sniper", "kol", "cohort", "holder", "concentration",
-    "launch", "launchpad", "bonding", "curve", "graduate", "fair", "stealth",
+    "swap", "buy", "sell", "trade", "trading", "dex", "cex", "kyc",
+    "wallet", "mobile", "app", "self", "custodial", "non",
+    "phantom", "backpack", "solflare", "jupiter", "raydium", "orca",
+    "meteora", "whale", "smart", "money", "holder", "holders", "concentration",
+    "launch", "launchpad", "bonding", "curve", "graduate", "fair",
     "solana", "ethereum", "bitcoin", "btc", "eth", "sol", "usdc", "usdt",
     "base", "bsc", "arbitrum", "polygon", "spl", "memecoin", "altcoin",
-    "shitcoin", "microcap", "pump", "fun",
-    "xstocks", "xstock", "tokenized", "stocks", "stock", "equity", "equities",
-    "onchain", "fractional", "brokerage", "broker", "backed",
-    "aapl", "tsla", "nvda", "msft", "googl", "amzn", "meta", "mstr", "nflx",
-    "amd", "coin", "hood", "crcl", "spy", "qqq", "gld",
+    "tokenized", "stocks", "stock", "brand", "onchain",
     "aaplx", "tslax", "nvdax", "msftx", "googlx", "amznx", "metax", "mstrx",
     "nflxx", "spyx", "qqqx", "crclx",
-    "wonderland", "meme", "memes", "ape", "moon", "degen",
+    "wonderland", "meme", "memes", "ape", "degen",
     "hoppy", "fartcoin", "popcat", "wif", "bonk", "mew", "wen",
     "bome", "myro", "ponke", "michi", "trump", "moodeng", "goat", "pnut",
     "fresh", "trending", "signals", "discovery", "gainers", "volume", "leaders",
@@ -159,17 +155,13 @@ BRAND_CASE = {
     "trust wallet": "Trust Wallet",
     "raydium launchlab": "Raydium LaunchLab",
     "pump fun": "Pump Fun",
-    "backed finance": "Backed Finance",
-    "hyperliquid": "Hyperliquid",
     "wonderland": "Wonderland",
-    "metamask": "MetaMask",
     "dexscreener": "Dexscreener",
     "pancakeswap": "PancakeSwap",
     "uniswap": "Uniswap",
     "raydium": "Raydium",
     "coinbase": "Coinbase",
     "robinhood": "Robinhood",
-    "kalshi": "Kalshi",
     "kraken": "Kraken",
     "bybit": "Bybit",
     "kamino": "Kamino",
@@ -189,7 +181,6 @@ BRAND_CASE = {
     "phoenix": "Phoenix",
     "lifinity": "Lifinity",
     "orca": "Orca",
-    "drift": "Drift",
     "wormhole": "Wormhole",
     "debridge": "deBridge",
     "allbridge": "Allbridge",
@@ -214,24 +205,6 @@ BRAND_CASE = {
     "coinx": "COINx",
     "orclx": "ORCLx",
     "crmx": "CRMx",
-    "aapl": "AAPL",
-    "tsla": "TSLA",
-    "nvda": "NVDA",
-    "msft": "MSFT",
-    "googl": "GOOGL",
-    "amzn": "AMZN",
-    "meta": "META",
-    "mstr": "MSTR",
-    "nflx": "NFLX",
-    "amd": "AMD",
-    "coin": "COIN",
-    "hood": "HOOD",
-    "crcl": "CRCL",
-    "orcl": "ORCL",
-    "crm": "CRM",
-    "spy": "SPY",
-    "qqq": "QQQ",
-    "gld": "GLD",
     "apple": "Apple",
     "tesla": "Tesla",
     "nvidia": "Nvidia",
@@ -244,7 +217,6 @@ BRAND_CASE = {
     "circle": "Circle",
     "oracle": "Oracle",
     "salesforce": "Salesforce",
-    "fdv": "FDV",
     "bsc": "BSC",
     "eth": "ETH",
     "btc": "BTC",
@@ -286,12 +258,7 @@ BRAND_CASE = {
     "ray": "RAY",
     "pyth": "PYTH",
     "jto": "JTO",
-    "hype": "HYPE",
-    "spx": "SPX",
     "ai16z": "ai16z",
-    "griffain": "GRIFFAIN",
-    "chillguy": "CHILLGUY",
-    "zerebro": "ZEREBRO",
     "dex": "DEX",
     "cex": "CEX",
     "kyc": "KYC",
@@ -303,12 +270,6 @@ BRAND_CASE = {
     "evm": "EVM",
     "etf": "ETF",
     "rwa": "RWA",
-    "fomc": "FOMC",
-    "cpi": "CPI",
-    "gdp": "GDP",
-    "nfl": "NFL",
-    "nba": "NBA",
-    "ufc": "UFC",
     "us": "U.S.",
 }
 
@@ -317,170 +278,144 @@ SMALL_WORDS = {
     "or", "the", "to", "vs", "with",
 }
 
+# The 11 hubs that build_nexus_dex_hubs.py actually builds.
 HUB_TITLE_OVERRIDES = {
-    "crypto-markets": "Crypto Markets Hub",
-    "bitcoin-markets": "Bitcoin Markets Hub",
-    "ethereum-markets": "Ethereum Markets Hub",
-    "solana-markets": "SOL Markets Hub",
-    "altcoin-markets": "Altcoin Markets Hub",
-    "hyperliquid-frontend": "Hyperliquid Frontend Hub",
-    "global-markets": "Global Markets Hub",
-    "tokenized-stocks": "Tokenized Stocks Hub",
-    "buy-stocks-onchain": "Buy Stocks On-Chain Hub",
-    "stocks-no-kyc": "Stocks No KYC Hub",
-    "stocks-24-7": "24/7 Stocks Hub",
-    "global-stock-access": "Global Stock Access Hub",
-    "solana-swap": "Solana Swap Hub",
-    "buy-token": "Buy Token Hub",
-    "no-kyc-trading": "No KYC Trading Hub",
-    "whale-tracking": "Whale Tracking Hub",
-    "token-launch": "Token Launch Hub",
-    "wallet-trading": "Wallet Trading Hub",
-    "how-to-guides": "Nexus DEX Guides Hub",
     "wonderland-memes": "Wonderland Memes Hub",
-    "live-signals": "Live Signals Hub",
-    "brand-tokens": "Brand Tokens Hub",
-    "solana-bridges": "Solana Bridges Hub",
-    "solana-swaps": "Solana Swaps Hub",
+    "live-signals":     "Live Signals Hub",
+    "brand-tokens":     "Brand Tokens Hub",
+    "solana-bridges":   "Solana Bridges Hub",
+    "solana-swaps":     "Solana Swaps Hub",
+    "no-kyc-trading":   "No KYC Trading Hub",
+    "wallet-trading":   "Wallet Trading Hub",
+    "whale-tracking":   "Whale Tracking Hub",
+    "token-launch":     "Token Launch Hub",
+    "how-to-guides":    "Verixia Guides Hub",
+    "crypto-markets":   "Crypto Markets Hub",
 }
 
+# Order matters: most specific first, generic catch-alls last. Every target is
+# one of the 11 built hubs, so {{HUB_LINK}} always resolves.
 HUB_MATCH_RULES = [
-    ("hyperliquid", "hyperliquid-frontend"),
-    ("xstocks", "global-markets"),
-    ("xstock", "global-markets"),
-    ("backed finance", "global-markets"),
-    ("aaplx", "global-markets"),
-    ("tslax", "global-markets"),
-    ("nvdax", "global-markets"),
-    ("spyx", "global-markets"),
-    ("qqqx", "global-markets"),
-    ("buy us stocks from", "global-stock-access"),
-    ("us stocks no us bank", "global-stock-access"),
-    ("us stocks for non residents", "global-stock-access"),
-    ("us stocks international", "global-stock-access"),
-    ("global stock", "global-stock-access"),
-    ("international stock", "global-stock-access"),
-    ("24 7 stock", "stocks-24-7"),
-    ("stocks 24 hours", "stocks-24-7"),
-    ("stocks weekend", "stocks-24-7"),
-    ("trade stocks at night", "stocks-24-7"),
-    ("trade stocks weekends", "stocks-24-7"),
-    ("trade stocks holidays", "stocks-24-7"),
-    ("stocks never close", "stocks-24-7"),
-    ("always open stock", "stocks-24-7"),
-    ("stocks after hours", "stocks-24-7"),
-    ("buy stocks no kyc", "stocks-no-kyc"),
-    ("trade stocks no kyc", "stocks-no-kyc"),
-    ("stock trading no verification", "stocks-no-kyc"),
-    ("stock trading no signup", "stocks-no-kyc"),
-    ("stocks no id", "stocks-no-kyc"),
-    ("stocks no account", "stocks-no-kyc"),
-    ("anonymous stock trading", "stocks-no-kyc"),
-    ("stocks without broker", "stocks-no-kyc"),
-    ("stocks without robinhood", "stocks-no-kyc"),
-    ("stocks without etrade", "stocks-no-kyc"),
-    ("buy apple stock", "buy-stocks-onchain"),
-    ("buy aapl", "buy-stocks-onchain"),
-    ("buy tesla stock", "buy-stocks-onchain"),
-    ("buy tsla", "buy-stocks-onchain"),
-    ("buy nvidia stock", "buy-stocks-onchain"),
-    ("buy nvda", "buy-stocks-onchain"),
-    ("buy microsoft stock", "buy-stocks-onchain"),
-    ("buy msft", "buy-stocks-onchain"),
-    ("buy google stock", "buy-stocks-onchain"),
-    ("buy googl", "buy-stocks-onchain"),
-    ("buy meta stock", "buy-stocks-onchain"),
-    ("buy amazon stock", "buy-stocks-onchain"),
-    ("buy amzn", "buy-stocks-onchain"),
-    ("buy mstr", "buy-stocks-onchain"),
-    ("buy microstrategy", "buy-stocks-onchain"),
-    ("buy spy", "buy-stocks-onchain"),
-    ("buy qqq", "buy-stocks-onchain"),
-    ("buy netflix stock", "buy-stocks-onchain"),
-    ("buy nflx", "buy-stocks-onchain"),
-    ("buy coinbase stock", "buy-stocks-onchain"),
-    ("buy robinhood stock", "buy-stocks-onchain"),
-    ("buy circle stock", "buy-stocks-onchain"),
-    ("buy crcl", "buy-stocks-onchain"),
-    ("tokenized stocks", "tokenized-stocks"),
-    ("tokenized equity", "tokenized-stocks"),
-    ("onchain stocks", "tokenized-stocks"),
-    ("onchain equities", "tokenized-stocks"),
-    ("stocks on solana", "tokenized-stocks"),
-    ("stocks on blockchain", "tokenized-stocks"),
-    ("stocks as spl tokens", "tokenized-stocks"),
-    ("buy stocks with crypto", "tokenized-stocks"),
-    ("buy stocks with usdc", "tokenized-stocks"),
-    ("buy stocks with sol", "tokenized-stocks"),
-    ("btc perps", "bitcoin-markets"),
-    ("bitcoin perps", "bitcoin-markets"),
-    ("bitcoin futures", "bitcoin-markets"),
-    ("bitcoin perpetual", "bitcoin-markets"),
-    ("eth perps", "ethereum-markets"),
-    ("ethereum perps", "ethereum-markets"),
-    ("ethereum futures", "ethereum-markets"),
-    ("ethereum perpetual", "ethereum-markets"),
-    ("sol perps", "solana-markets"),
-    ("solana perps", "solana-markets"),
-    ("sol perpetual", "solana-markets"),
-    ("memecoin perps", "altcoin-markets"),
-    ("altcoin perps", "altcoin-markets"),
-    ("wif perps", "altcoin-markets"),
-    ("bonk perps", "altcoin-markets"),
-    ("pepe perps", "altcoin-markets"),
-    ("doge perps", "altcoin-markets"),
-    ("hype perps", "altcoin-markets"),
-    ("whale tracker", "whale-tracking"),
+    # memes / wonderland
+    ("hoppy", "wonderland-memes"),
+    ("fartcoin", "wonderland-memes"),
+    ("popcat", "wonderland-memes"),
+    ("wif", "wonderland-memes"),
+    ("bonk", "wonderland-memes"),
+    ("pepe", "wonderland-memes"),
+    ("mew", "wonderland-memes"),
+    ("bome", "wonderland-memes"),
+    ("myro", "wonderland-memes"),
+    ("michi", "wonderland-memes"),
+    ("moodeng", "wonderland-memes"),
+    ("goat", "wonderland-memes"),
+    ("pnut", "wonderland-memes"),
+    ("pengu", "wonderland-memes"),
+    ("neiro", "wonderland-memes"),
+    ("fwog", "wonderland-memes"),
+    ("useless", "wonderland-memes"),
+    ("memecoin", "wonderland-memes"),
+    ("meme coin", "wonderland-memes"),
+    ("meme token", "wonderland-memes"),
+    ("wonderland", "wonderland-memes"),
+    ("degen coin", "wonderland-memes"),
+    ("low cap gem", "wonderland-memes"),
+    ("moonshot", "wonderland-memes"),
+    # live signals / discovery
+    ("trending", "live-signals"),
+    ("whats pumping", "live-signals"),
+    ("whats mooning", "live-signals"),
+    ("hot solana", "live-signals"),
+    ("top gainers", "live-signals"),
+    ("volume leaders", "live-signals"),
+    ("fresh launch", "live-signals"),
+    ("fresh launches", "live-signals"),
+    ("new solana", "live-signals"),
+    ("signals", "live-signals"),
+    ("discovery", "live-signals"),
+    ("next 100x", "live-signals"),
+    # brand tokens (ticker-specific first, then generic stock terms)
+    ("aaplx", "brand-tokens"),
+    ("tslax", "brand-tokens"),
+    ("nvdax", "brand-tokens"),
+    ("msftx", "brand-tokens"),
+    ("googlx", "brand-tokens"),
+    ("amznx", "brand-tokens"),
+    ("metax", "brand-tokens"),
+    ("mstrx", "brand-tokens"),
+    ("nflxx", "brand-tokens"),
+    ("spyx", "brand-tokens"),
+    ("qqqx", "brand-tokens"),
+    ("crclx", "brand-tokens"),
+    ("brand token", "brand-tokens"),
+    ("brand tokens", "brand-tokens"),
+    ("tokenized stock", "brand-tokens"),
+    ("tokenized equity", "brand-tokens"),
+    ("stocks on solana", "brand-tokens"),
+    ("apple on solana", "brand-tokens"),
+    ("tesla on solana", "brand-tokens"),
+    ("nvidia on solana", "brand-tokens"),
+    ("stock", "brand-tokens"),
+    # bridges
+    ("bridge", "solana-bridges"),
+    ("wormhole", "solana-bridges"),
+    ("debridge", "solana-bridges"),
+    ("allbridge", "solana-bridges"),
+    ("cross chain", "solana-bridges"),
+    ("cross-chain", "solana-bridges"),
+    ("to solana", "solana-bridges"),
+    # whale tracking
+    ("whale", "whale-tracking"),
     ("smart money", "whale-tracking"),
-    ("insider", "whale-tracking"),
-    ("deployer", "whale-tracking"),
-    ("sniper", "whale-tracking"),
-    ("kol wallet", "whale-tracking"),
-    ("launch token", "token-launch"),
-    ("token launch", "token-launch"),
+    ("top holders", "whale-tracking"),
+    ("largest holders", "whale-tracking"),
+    ("wallet tracker", "whale-tracking"),
+    # token launch
     ("launchpad", "token-launch"),
+    ("token launch", "token-launch"),
+    ("launch token", "token-launch"),
+    ("launch memecoin", "token-launch"),
     ("bonding curve", "token-launch"),
     ("deploy token", "token-launch"),
-    ("solana swap", "solana-swap"),
-    ("solana dex", "solana-swap"),
-    ("dex aggregator", "solana-swap"),
-    ("best price swap", "solana-swap"),
-    ("swap", "solana-swap"),
-    ("buy bonk", "buy-token"),
-    ("buy wif", "buy-token"),
-    ("buy pepe", "buy-token"),
-    ("buy trump", "buy-token"),
-    ("buy memecoin", "buy-token"),
-    ("buy spl", "buy-token"),
-    ("buy ", "buy-token"),
-    ("phantom wallet trading", "wallet-trading"),
-    ("backpack wallet trading", "wallet-trading"),
+    ("fair launch", "token-launch"),
+    # wallet trading
+    ("phantom wallet", "wallet-trading"),
+    ("backpack wallet", "wallet-trading"),
+    ("solflare wallet", "wallet-trading"),
     ("self custodial", "wallet-trading"),
     ("non custodial", "wallet-trading"),
     ("wallet based", "wallet-trading"),
+    ("from wallet", "wallet-trading"),
+    # no kyc
     ("no kyc", "no-kyc-trading"),
     ("without kyc", "no-kyc-trading"),
     ("no signup", "no-kyc-trading"),
+    ("no account", "no-kyc-trading"),
     ("no verification", "no-kyc-trading"),
-    ("perps", "crypto-markets"),
-    ("perpetual", "crypto-markets"),
-    ("leverage", "crypto-markets"),
+    ("anonymous", "no-kyc-trading"),
+    ("permissionless", "no-kyc-trading"),
+    # swaps (generic, before how-to)
+    ("solana swap", "solana-swaps"),
+    ("solana dex", "solana-swaps"),
+    ("dex aggregator", "solana-swaps"),
+    ("best price swap", "solana-swaps"),
+    ("swap", "solana-swaps"),
+    ("buy", "solana-swaps"),
+    # how-to (last)
     ("how to", "how-to-guides"),
 ]
 
 LOW_VALUE_SINGLE_TERMS = {
     "trade", "swap", "buy", "sell", "mobile", "wallet", "app", "dex",
-    "perp", "perps", "leverage", "no", "from", "with", "on", "for",
+    "no", "from", "with", "on", "for",
 }
 
 HIGH_INTENT_TERMS = {
-    "perps", "perp", "perpetual", "leverage", "leveraged", "long", "short",
-    "hedge", "kyc", "wallet", "mobile", "phantom", "backpack", "solflare",
-    "hyperliquid", "whale", "smart", "money", "insider", "deployer", "sniper",
-    "kol", "launch", "launchpad", "bonding", "deploy", "swap", "buy", "sell",
+    "kyc", "wallet", "mobile", "phantom", "backpack", "solflare",
+    "whale", "smart", "money", "holders",
+    "launch", "launchpad", "bonding", "deploy", "swap", "buy", "sell",
     "trade", "custodial",
-    "xstocks", "xstock", "tokenized", "stocks", "stock", "equity", "equities",
-    "aapl", "tsla", "nvda", "msft", "googl", "amzn", "meta", "mstr", "spy", "qqq",
+    "tokenized", "stocks", "stock", "brand",
     "aaplx", "tslax", "nvdax", "spyx", "qqqx",
     "wonderland", "meme", "memes", "hoppy", "fartcoin", "popcat",
     "bridge", "bridges", "trending", "signals", "fresh",
@@ -707,6 +642,32 @@ def sanitize_ai_html(text):
     return "\n".join(f"<p>{escape_html(p)}</p>" for p in paragraphs)
 
 
+def build_faq_static_html(meta):
+    """
+    Render the FAQ as static <details> HTML so the visible Q&A matches the
+    {{SCHEMA_FAQ}} JSON-LD and is present without JS (rich-result safe).
+    Accepts the common engine key shapes: question/answer, q/a, name/text.
+    Returns "" when there's no usable FAQ, in which case the template's inline
+    JS falls back to window.__pageMeta.faq.
+    """
+    faq = (meta or {}).get("faq") or []
+    if not isinstance(faq, list):
+        return ""
+    items = []
+    for entry in faq:
+        if not isinstance(entry, dict):
+            continue
+        question = (entry.get("question") or entry.get("q") or entry.get("name") or "").strip()
+        answer = (entry.get("answer") or entry.get("a") or entry.get("text") or "").strip()
+        if not question or not answer:
+            continue
+        items.append(
+            f"<details><summary>{escape_html(question)}</summary>"
+            f'<div class="faq-a">{escape_html(answer)}</div></details>'
+        )
+    return "\n".join(items)
+
+
 # -----------------------------
 # QUALITY FILTERS
 # -----------------------------
@@ -726,35 +687,27 @@ def keyword_quality_score(keyword):
     score = 0
     if "nexus dex" in kw or "verixia" in kw:
         score += 12
-    if "perps" in kw or "perpetual" in kw:
-        score += 10
-    if "leverage" in kw or "leveraged" in kw:
-        score += 8
-    if "hyperliquid" in kw:
-        score += 10
     if "no kyc" in kw or "without kyc" in kw or "no signup" in kw:
         score += 10
     if "self custodial" in kw or "non custodial" in kw or "wallet based" in kw:
         score += 8
-    if "xstocks" in kw or "xstock" in kw or "tokenized stock" in kw or "tokenized equity" in kw or "brand token" in kw:
+    if "tokenized stock" in kw or "tokenized equity" in kw or "brand token" in kw:
         score += 10
-    if "stocks on solana" in kw or "onchain stocks" in kw or "stocks as spl" in kw:
+    if "stocks on solana" in kw or "onchain stocks" in kw:
         score += 8
-    if "24 7 stock" in kw or "stocks 24 hours" in kw or "stocks weekend" in kw:
-        score += 7
-    if any(tok in kw for tok in ["aapl", "tsla", "nvda", "msft", "googl", "amzn", "spy", "qqq", "mstr"]):
+    if any(tok in kw for tok in ["aaplx", "tslax", "nvdax", "spyx", "qqqx"]):
         score += 6
     if any(term in kw for term in ["btc", "bitcoin", "eth", "ethereum", "sol", "solana"]):
         score += 6
-    if any(term in kw for term in ["wif", "bonk", "pepe", "doge", "hype", "popcat", "trump", "fartcoin", "hoppy"]):
+    if any(term in kw for term in ["wif", "bonk", "pepe", "doge", "popcat", "trump", "fartcoin", "hoppy"]):
         score += 7
-    if any(term in kw for term in ["swap", "buy", "trade", "short", "long", "hedge"]):
+    if any(term in kw for term in ["swap", "buy", "trade"]):
         score += 5
     if any(term in kw for term in ["phantom", "backpack", "solflare", "wallet"]):
         score += 6
     if "mobile" in kw or "app" in kw:
         score += 4
-    if "whale" in kw or "smart money" in kw or "insider" in kw or "deployer" in kw:
+    if "whale" in kw or "smart money" in kw or "top holders" in kw:
         score += 7
     if "launch" in kw or "launchpad" in kw or "bonding curve" in kw:
         score += 6
@@ -779,15 +732,9 @@ def choose_canonical_keyword(keywords_for_same_intent):
 
 def dedupe_keywords(raw_keywords, already_generated_slugs=None):
     """
-    Keyword gate (v4.3): accept every keyword unless its slug is
-      - empty,
-      - reserved (CRA / server route / hub slug -> PROTECTED_SLUGS),
-      - already generated in a prior run (already_generated_slugs), or
-      - a duplicate of another keyword in this same batch.
-
-    The aggressive "weak keyword" content filter that v4.1/v4.2 ran here has
-    been removed -- the SEO engine's own quality floor (is_publishable in
-    generate_nexus_dex_content) is the only quality gate now.
+    Keyword gate: accept every keyword unless its slug is empty, reserved
+    (PROTECTED_SLUGS), already generated, or a duplicate within this batch.
+    The SEO engine's own quality floor (is_publishable) is the content gate.
     """
     already_generated_slugs = set(already_generated_slugs or set())
 
@@ -820,8 +767,6 @@ def dedupe_keywords(raw_keywords, already_generated_slugs=None):
         if len(group) > 1:
             deduped += len(group) - 1
 
-    # Return shape kept compatible with main(): the 4th value used to be
-    # "skipped_weak". It now reports already-generated-slug skips instead.
     return canonical_keywords, deduped, skipped_dup, skipped_already_generated
 
 
@@ -946,18 +891,8 @@ def build_related_anchor(keyword):
 
 def build_canonical(slug):
     # Pages are served from swap.verixiaapps.com/<slug>/ (same origin as the
-    # approved swap dApp), so the canonical lives there. Phantom origin
-    # trust is keyed off this origin.
+    # approved swap dApp), so the canonical lives there.
     return f"{SWAP_SITE}/{slug}/"
-
-
-DEFAULT_AGGREGATE_RATING_JSON = json.dumps({
-    "@type": "AggregateRating",
-    "ratingValue": "4.8",
-    "reviewCount": "2847",
-    "bestRating": "5",
-    "worstRating": "1",
-}, ensure_ascii=False)
 
 
 # -----------------------------
@@ -1145,10 +1080,7 @@ def render_full_page(template, keyword, keyword_display, payload, slug,
     breadcrumb_name = (meta.get("breadcrumb") or "").strip() or humanize_slug(slug)
 
     faq_schema = (meta.get("faqSchema") or "").strip() or "{}"
-
-    page_signals = meta.get("pageSignals") or {}
-    aggregate_rating_json = (page_signals.get("aggregateRatingJson")
-                             or DEFAULT_AGGREGATE_RATING_JSON)
+    faq_static_html = build_faq_static_html(meta)
 
     supp_heading = (meta.get("supplementaryHeading") or "Why Verixia").strip()
     supp_intro   = (meta.get("supplementaryIntro") or "").strip()
@@ -1170,7 +1102,7 @@ def render_full_page(template, keyword, keyword_display, payload, slug,
         "{{MODIFIED_DATE}}":         modified_date,
         "{{BREADCRUMB_NAME}}":       escape_html(breadcrumb_name),
         "{{SCHEMA_FAQ}}":            faq_schema,
-        "{{AGGREGATE_RATING_JSON}}": aggregate_rating_json,
+        "{{FAQ_STATIC}}":            faq_static_html,
         "{{STATIC_H1}}":             escape_html(h1),
         "{{STATIC_INTRO}}":          escape_html(intro),
         "{{HUB_LINK}}":              hub_link_html,
@@ -1180,7 +1112,6 @@ def render_full_page(template, keyword, keyword_display, payload, slug,
         "{{RELATED_LINKS}}":         related_links_html,
         "{{MORE_LINKS}}":            more_links_html,
         "{{PAGE_META_SCRIPT}}":      meta_script,
-        "{{HL_DATA_BLOCK}}":         "",
     }
 
     html = template
@@ -1215,23 +1146,12 @@ def _git_lastmod_for(file_path):
 def rebuild_sitemap():
     """
     Rebuild public/nexus-sitemap.xml by scanning OUTPUT_DIR (public/) on disk.
-
-    Every public/<slug>/index.html present on disk ends up in the sitemap
-    pointing at https://swap.verixiaapps.com/<slug>/. Called from
-    git_checkpoint() so each COMMIT_EVERY-page commit ships a matching
-    sitemap, even if the workflow is killed before the workflow's
-    end-of-run sitemap step runs.
-
-    v4.3: writes to public/nexus-sitemap.xml (same file the GitHub Actions
-    workflow updates). Previously wrote to nexus-sitemap.xml at repo root,
-    which left a stale root-level sitemap getting served instead of the
-    one in public/.
+    Every public/<slug>/index.html present ends up in the sitemap pointing at
+    https://swap.verixiaapps.com/<slug>/.
     """
     urls = []
     if os.path.isdir(OUTPUT_DIR):
         for entry in sorted(os.listdir(OUTPUT_DIR)):
-            # Skip CRA / SPA / reserved entries so we don't ever map
-            # public/index.html itself into the sitemap.
             if entry in PROTECTED_SLUGS:
                 continue
             dir_path = os.path.join(OUTPUT_DIR, entry)
