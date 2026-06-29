@@ -434,6 +434,10 @@ a{color:inherit;text-decoration:none}
 </main>
 
 <script>
+window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.origin + "/api/solana-rpc", wcProjectId: "1a7c741caab0a2c5ffa2b199a816ea92" };
+</script>
+
+<script>
 (function __verixiaSwapBoot() {
   "use strict";
 
@@ -1692,6 +1696,8 @@ a{color:inherit;text-decoration:none}
     async function bootPriceCard(forceMint) {
       var card = document.getElementById('nx-px-card');
       if (!card) return;
+      // Fresh boot (not an internal SOL retry) gets a clean retry budget.
+      if (!forceMint) _chartTries = 0;
       // The chart ALWAYS shows. Prefer the page's subject token (the swap
       // output); if that's just SOL/USDC, show SOL's own chart.
       var mint = forceMint || null;
