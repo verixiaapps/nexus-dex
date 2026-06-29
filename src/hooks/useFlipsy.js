@@ -1,3 +1,18 @@
+/* ============================================================================
+ * useFlipsy.js — REVIEW NOTES (read me) — no logic changed
+ * ----------------------------------------------------------------------------
+ * - Reviewed against the UI (Flipsy.jsx): return shape and mapRound fields
+ *   (epoch, headsPool, tailsPool, lockPrice, closeTime, lockTime, outcome,
+ *   resolvedAt) and bet shape ({side, amount(USD), claimed, betIndex}) all match
+ *   what the UI binds to. Pools/bets/balance are USD. Looks correct.
+ * - PROGRAM_ID reads from process.env.REACT_APP_FLIPSY_PROGRAM_ID (defaults to a
+ *   system-program placeholder). Set it to your DEPLOYED program ID at build time
+ *   (must equal declare_id! in lib.rs and FLIPSY_PROGRAM_ID in the crank).
+ * - @coral-xyz/anchor here must match the on-chain Anchor major used to build the
+ *   program (0.30+), so the IDL parses.
+ * - Live price = Coinbase SOL-USD spot, the SAME source the crank uses for
+ *   lock/close, so the on-screen delta tracks the resolved outcome.
+ * ==========================================================================*/
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import * as anchor from '@coral-xyz/anchor';
 import { Connection, PublicKey, SystemProgram } from '@solana/web3.js';
