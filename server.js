@@ -2569,6 +2569,7 @@ app.get(SEO_SLUG_RE, (req, res, next) => {
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
+      res.setHeader('Clear-Site-Data', '"cache", "storage"');
       res.send(out);
     });
   })(0);
