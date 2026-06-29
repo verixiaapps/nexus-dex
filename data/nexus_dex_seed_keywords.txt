@@ -122,3 +122,4 @@ bonding curve token
 community token
 no presale token
 fair launch token
+ 
