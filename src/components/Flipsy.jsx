@@ -1,3 +1,31 @@
+/* ============================================================================
+ * Flipsy.jsx — CHANGES MADE DURING REVIEW (read me)
+ * ----------------------------------------------------------------------------
+ * LOGIC / SAFETY
+ *  - Geo gate now FAILS CLOSED: checkGeo() blocks when location can't be
+ *    determined (was fail-open). BLOCKED_COUNTRIES expanded to a sanctioned
+ *    baseline (US, IR, KP, SY, CU) — review for gambling jurisdictions with
+ *    counsel before public launch. GEO_BYPASS_WALLETS still pass.
+ *  - Bet chips clamped to the live min/max (BetModal); default amount clamped too.
+ *  - priceDiff guarded with lockPrice > 0 (no full-price flash before lock).
+ *  - Removed dead .fp-blob markup + unused keyframes.
+ *
+ * PAYOUTS (match on-chain compute_payout)
+ *  - Payout multiplier now DERIVES from programConfig.feeBps via netMult
+ *    (= 1 - feeBps/10000) instead of a hardcoded 25%. If you change feeBps in the
+ *    program's initialize, the UI stays correct automatically.
+ *  - Thin-pool display is honest: shows ~netMult x (e.g. 0.75x) when a winning side
+ *    has no losers, and "—" for a side with no bets yet (see livePayout()).
+ *
+ * UI
+ *  - Rewrote the page to the v7 layout (LiveHero floating panel between equal
+ *    UP/DOWN buttons, forecast strip, sentiment bar, streak, results pips,
+ *    upcoming grid). Old RoundCard/carousel replaced by LiveHero + UpcomingTile.
+ *  - SOL_FORECASTS is PLACEHOLDER data — wire it to a live backend feed, or set
+ *    it to [] to hide the forecast strip.
+ *  - NOTE: verify on-device against the live useFlipsy hook (this was reviewed
+ *    statically; React wasn't run here).
+ * ==========================================================================*/
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useFlipsy } from '../hooks/useFlipsy';
@@ -730,6 +758,19 @@ const SOL_FORECASTS = [
   { t: 'EOY',   p: '$80.00', d: '+13%',  k: 'u' },
 ];
 
+// Live payout estimate for one side, matching the on-chain compute_payout():
+//   winners split the total pool, and the configured fee is taken on PROFIT only.
+//   netMult = 1 - feeBps/10000  (e.g. feeBps 2500 -> 0.75).
+// Returns null when this side has no bets yet (payout undefined until someone bets).
+// When the OPPOSING pool is empty, a win only refunds principal minus fee (netMult x).
+function livePayout(sidePool, oppPool, netMult) {
+  if (sidePool <= 0) return null;
+  if (oppPool <= 0) return netMult;
+  const total = sidePool + oppPool;
+  return 1 + ((total / sidePool) - 1) * netMult;
+}
+const fmtPayout = (p) => (p == null ? '—' : p.toFixed(2) + '×');
+
 async function checkGeo() {
   const sources = [
     { url: 'https://ipapi.co/json/', field: 'country_code' },
@@ -1078,11 +1119,11 @@ function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, t
 // ============================================================
 // ROUND CARD
 // ============================================================
-function LiveHero({ round, livePrice, bets, onSide }) {
+function LiveHero({ round, livePrice, bets, onSide, netMult = NET_MULT }) {
   const { epoch, headsPool = 0, tailsPool = 0, lockPrice = 0, closeTime = 0 } = round;
   const total = headsPool + tailsPool;
-  const headsPayout = headsPool > 0 ? 1 + ((total / headsPool) - 1) * NET_MULT : 2.0;
-  const tailsPayout = tailsPool > 0 ? 1 + ((total / tailsPool) - 1) * NET_MULT : 2.0;
+  const headsPayout = livePayout(headsPool, tailsPool, netMult);
+  const tailsPayout = livePayout(tailsPool, headsPool, netMult);
 
   const [now, setNow] = useState(Math.floor(Date.now() / 1000));
   useEffect(() => {
@@ -1110,7 +1151,7 @@ function LiveHero({ round, livePrice, bets, onSide }) {
   const myDown = betsArr.filter(b => b.side === 'tails').reduce((s, b) => s + b.amount, 0);
   const myBet = myUp + myDown;
   const mySide = myUp >= myDown ? 'heads' : 'tails';
-  const myPayout = mySide === 'heads' ? headsPayout : tailsPayout;
+  const myPayout = (mySide === 'heads' ? headsPayout : tailsPayout) ?? netMult;
 
   let spark = null;
   if (hist.length >= 2) {
@@ -1130,8 +1171,8 @@ function LiveHero({ round, livePrice, bets, onSide }) {
         <span className={'fx-tm' + (urgent ? ' urgent' : '')}>{fmt(timeLeft)}</span>
       </div>
 
-      <button className="fx-big up" onClick={() => onSide(epoch, 'heads', headsPayout, tailsPayout)}>
-        <span className="fx-ic">↑</span><span className="fx-lb">UP</span><span className="fx-ml">{headsPayout.toFixed(2)}×</span>
+      <button className="fx-big up" onClick={() => onSide(epoch, 'heads', headsPayout ?? 2.0, tailsPayout ?? 2.0)}>
+        <span className="fx-ic">↑</span><span className="fx-lb">UP</span><span className="fx-ml">{fmtPayout(headsPayout)}</span>
       </button>
 
       <div className="fx-panel">
@@ -1152,7 +1193,7 @@ function LiveHero({ round, livePrice, bets, onSide }) {
           <div className="fx-met"><div className="fx-ml2">PRIZE POOL</div><div className="fx-mv g">${total.toFixed(2)}</div></div>
           {myBet > 0
             ? <div className="fx-met"><div className="fx-ml2">YOUR BET</div><div className="fx-mv">${myBet.toFixed(2)} → ~${(myBet * myPayout).toFixed(2)}</div></div>
-            : <div className="fx-met"><div className="fx-ml2">DOWN PAYS</div><div className="fx-mv">{tailsPayout.toFixed(2)}×</div></div>}
+            : <div className="fx-met"><div className="fx-ml2">DOWN PAYS</div><div className="fx-mv">{fmtPayout(tailsPayout)}</div></div>}
         </div>
         <div className="fx-sent">
           <div className="fx-sl"><span className="su">▲ UP {upPct}%</span><span className="sd">{100 - upPct}% DOWN ▼</span></div>
@@ -1166,18 +1207,17 @@ function LiveHero({ round, livePrice, bets, onSide }) {
         )}
       </div>
 
-      <button className="fx-big down" onClick={() => onSide(epoch, 'tails', headsPayout, tailsPayout)}>
-        <span className="fx-ic">↓</span><span className="fx-lb">DOWN</span><span className="fx-ml">{tailsPayout.toFixed(2)}×</span>
+      <button className="fx-big down" onClick={() => onSide(epoch, 'tails', headsPayout ?? 2.0, tailsPayout ?? 2.0)}>
+        <span className="fx-ic">↓</span><span className="fx-lb">DOWN</span><span className="fx-ml">{fmtPayout(tailsPayout)}</span>
       </button>
     </div>
   );
 }
 
-function UpcomingTile({ round, next, onSide }) {
+function UpcomingTile({ round, next, onSide, netMult = NET_MULT }) {
   const { epoch, headsPool = 0, tailsPool = 0, lockTime = 0 } = round;
-  const total = headsPool + tailsPool;
-  const headsPayout = headsPool > 0 ? 1 + ((total / headsPool) - 1) * NET_MULT : 2.0;
-  const tailsPayout = tailsPool > 0 ? 1 + ((total / tailsPool) - 1) * NET_MULT : 2.0;
+  const headsPayout = livePayout(headsPool, tailsPool, netMult);
+  const tailsPayout = livePayout(tailsPool, headsPool, netMult);
 
   const [now, setNow] = useState(Math.floor(Date.now() / 1000));
   useEffect(() => {
@@ -1197,8 +1237,8 @@ function UpcomingTile({ round, next, onSide }) {
         <div className="fx-us">in <b>{fmt(startsIn)}</b>{total > 0 ? <> · <span className="g">${total.toFixed(0)}</span></> : null}</div>
       )}
       <div className="fx-ubt">
-        <button className="fx-mini u" onClick={() => onSide(epoch, 'heads', headsPayout, tailsPayout)}>↑ UP</button>
-        <button className="fx-mini d" onClick={() => onSide(epoch, 'tails', headsPayout, tailsPayout)}>↓ DOWN</button>
+        <button className="fx-mini u" onClick={() => onSide(epoch, 'heads', headsPayout ?? 2.0, tailsPayout ?? 2.0)}>↑ UP</button>
+        <button className="fx-mini d" onClick={() => onSide(epoch, 'tails', headsPayout ?? 2.0, tailsPayout ?? 2.0)}>↓ DOWN</button>
       </div>
     </div>
   );
@@ -1345,6 +1385,9 @@ export default function Flipsy({ onConnectWallet }) {
   const upCount = pips.filter(p => p === 'u').length;
   const upRate = pips.length ? Math.round((upCount / pips.length) * 100) : 0;
 
+  const netMult = (programConfig && programConfig.feeBps != null)
+    ? Math.max(0, 1 - programConfig.feeBps / 10000)
+    : NET_MULT;
   const heroRound = liveRound || upcomingRounds[0] || null;
   const gridRounds = liveRound ? upcomingRounds.slice(0, 6) : upcomingRounds.slice(1, 7);
 
@@ -1445,7 +1488,7 @@ export default function Flipsy({ onConnectWallet }) {
             <div className="fx-empty"><div className="fx-empty-i">⏳</div><div className="fx-empty-t">No active rounds</div><div className="fx-empty-m">New rounds start automatically. Hang tight.</div></div>
           )}
           {heroRound && (
-            <LiveHero round={heroRound} livePrice={livePrice} bets={getBetsForEpoch(heroRound.epoch)} onSide={handleSideTap} />
+            <LiveHero round={heroRound} livePrice={livePrice} bets={getBetsForEpoch(heroRound.epoch)} onSide={handleSideTap} netMult={netMult} />
           )}
         </div>
 
@@ -1454,7 +1497,7 @@ export default function Flipsy({ onConnectWallet }) {
             <div className="fx-utitle"><h4>Upcoming rounds</h4><span className="fx-c">bet early →</span></div>
             <div className="fx-ugrid">
               {gridRounds.map((r, i) => (
-                <UpcomingTile key={r.epoch} round={r} next={!!liveRound && i === 0} onSide={handleSideTap} />
+                <UpcomingTile key={r.epoch} round={r} next={!!liveRound && i === 0} onSide={handleSideTap} netMult={netMult} />
               ))}
             </div>
           </>
