@@ -1,11 +1,22 @@
 """
-nexus_dex_clusters.py -- v2.0 (Verixia / v18.4)
+nexus_dex_clusters.py -- v2.1 (Verixia / v18.4)
 
 Keyword clusters for the hub page builder. Each cluster maps a hub slug to the
 list of keyword phrases (or fragments) that should route generated pages into
 that hub's link list.
 
-What changed from v1.x -> v2.0:
+What changed from v2.0 -> v2.1:
+  - whale-tracking: removed routing terms for features the tracker does not
+    actually provide (insider tracker, elite deployer tracker, sniper wallet,
+    pre pump tracker, kol wallet tracker, bubblemap alternative, wallet bundle
+    tracker). Kept only what a real wallet tracker surfaces: whales, smart
+    money, top traders, holders. Overpromising features = pages that can't
+    deliver.
+  - no-kyc-trading: removed "no kyc brand tokens". Tokenized brand tokens are
+    securities-adjacent; they must not be routed through a no-KYC frame. Brand
+    keywords route through the brand-tokens hub instead.
+
+v2.0 history:
   - Dropped: hyperliquid-frontend, bitcoin-markets, ethereum-markets,
     solana-markets, altcoin-markets, prediction-markets (no perps, no
     Hyperliquid, no prediction markets in v18.4).
@@ -16,9 +27,8 @@ What changed from v1.x -> v2.0:
   - Renamed: solana-swap -> solana-swaps; buy-token merged into solana-swaps.
   - Added: wonderland-memes, live-signals, brand-tokens, solana-bridges,
     solana-swaps.
-  - Updated all clusters to Solana-DeFi-native vocabulary. Brand tokens are
-    described as "Solana tokens that track popular brands" -- no backing
-    claims, no custody claims.
+  - Brand tokens described as "Solana tokens that track popular brands" -- no
+    backing claims, no custody claims.
 """
 
 CLUSTERS = {
@@ -271,7 +281,6 @@ CLUSTERS = {
         "permissionless dex",
         "no kyc memecoin",
         "no kyc solana",
-        "no kyc brand tokens",
     ],
 
     "wallet-trading": [
@@ -302,18 +311,11 @@ CLUSTERS = {
         "smart money solana",
         "memecoin whale tracker",
         "wonderland whale tracker",
-        "insider tracker",
-        "insider wallet solana",
-        "elite deployer tracker",
-        "deployer wallet solana",
-        "sniper wallet solana",
         "track top traders solana",
         "wallet tracker solana",
-        "pre pump tracker",
-        "first buyers tracker",
-        "kol wallet tracker",
-        "bubblemap alternative",
-        "wallet bundle tracker",
+        "top holders solana",
+        "largest holders solana",
+        "whale alerts solana",
     ],
 
     "token-launch": [
