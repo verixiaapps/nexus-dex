@@ -49,7 +49,6 @@ bridge xrp to optimism
 bridge xrp to polygon
 buy meme coins
 buy meme coins instantly
-buy pengu with solana
 buy pepe with solana
 buy popcat with solana
 buy pyth with solana
