@@ -378,3 +378,4 @@ CLUSTERS = {
         "solana mobile defi",
     ],
 }
+ 
