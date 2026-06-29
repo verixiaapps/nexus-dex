@@ -61,3 +61,4 @@ convert {keyword} to {keyword2}
 {keyword} to {keyword2}
 {keyword} vs {keyword2}
 {keyword} to {keyword2} price
+ 
