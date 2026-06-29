@@ -1,14 +1,34 @@
+/* ============================================================================
+ * crank.ts — CHANGES MADE DURING REVIEW (read me)
+ * ----------------------------------------------------------------------------
+ * 1. endRound(): was passing account `superAdmin: SUPER_ADMIN`, but the program's
+ *    EndRound context expects `authority` constrained to `config.authority`
+ *    (receives the pot only on an AllLost round). Renamed to `authority` and now
+ *    pass `config.authority` (fetched in the loop). The old SUPER_ADMIN const was
+ *    removed — it was the wrong account/value and would have failed every endRound.
+ * 2. startRound(): the program's StartRound context requires a `previousRound`
+ *    account (UncheckedAccount, verified in-handler when current_epoch > 0). It was
+ *    missing entirely, which would fail on the first round. Now derived as
+ *    pdaRound(currentEpoch) and passed.
+ * 3. PROGRAM_ID: now read from env (FLIPSY_PROGRAM_ID) with a system-program
+ *    placeholder so Railway can deploy before the on-chain ID is finalized. Set the
+ *    real ID in Railway -> Variables. CRANK_KEYPAIR is also read from env.
+ * ==========================================================================*/
 console.log("=== CRANK BOOT ===");
 console.log("Node:", process.version);
-   
+
 import * as anchor from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import * as bs58module from "bs58";
 
 const bs58: any = (bs58module as any).default || bs58module;
 
-const PROGRAM_ID = new PublicKey("71bEAUToad7j8k8As9LwsGWBYTLxVJoP2SBNB3S3RLHs");
-const SUPER_ADMIN = new PublicKey("GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA");
+// Program ID from env so Railway can deploy before the on-chain ID is final.
+// Set FLIPSY_PROGRAM_ID in Railway -> Variables to your deployed program ID.
+// The placeholder (system program) lets the service boot; the crank just idles
+// (no IDL / config found) until the real ID is provided.
+const PROGRAM_ID_STR = process.env.FLIPSY_PROGRAM_ID || "11111111111111111111111111111111";
+const PROGRAM_ID = new PublicKey(PROGRAM_ID_STR);
 
 // RPC — public Solana devnet endpoint. Hardcoded, no env var, no fallback.
 const RPC_URL = "https://api.devnet.solana.com";
@@ -57,10 +77,13 @@ function pdaVault(epoch: number): PublicKey {
 async function startRound(program: any, configPda: PublicKey, cranker: Keypair, nextEpoch: number) {
  const roundPda = pdaRound(nextEpoch);
  const vaultPda = pdaVault(nextEpoch);
+ // previous_round PDA: epoch-1 (or this same round for epoch 1; handler ignores it when current_epoch == 0)
+ const prevRoundPda = pdaRound(nextEpoch > 1 ? nextEpoch - 1 : nextEpoch);
  const lockPrice = await fetchSolPriceI64();
  console.log("[crank] startRound epoch=" + nextEpoch + " lockPrice=" + lockPrice.toString());
  const tx = await program.methods.startRound(lockPrice).accounts({
    config: configPda,
+   previousRound: prevRoundPda,
    round: roundPda,
    vault: vaultPda,
    cranker: cranker.publicKey,
@@ -69,24 +92,36 @@ async function startRound(program: any, configPda: PublicKey, cranker: Keypair, 
  console.log("[crank] startRound tx:", tx);
 }
 
-async function endRound(program: any, configPda: PublicKey, cranker: Keypair, epoch: number) {
+async function endRound(
+ program: any,
+ configPda: PublicKey,
+ cranker: Keypair,
+ epoch: number,
+ authority: PublicKey,
+) {
  const roundPda = pdaRound(epoch);
  const vaultPda = pdaVault(epoch);
  const closePrice = await fetchSolPriceI64();
  console.log("[crank] endRound epoch=" + epoch + " closePrice=" + closePrice.toString());
+ // The program's EndRound expects `authority` (must equal config.authority); it
+ // receives the pot only when a round resolves AllLost. It is NOT a super-admin.
  const tx = await program.methods.endRound(closePrice).accounts({
    config: configPda,
    round: roundPda,
    vault: vaultPda,
-   superAdmin: SUPER_ADMIN,
+   authority,
    cranker: cranker.publicKey,
  }).signers([cranker]).rpc();
  console.log("[crank] endRound tx:", tx);
 }
 
 async function main() {
+ if (PROGRAM_ID_STR === "11111111111111111111111111111111") {
+   console.warn("[crank] WARNING: FLIPSY_PROGRAM_ID not set — using placeholder. Set it in Railway -> Variables to your deployed program ID.");
+ }
  const cranker = loadKeypair();
  console.log("[crank] Cranker:", cranker.publicKey.toBase58());
+ console.log("[crank] Program:", PROGRAM_ID.toBase58());
  let rpcHost = "(invalid url)";
  try { rpcHost = new URL(RPC_URL).host; } catch {}
  console.log("[crank] RPC: solana devnet (" + rpcHost + ")");
@@ -98,7 +133,7 @@ async function main() {
 
  console.log("[crank] Fetching IDL from chain...");
  const idl = await anchor.Program.fetchIdl(PROGRAM_ID, provider);
- if (!idl) throw new Error("No IDL on chain for " + PROGRAM_ID.toBase58() + " — was `anchor idl init` ever run?");
+ if (!idl) throw new Error("No IDL on chain for " + PROGRAM_ID.toBase58() + " — run `anchor idl init` after deploy.");
  (idl as any).address = PROGRAM_ID.toBase58();
  console.log("[crank] IDL fetched.");
 
@@ -127,7 +162,7 @@ async function main() {
      const closeTime = round.closeTime.toNumber();
 
      if (!resolved && now >= closeTime) {
-       await endRound(program, configPda, cranker, epoch);
+       await endRound(program, configPda, cranker, epoch, config.authority);
      } else if (resolved) {
        const nextStart = closeTime + GAP_SECONDS;
        if (now >= nextStart) {
