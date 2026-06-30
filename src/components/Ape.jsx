@@ -3531,7 +3531,7 @@ export default function Ape({ mainWalletPubkey }) {
           {showLure && burnerHasNoSol ? (
             <div className="ap-lure">
               <div className="ap-lure-text">
-                <div className="ap-lure-h">Fund your <span className="it">burner</span> to trade in 2 seconds.</div>
+                <div className="ap-lure-h">Fund your <span className="it">trading wallet</span> to trade in 2 seconds.</div>
                 <div className="ap-lure-s"><b>0.1 SOL</b> is plenty to start · trades sign on this device · no extension popup</div>
               </div>
               <button className="ap-lure-intro" onClick={() => setShowWallet(true)}>↓ DEPOSIT</button>
