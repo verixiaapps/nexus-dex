@@ -49,7 +49,6 @@ bridge xrp to optimism
 bridge xrp to polygon
 buy meme coins
 buy meme coins instantly
-buy render with solana
 buy shib with solana
 buy shiba inu with solana
 buy stablecoins with solana
