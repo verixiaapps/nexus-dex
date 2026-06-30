@@ -3,36 +3,6 @@ crypto exchange
 crypto liquidity
 decentralized exchange
 meme coin exchange no account
-rug pull checker
-secure crypto trading
-security scanner crypto
-self custody crypto
-self custody exchange
-shiba inu exchange
-smart contract checker
-smart contract scanner
-smart contract trading
-smart money tracker
-smart money tracker solana
-solana alpha scanner
-solana analytics
-solana blockchain
-solana bridge
-solana contract checker
-solana cross chain
-solana crypto exchange
-solana crypto platform
-solana crypto trading
-solana dashboard
-solana defi
-solana defi platform
-solana dex
-solana ecosystem
-solana exchange
-solana gainers
-solana gem finder
-solana insights
-solana launch tracker
 solana liquidity
 solana liquidity pools
 solana losers
