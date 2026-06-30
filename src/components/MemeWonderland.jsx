@@ -2487,8 +2487,7 @@ function TradeSheet({
         }));
       } else {
         const mintPk = new PublicKey(inputMint);
-        // Buy/sell critical path → trade RPC (Alchemy primary, Ankr fallback).
-        const mintInfo = await rpcRaceTrade('getMintInfo', c => c.getAccountInfo(mintPk));
+        const mintInfo = await connection.getAccountInfo(mintPk);
         if (!mintInfo) throw new Error('Input mint not found on-chain.');
         const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
           ? TOKEN_2022_PROGRAM_ID
@@ -2520,16 +2519,14 @@ function TradeSheet({
       const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
       let alts = [];
       if (altKeys.length > 0) {
-        const infos = await rpcRaceTrade('getAlts',
-          c => c.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k))));
+        const infos = await connection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
         alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
           key:   new PublicKey(k),
           state: AddressLookupTableAccount.deserialize(infos[i].data),
         }) : null).filter(Boolean);
       }
 
-      const latest = await rpcRaceTrade('getLatestBlockhash',
-        c => c.getLatestBlockhash('confirmed'));
+      const latest = await connection.getLatestBlockhash('confirmed');
       const message = new TransactionMessage({
         payerKey:        wallet.publicKey,
         recentBlockhash: latest.blockhash,
@@ -2561,13 +2558,11 @@ function TradeSheet({
       }
 
       const signed = await wallet.signTransaction(tx);
-      const serialized = signed.serialize();
 
-      // Send via trade RPC (Alchemy primary, Ankr fallback).
-      const sig = await rpcRaceTrade('sendTx', c => c.sendRawTransaction(serialized, {
+      const sig = await connection.sendRawTransaction(signed.serialize(), {
         skipPreflight: false,
         maxRetries: 3,
-      }));
+      });
 
       let confirmed = false;
       try {
@@ -3112,9 +3107,9 @@ const LR_CSS = `
 .lr-chart-ca-v{font-family:ui-monospace,Menlo,monospace;font-size:10px;font-weight:600;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lr-chart-ca-copy{flex-shrink:0;font-family:ui-monospace,Menlo,monospace;font-size:9px;font-weight:700;color:#fff;background:#0a0a0a;border:none;border-radius:6px;padding:5px 9px;letter-spacing:.4px;cursor:pointer}
 .lr-chart-src{font-family:ui-monospace,Menlo,monospace;font-size:9px;color:var(--ink-3);font-weight:600;letter-spacing:.4px;flex-shrink:0}
-.lr-chart-frame-wrap{position:relative;width:100%;height:clamp(300px,42dvh,440px);background:#fff}
+.lr-chart-frame-wrap{position:relative;width:100%;height:clamp(200px,28dvh,300px);background:#fff}
 .lr-chart-frame{width:100%;height:100%;border:0;display:block}
-.lr-chart-state{display:grid;place-items:center;width:100%;height:clamp(300px,42dvh,440px);background:#fafafa;color:var(--ink-2);font-size:12px;font-weight:500;text-align:center;padding:20px}
+.lr-chart-state{display:grid;place-items:center;width:100%;height:clamp(200px,28dvh,300px);background:#fafafa;color:var(--ink-2);font-size:12px;font-weight:500;text-align:center;padding:20px}
 .lr-chart-spin{width:26px;height:26px;border-radius:50%;border:2.5px solid var(--border);border-top-color:#0a0a0a;animation:lrSpin .8s linear infinite}
 .lr-tf-pills{display:flex;align-items:center;gap:4px;padding:8px 12px;border-top:1px solid var(--hairline)}
 .lr-tf{flex:0 0 auto;font-family:inherit;font-size:11px;font-weight:800;letter-spacing:.02em;color:var(--ink-2);background:transparent;border:none;border-radius:8px;padding:6px 11px;cursor:pointer;transition:.12s}
@@ -3122,7 +3117,7 @@ const LR_CSS = `
 .lr-tf.on{background:#f1f1f4;color:var(--ink)}
 .lr-tf:disabled{opacity:.4;cursor:default}
 .lr-tf-meta{margin-left:auto;font-family:ui-monospace,Menlo,monospace;font-size:9px;font-weight:700;letter-spacing:.4px;color:var(--ink-3);text-transform:uppercase}
-@media(max-width:600px){.lr-chart{margin:0 14px 14px}.lr-chart-frame-wrap,.lr-chart-state{height:clamp(300px,48dvh,420px)}.lr-tf{padding:6px 9px;font-size:10px}}
+@media(max-width:600px){.lr-chart{margin:0 14px 14px}.lr-chart-frame-wrap,.lr-chart-state{height:clamp(200px,30dvh,280px)}.lr-tf{padding:6px 9px;font-size:10px}}
 
 .lr-trade-overlay{position:fixed;inset:0;background:rgba(10,10,10,.4);backdrop-filter:blur(4px);z-index:1000;display:flex;align-items:flex-end;justify-content:center;padding:0 0 calc(120px + env(safe-area-inset-bottom)) 0;animation:lrFade .2s}
 @media(min-width:640px){.lr-trade-overlay{align-items:center;padding:16px}}
@@ -5070,8 +5065,6 @@ function LaunchRadar({ onConnectWallet } = {}) {
             SOL <b style={{ color: 'var(--ink)' }}>${solPrice > 0 ? solPrice.toFixed(2) : '—'}</b>
             {wallet.publicKey ? <><span style={{ color: 'var(--ink3)' }}>·</span> <b style={{ color: 'var(--amber)' }}>{formatSol(solBalance?.uiAmount || 0)}</b> SOL</> : null}
           </div>
-          <button type="button" onClick={() => setSettingsOpen(true)} aria-label="Settings" title="Edit presets"
-            style={{ background: 'var(--panel2)', border: '1px solid var(--line)', color: 'var(--ink2)', width: 28, height: 28, borderRadius: 7, cursor: 'pointer', fontSize: 13 }}>⚙</button>
         </div>
 
         <div className="mwd-chips">
