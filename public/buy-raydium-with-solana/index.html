@@ -27,7 +27,7 @@
   "url": "https://swap.verixiaapps.com/buy-raydium-with-solana/",
   "name": "Swap Raydium Solana Without KYC | Verixia — Solana DeFi",
   "description": "Raydium Solana on Solana — Jupiter aggregation across Raydium and Orca for best fill. Wallet-native, no sign-up, settles in 400ms.",
-  "dateModified": "2026-06-30T12:47:45Z",
+  "dateModified": "2026-06-30T19:14:39Z",
   "isPartOf": { "@type": "WebSite", "url": "https://verixiaapps.com/", "name": "Verixia" },
   "publisher": { "@type": "Organization", "name": "Verixia", "url": "https://verixiaapps.com/" }
 }
@@ -171,6 +171,25 @@ a{color:inherit;text-decoration:none}
   font-size:9.5px;font-weight:700;letter-spacing:.12em;color:var(--g);
   background:rgba(25,210,122,.12);border:1px solid rgba(25,210,122,.3);border-radius:999px;padding:5px 10px;flex:0 0 auto}
 .nxb-live-bar .live .nxb-dot{width:7px;height:7px;border-radius:50%;background:var(--g);box-shadow:0 0 8px var(--g);animation:nxb-pulse 1.5s ease-in-out infinite}
+
+/* ---- TRUST SECTION ---- */
+.nx-reassure{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:7px;margin:12px 0 0;
+  font-family:'JetBrains Mono','DejaVu Sans Mono',monospace;font-size:10.5px;font-weight:600;color:var(--dim)}
+.nx-reassure span{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.nx-reassure svg{width:13px;height:13px;color:var(--g);flex:0 0 auto}
+.nx-reassure .dot{color:var(--g);opacity:.5}
+.nx-trust{margin:12px 0;border-radius:16px;padding:16px 16px 14px}
+.nx-trust-h{font-family:'Space Grotesk',sans-serif;font-size:15px;font-weight:700;color:#fff;letter-spacing:-.01em;margin-bottom:13px;text-align:center}
+.nx-trust-h span{color:var(--g)}
+.nx-trust-grid{display:flex;flex-direction:column;gap:11px}
+.nx-trust-item{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:baseline}
+.nx-trust-k{font-family:'JetBrains Mono','DejaVu Sans Mono',monospace;font-size:9.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--g);white-space:nowrap;padding-top:1px}
+.nx-trust-v{font-size:12px;line-height:1.45;color:var(--dim)}
+.nx-trust-v b{color:#fff;font-weight:700}
+.nx-trust-pills{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:14px;padding-top:13px;border-top:1px solid var(--line)}
+.nx-trust-pills .lbl{font-family:'JetBrains Mono','DejaVu Sans Mono',monospace;font-size:10.5px;color:#d7cffb;font-weight:600;display:inline-flex;align-items:center;gap:5px}
+.nx-trust-pills .cross{color:#ff6b8a;font-weight:800}
+@media(max-width:420px){.nx-trust-item{grid-template-columns:1fr;gap:3px}.nx-trust-k{padding-top:0}}
 
 /* ---- STATS STRIP ---- */
 .px-stats{margin:12px 0;display:flex;border-radius:15px;overflow:hidden;border:1px solid var(--line);
@@ -375,20 +394,20 @@ a{color:inherit;text-decoration:none}
 .nx-eco-lbl{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;white-space:nowrap;color:var(--ink-2)}
 
 .nx-refer-stack{display:flex;flex-direction:column;gap:10px;margin-top:24px}
-.nx-refer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 16px;border-radius:16px;border:1px solid var(--border-hi);text-decoration:none;color:var(--ink);transition:transform .15s,box-shadow .15s;position:relative;overflow:hidden}
-.nx-refer:hover{transform:translateY(-1px);box-shadow:0 10px 24px rgba(160,231,255,.20)}
-.nx-refer.swap-tier{background:linear-gradient(135deg,rgba(127,255,212,.20),rgba(160,231,255,.20),rgba(255,143,190,.20))}
-.nx-refer.pump-tier{background:linear-gradient(135deg,rgba(255,212,107,.30),rgba(255,176,136,.28),rgba(255,143,190,.20));border-color:rgba(255,176,136,.55);background-size:200% 100%;animation:nx-shimmer 7s linear infinite}
-.nx-refer.pump-tier::after{content:'NEW';position:absolute;top:10px;right:78px;font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:800;letter-spacing:.10em;background:rgba(26,27,78,0.85);color:#FFD46B;padding:2px 6px;border-radius:999px}
+.nx-refer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-radius:14px;text-decoration:none;color:#fff;background:linear-gradient(100deg,#0a0a0a,#1c1c22);box-shadow:0 10px 30px rgba(10,10,10,.22);transition:transform .15s,box-shadow .15s;position:relative;overflow:hidden}
+.nx-refer:hover{transform:translateY(-1px);box-shadow:0 14px 34px rgba(10,10,10,.30)}
+.nx-refer.swap-tier{background:linear-gradient(100deg,#0a0a0a,#1c1c22)}
+.nx-refer.pump-tier{background:linear-gradient(100deg,#0a0a0a,#1c1c22)}
+.nx-refer.pump-tier::after{display:none}
 .nx-refer-l{display:flex;flex-direction:column;gap:3px;min-width:0}
-.nx-refer-tag{font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:800;color:var(--ink-3);letter-spacing:.14em;text-transform:uppercase;margin-bottom:2px}
-.nx-refer.pump-tier .nx-refer-tag{color:#8B4F00}
-.nx-refer-l b{font-family:'Instrument Serif',serif;font-style:italic;font-size:20px;line-height:1.1;color:var(--ink);font-weight:400;letter-spacing:-0.01em}
-.nx-refer-l b em{background:linear-gradient(120deg,#A0E7FF,#FF8FBE);-webkit-background-clip:text;background-clip:text;color:transparent;font-style:italic;font-weight:600}
-.nx-refer.pump-tier .nx-refer-l b em{background:linear-gradient(120deg,#FFB088,#FF8FBE,#B794F6);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:700}
-.nx-refer-l span:not(.nx-refer-tag){font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:600;color:var(--ink-2);letter-spacing:0.06em;margin-top:2px}
-.nx-refer-r{flex-shrink:0;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;color:var(--cyan);letter-spacing:0.08em;text-transform:uppercase}
-.nx-refer.pump-tier .nx-refer-r{color:#8B4F00}
+.nx-refer-tag{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;color:#9bf5cf;letter-spacing:.14em;text-transform:uppercase;margin-bottom:2px}
+.nx-refer.pump-tier .nx-refer-tag{color:#9bf5cf}
+.nx-refer-l b{font-family:'Space Grotesk',sans-serif;font-style:normal;font-size:17px;line-height:1.2;color:#fff;font-weight:800;letter-spacing:-.01em}
+.nx-refer-l b em{font-family:'JetBrains Mono',monospace;font-style:normal;font-weight:800;color:var(--up);-webkit-text-fill-color:initial;background:none}
+.nx-refer.pump-tier .nx-refer-l b em{font-family:'JetBrains Mono',monospace;font-style:normal;font-weight:800;color:var(--up);-webkit-text-fill-color:initial;background:none}
+.nx-refer-l span:not(.nx-refer-tag){font-family:'JetBrains Mono',monospace;font-size:9.5px;font-weight:600;color:#a7a7b2;letter-spacing:.06em;margin-top:2px}
+.nx-refer-r{flex-shrink:0;font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#9bf5cf;letter-spacing:.04em;text-transform:none;white-space:nowrap}
+.nx-refer.pump-tier .nx-refer-r{color:#9bf5cf}
 
 .ai-article{padding-top:8px}
 .ai-article p{background:var(--glass-strong);backdrop-filter:blur(10px);border:1px solid var(--hairline);border-left:3px solid var(--sky);border-radius:16px;padding:16px 18px;margin-bottom:10px;font-size:14px;line-height:1.6;color:var(--ink-2);position:relative;overflow:hidden}
@@ -728,6 +747,15 @@ main{max-width:540px;margin:0 auto;background:#fff;
     </div>
   </section>
 
+  <!-- QUICK REASSURANCE (first-screen trust) -->
+  <div class="nx-reassure">
+    <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3Z"/><path d="M9 12l2 2 4-4"/></svg>Audited routing</span>
+    <span class="dot">&middot;</span>
+    <span>Non-custodial</span>
+    <span class="dot">&middot;</span>
+    <span>Sanctions-screened</span>
+  </div>
+
   <!-- LIVE SWAP · JUPITER BADGE -->
   <div class="nxb-live-bar glass">
     <div class="jico">J</div>
@@ -735,38 +763,40 @@ main{max-width:540px;margin:0 auto;background:#fff;
     <span class="live"><span class="nxb-dot"></span>LIVE</span>
   </div>
 
-  <!-- PRICE HEADER (live data into these IDs) -->
-  <div class="px-card glass" id="nx-px-card">
-    <div class="px-top">
-      <div class="px-l">
-        <div class="px-ico" id="nx-px-ico">N</div>
-        <div>
-          <div class="px-sym" id="nx-px-sym">&mdash;</div>
-          <div class="px-name" id="nx-px-name">&mdash;</div>
-        </div>
+  <!-- TRUST SECTION (replaces the live price/stats card) -->
+  <div class="nx-trust glass">
+    <div class="nx-trust-h">Built on infrastructure <span>you can verify</span></div>
+    <div class="nx-trust-grid">
+      <div class="nx-trust-item">
+        <div class="nx-trust-k">Providers</div>
+        <div class="nx-trust-v">Swaps routed by <b>Jupiter</b>, Solana's leading DEX aggregator. Charts &amp; market data by <b>CoinGecko</b>.</div>
       </div>
-      <div class="px-r">
-        <div class="px-now" id="nx-px-now">$&mdash;.&mdash;</div>
-        <div class="px-chg muted" id="nx-px-chg">&mdash; &middot; 24H</div>
+      <div class="nx-trust-item">
+        <div class="nx-trust-k">Liquidity</div>
+        <div class="nx-trust-v">Aggregated across every major Solana DEX &mdash; Orca, Raydium, Meteora &amp; more &mdash; via Jupiter, for best-route pricing on any token.</div>
+      </div>
+      <div class="nx-trust-item">
+        <div class="nx-trust-k">Audited</div>
+        <div class="nx-trust-v">Jupiter's routing contracts are independently audited by <b>OtterSec</b> &amp; <b>Sec3</b>.</div>
+      </div>
+      <div class="nx-trust-item">
+        <div class="nx-trust-k">Compliant &amp; non-custodial</div>
+        <div class="nx-trust-v">Connecting wallets are sanctions-screened via <b>Chainalysis</b>. We never hold your keys or your funds.</div>
+      </div>
+      <div class="nx-trust-item">
+        <div class="nx-trust-k">Referrals</div>
+        <div class="nx-trust-v">Earn <b>50% of fees</b> on every pump.fun trade you refer. Expanding to all trades soon.</div>
+      </div>
+      <div class="nx-trust-item">
+        <div class="nx-trust-k">Our goal</div>
+        <div class="nx-trust-v">Make safe, self-custodial, no-KYC trading something anyone can do in seconds.</div>
       </div>
     </div>
-  </div>
-
-  <!-- FREEDOM STRIP -->
-  <div class="nx-trust-pill">
-    <span class="lbl"><span class="cross">&#10005;</span>No KYC</span>
-    <span class="sep">&middot;</span>
-    <span class="lbl"><span class="cross">&#10005;</span>No Account</span>
-    <span class="sep">&middot;</span>
-    <span class="lbl"><span class="cross">&#10005;</span>No Limits</span>
-  </div>
-
-  <!-- STATS STRIP (live data into these IDs) -->
-  <div class="px-stats" id="nx-px-stats">
-    <div class="px-stat"><div class="px-stat-lbl">Market Cap</div><div class="px-stat-val" id="nx-stat-mcap">&mdash;</div></div>
-    <div class="px-stat"><div class="px-stat-lbl">Liquidity</div><div class="px-stat-val" id="nx-stat-liq">&mdash;</div></div>
-    <div class="px-stat"><div class="px-stat-lbl">24h Volume</div><div class="px-stat-val" id="nx-stat-vol">&mdash;</div></div>
-    <div class="px-stat"><div class="px-stat-lbl">24h Trades</div><div class="px-stat-val" id="nx-stat-tx">&mdash;</div></div>
+    <div class="nx-trust-pills">
+      <span class="lbl"><span class="cross">&#10005;</span>No KYC</span>
+      <span class="lbl"><span class="cross">&#10005;</span>No Account</span>
+      <span class="lbl"><span class="cross">&#10005;</span>No Limits</span>
+    </div>
   </div>
 
   <a href="https://swap.verixiaapps.com/?tab=bridge" class="nx-bridge-link">
@@ -797,10 +827,10 @@ main{max-width:540px;margin:0 auto;background:#fff;
     <div class="section-tag">OVERVIEW</div>
     <h2 class="section-title">Why Verixia</h2>
     <p class="section-lede">DeFi on Solana means the wallet is the account, the smart contract is the only intermediary, and the network does the rest in under a second.</p>
-    <div class="ai-article" data-ai-content><p>Solana’s lightning-fast 400ms blocks and sub-cent fees make buying Raydium with Solana a no-brainer. A $20 swap costs just fractions of a cent in gas — way cheaper than Ethereum’s $5+ fees. You get instant settlement, no waiting for T+1 or congested queues. That means your Raydium Solana tokens hit your wallet the moment you confirm the swap.</p>
-<p>This fee math flips the game for how you buy Raydium Solana. Small, iterative buys become easy—ape in with $15, then add more as the vibes shift. Frequent rotation? Totally doable without bleeding fees. You can even experiment with live signals to catch trending tokens or check the Wonderland tab for the latest Solana memes while you decide your next move.</p>
-<p>Verixia routes your Raydium swap through Jupiter, scanning 50+ Solana pools to find the best output. It splits big trades across Raydium CLMM, Orca Whirlpool, and Meteora DLMM pools to minimize price impact. So whether you’re swapping $20 or $15K, you get the deepest liquidity and tightest spreads, not just the loudest brand name.</p>
-<p>No KYC, no accounts, just connect Phantom, Solflare, or Backpack and pick Raydium with Solana. Confirm your swap and boom—your new tokens land in your wallet in seconds. No middlemen, no custody. Ready to send it? Start swapping now and keep your bag liquid and fresh on Solana.</p></div>
+    <div class="ai-article" data-ai-content><p>Solana’s speed and cost blow Ethereum out of the water when you buy Raydium with Solana. Blocks settle in about 400ms, and fees barely hit a penny. That means a $20 swap costs less than a cent — no gas wars, no waiting around for confirmations. You sign the quote, and your Raydium lands in your wallet the same block. Fast, cheap, and frictionless.</p>
+<p>That fee math changes the game. You can ape in with small amounts without bleeding value on fees. Rotate your Raydium bags more often or scale into positions little by little. Frequent moves become practical, not painful. Sub-dollar swaps work, but $5+ hits the sweet spot for efficiency. This flexibility means you can chase live signals or jump on Wonderland memes without sweating the cost.</p>
+<p>Verixia routes your Raydium swaps through Jupiter, scanning 50+ Solana pools to find the best output. It’s not about the loudest brand but the deepest liquidity. Concentrated pools like Raydium CLMM and Orca Whirlpool cluster depth tight around the price, so big trades split across pools to keep slippage low. A $15K swap done smartly can save you nearly 1% compared to a single-pool hit. Verixia’s aggregation smooths out price impact every time.</p>
+<p>No KYC, no account, just connect Phantom, Solflare, or Backpack and swap. Pick Raydium, enter your Solana amount, confirm, and you’re done—usually in under 15 seconds on mobile. Your new Raydium token hits your wallet instantly. Want to freshen your bag? Check live signals or scroll the Wonderland tab for the latest vibes before you swap. Solana makes buying Raydium seamless and lightning-fast.</p></div>
   </section>
 
   <section class="section">
@@ -815,16 +845,16 @@ main{max-width:540px;margin:0 auto;background:#fff;
   <section class="section">
     <div class="section-tag">RELATED</div>
     <h2 class="section-title"><a href="/solana-swaps/">Solana Swaps Hub</a></h2>
-    <ul class="pair-grid"><li><a href="/swap-sol-for-pyth/">Swap SOL for PYTH on Verixia</a></li>
-<li><a href="/what-is-the-best-time-to-swap-ai16z/">What Is the Best Time to Swap ai16z?</a></li>
-<li><a href="/best-solana-dex-on-iphone/">Best Solana DEX on Iphone</a></li>
-<li><a href="/lowest-fee-kaspa-swap/">Lowest Fee Kaspa Swap on Verixia</a></li>
-<li><a href="/private-crypto-swap/">Private Crypto Swap on Verixia</a></li>
-<li><a href="/best-route-link-swap/">Best Route Link Swap</a></li>
-<li><a href="/swap-usdt-to-render-solana/">Swap USDT to Render Solana on Verixia</a></li>
-<li><a href="/swap-sol-for-jitosol-solana/">Swap SOL for Jitosol Solana on Verixia</a></li>
-<li><a href="/swap-sol-to-ponke/">Swap SOL to PONKE on Verixia</a></li>
-<li><a href="/swap-sol-for-msol-solana/">Swap SOL for Msol Solana on Verixia</a></li>
+    <ul class="pair-grid"><li><a href="/aave-swap/">Aave Swap on Verixia</a></li>
+<li><a href="/ai16z-swap/">ai16z Swap on Verixia</a></li>
+<li><a href="/altcoin-swap/">Altcoin Swap on Verixia</a></li>
+<li><a href="/amazon-token-swap/">Amazon Token Swap on Verixia</a></li>
+<li><a href="/apple-token-swap/">Apple Token Swap on Verixia</a></li>
+<li><a href="/aptos-network-swap/">Aptos Network Swap on Verixia</a></li>
+<li><a href="/arbitrum-network-swap/">Arbitrum Network Swap on Verixia</a></li>
+<li><a href="/atlas-solana-dex-swap/">Atlas Solana DEX Swap on Verixia</a></li>
+<li><a href="/avalanche-network-swap/">Avalanche Network Swap on Verixia</a></li>
+<li><a href="/ban-solana-dex-swap/">Ban Solana DEX Swap on Verixia</a></li>
 </ul>
   </section>
 

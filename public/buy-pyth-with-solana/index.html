@@ -27,7 +27,7 @@
   "url": "https://swap.verixiaapps.com/buy-pyth-with-solana/",
   "name": "Buy Pyth With Solana — Solana-Native DeFi | Verixia",
   "description": "Buy Pyth With Solana on Verixia. No KYC. No accounts. No limits. Non-custodial. Global DeFi on Solana.",
-  "dateModified": "2026-06-29T21:15:37Z",
+  "dateModified": "2026-06-30T19:14:01Z",
   "isPartOf": { "@type": "WebSite", "url": "https://verixiaapps.com/", "name": "Verixia" },
   "publisher": { "@type": "Organization", "name": "Verixia", "url": "https://verixiaapps.com/" }
 }
@@ -158,6 +158,38 @@ a{color:inherit;text-decoration:none}
 .nx-trust-pill .lbl .cross{color:#ff6b8a;font-weight:800}
 .nx-trust-pill .sep{display:none}
 .nx-trust-pill .lbl + .lbl{border-left:1px solid rgba(255,255,255,.16)}
+
+/* ---- LIVE SWAP / JUPITER BADGE (under the swap) ---- */
+@keyframes nxb-pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.nxb-live-bar{display:flex;align-items:center;gap:11px;border-radius:14px;padding:13px 15px;margin:12px 0}
+.nxb-live-bar .jico{width:26px;height:26px;border-radius:8px;flex:0 0 auto;display:grid;place-items:center;
+  background:linear-gradient(135deg,#c7f284,#19d27a);color:#06281a;font-weight:800;font-size:14px;font-family:'JetBrains Mono','DejaVu Sans Mono',monospace}
+.nxb-live-bar .txt{flex:1;min-width:0;line-height:1.3}
+.nxb-live-bar .txt b{font-weight:700;color:#fff;font-size:13.5px}
+.nxb-live-bar .txt span{display:block;font-size:11px;color:var(--dim);margin-top:2px}
+.nxb-live-bar .live{display:inline-flex;align-items:center;gap:6px;font-family:'JetBrains Mono','DejaVu Sans Mono',monospace;
+  font-size:9.5px;font-weight:700;letter-spacing:.12em;color:var(--g);
+  background:rgba(25,210,122,.12);border:1px solid rgba(25,210,122,.3);border-radius:999px;padding:5px 10px;flex:0 0 auto}
+.nxb-live-bar .live .nxb-dot{width:7px;height:7px;border-radius:50%;background:var(--g);box-shadow:0 0 8px var(--g);animation:nxb-pulse 1.5s ease-in-out infinite}
+
+/* ---- TRUST SECTION ---- */
+.nx-reassure{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:7px;margin:12px 0 0;
+  font-family:'JetBrains Mono','DejaVu Sans Mono',monospace;font-size:10.5px;font-weight:600;color:var(--dim)}
+.nx-reassure span{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.nx-reassure svg{width:13px;height:13px;color:var(--g);flex:0 0 auto}
+.nx-reassure .dot{color:var(--g);opacity:.5}
+.nx-trust{margin:12px 0;border-radius:16px;padding:16px 16px 14px}
+.nx-trust-h{font-family:'Space Grotesk',sans-serif;font-size:15px;font-weight:700;color:#fff;letter-spacing:-.01em;margin-bottom:13px;text-align:center}
+.nx-trust-h span{color:var(--g)}
+.nx-trust-grid{display:flex;flex-direction:column;gap:11px}
+.nx-trust-item{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:baseline}
+.nx-trust-k{font-family:'JetBrains Mono','DejaVu Sans Mono',monospace;font-size:9.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--g);white-space:nowrap;padding-top:1px}
+.nx-trust-v{font-size:12px;line-height:1.45;color:var(--dim)}
+.nx-trust-v b{color:#fff;font-weight:700}
+.nx-trust-pills{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:14px;padding-top:13px;border-top:1px solid var(--line)}
+.nx-trust-pills .lbl{font-family:'JetBrains Mono','DejaVu Sans Mono',monospace;font-size:10.5px;color:#d7cffb;font-weight:600;display:inline-flex;align-items:center;gap:5px}
+.nx-trust-pills .cross{color:#ff6b8a;font-weight:800}
+@media(max-width:420px){.nx-trust-item{grid-template-columns:1fr;gap:3px}.nx-trust-k{padding-top:0}}
 
 /* ---- STATS STRIP ---- */
 .px-stats{margin:12px 0;display:flex;border-radius:15px;overflow:hidden;border:1px solid var(--line);
@@ -362,20 +394,20 @@ a{color:inherit;text-decoration:none}
 .nx-eco-lbl{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;white-space:nowrap;color:var(--ink-2)}
 
 .nx-refer-stack{display:flex;flex-direction:column;gap:10px;margin-top:24px}
-.nx-refer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 16px;border-radius:16px;border:1px solid var(--border-hi);text-decoration:none;color:var(--ink);transition:transform .15s,box-shadow .15s;position:relative;overflow:hidden}
-.nx-refer:hover{transform:translateY(-1px);box-shadow:0 10px 24px rgba(160,231,255,.20)}
-.nx-refer.swap-tier{background:linear-gradient(135deg,rgba(127,255,212,.20),rgba(160,231,255,.20),rgba(255,143,190,.20))}
-.nx-refer.pump-tier{background:linear-gradient(135deg,rgba(255,212,107,.30),rgba(255,176,136,.28),rgba(255,143,190,.20));border-color:rgba(255,176,136,.55);background-size:200% 100%;animation:nx-shimmer 7s linear infinite}
-.nx-refer.pump-tier::after{content:'NEW';position:absolute;top:10px;right:78px;font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:800;letter-spacing:.10em;background:rgba(26,27,78,0.85);color:#FFD46B;padding:2px 6px;border-radius:999px}
+.nx-refer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-radius:14px;text-decoration:none;color:#fff;background:linear-gradient(100deg,#0a0a0a,#1c1c22);box-shadow:0 10px 30px rgba(10,10,10,.22);transition:transform .15s,box-shadow .15s;position:relative;overflow:hidden}
+.nx-refer:hover{transform:translateY(-1px);box-shadow:0 14px 34px rgba(10,10,10,.30)}
+.nx-refer.swap-tier{background:linear-gradient(100deg,#0a0a0a,#1c1c22)}
+.nx-refer.pump-tier{background:linear-gradient(100deg,#0a0a0a,#1c1c22)}
+.nx-refer.pump-tier::after{display:none}
 .nx-refer-l{display:flex;flex-direction:column;gap:3px;min-width:0}
-.nx-refer-tag{font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:800;color:var(--ink-3);letter-spacing:.14em;text-transform:uppercase;margin-bottom:2px}
-.nx-refer.pump-tier .nx-refer-tag{color:#8B4F00}
-.nx-refer-l b{font-family:'Instrument Serif',serif;font-style:italic;font-size:20px;line-height:1.1;color:var(--ink);font-weight:400;letter-spacing:-0.01em}
-.nx-refer-l b em{background:linear-gradient(120deg,#A0E7FF,#FF8FBE);-webkit-background-clip:text;background-clip:text;color:transparent;font-style:italic;font-weight:600}
-.nx-refer.pump-tier .nx-refer-l b em{background:linear-gradient(120deg,#FFB088,#FF8FBE,#B794F6);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:700}
-.nx-refer-l span:not(.nx-refer-tag){font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:600;color:var(--ink-2);letter-spacing:0.06em;margin-top:2px}
-.nx-refer-r{flex-shrink:0;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;color:var(--cyan);letter-spacing:0.08em;text-transform:uppercase}
-.nx-refer.pump-tier .nx-refer-r{color:#8B4F00}
+.nx-refer-tag{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;color:#9bf5cf;letter-spacing:.14em;text-transform:uppercase;margin-bottom:2px}
+.nx-refer.pump-tier .nx-refer-tag{color:#9bf5cf}
+.nx-refer-l b{font-family:'Space Grotesk',sans-serif;font-style:normal;font-size:17px;line-height:1.2;color:#fff;font-weight:800;letter-spacing:-.01em}
+.nx-refer-l b em{font-family:'JetBrains Mono',monospace;font-style:normal;font-weight:800;color:var(--up);-webkit-text-fill-color:initial;background:none}
+.nx-refer.pump-tier .nx-refer-l b em{font-family:'JetBrains Mono',monospace;font-style:normal;font-weight:800;color:var(--up);-webkit-text-fill-color:initial;background:none}
+.nx-refer-l span:not(.nx-refer-tag){font-family:'JetBrains Mono',monospace;font-size:9.5px;font-weight:600;color:#a7a7b2;letter-spacing:.06em;margin-top:2px}
+.nx-refer-r{flex-shrink:0;font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#9bf5cf;letter-spacing:.04em;text-transform:none;white-space:nowrap}
+.nx-refer.pump-tier .nx-refer-r{color:#9bf5cf}
 
 .ai-article{padding-top:8px}
 .ai-article p{background:var(--glass-strong);backdrop-filter:blur(10px);border:1px solid var(--hairline);border-left:3px solid var(--sky);border-radius:16px;padding:16px 18px;margin-bottom:10px;font-size:14px;line-height:1.6;color:var(--ink-2);position:relative;overflow:hidden}
@@ -676,30 +708,19 @@ main{max-width:540px;margin:0 auto;background:#fff;
     <div class="nx-eyebrow"><span class="dot"></span><span class="txt">SOLANA &middot; NON-CUSTODIAL &middot; NO KYC</span></div>
     <h1 class="nx-h1">Buy Pyth With Solana</h1>
     <p class="nx-lede">Buy Pyth With Solana on Verixia — DeFi on Solana. No KYC. No accounts. No limits. Non-custodial.</p>
-
-    <!-- PRICE HEADER (live data into these IDs) -->
-    <div class="px-card glass" id="nx-px-card">
-      <div class="px-top">
-        <div class="px-l">
-          <div class="px-ico" id="nx-px-ico">N</div>
-          <div>
-            <div class="px-sym" id="nx-px-sym">&mdash;</div>
-            <div class="px-name" id="nx-px-name">&mdash;</div>
-          </div>
-        </div>
-        <div class="px-r">
-          <div class="px-now" id="nx-px-now">$&mdash;.&mdash;</div>
-          <div class="px-chg muted" id="nx-px-chg">&mdash; &middot; 24H</div>
-        </div>
-      </div>
-      <div class="spark-wrap">
-        <svg class="spark" id="nx-spark" viewBox="0 0 320 60" preserveAspectRatio="none"></svg>
-        <span class="spark-meta">7D</span>
-        <span class="spark-meta-r" id="nx-spark-range">&mdash;</span>
-      </div>
-      <a class="px-attr" href="https://www.geckoterminal.com" target="_blank" rel="noopener nofollow">Chart data &middot; GeckoTerminal</a>
-    </div>
   </section>
+
+  <!-- REFERRAL (highest-value CTA, moved to top above the swap) -->
+  <div class="nx-refer-stack">
+    <a class="nx-refer pump-tier" href="https://swap.verixiaapps.com">
+      <span class="nx-refer-l">
+        <span class="nx-refer-tag">REFERRAL</span>
+        <b>Earn <em>50%</em> of fees from everyone you refer</b>
+        <span>FOREVER &middot; PAID DAILY IN SOL</span>
+      </span>
+      <span class="nx-refer-r">Join &rarr;</span>
+    </a>
+  </div>
 
   <!-- LIVE SWAP (hero conversion) -->
   <div class="nx-swap-label">
@@ -726,33 +747,56 @@ main{max-width:540px;margin:0 auto;background:#fff;
     </div>
   </section>
 
-  <!-- REFERRAL (highest-value CTA, directly under the swap) -->
-  <div class="nx-refer-stack">
-    <a class="nx-refer pump-tier" href="https://swap.verixiaapps.com">
-      <span class="nx-refer-l">
-        <span class="nx-refer-tag">REFERRAL</span>
-        <b>Earn <em>50%</em> of fees from everyone you refer</b>
-        <span>FOREVER &middot; PAID DAILY IN SOL</span>
-      </span>
-      <span class="nx-refer-r">Join &rarr;</span>
-    </a>
+  <!-- QUICK REASSURANCE (first-screen trust) -->
+  <div class="nx-reassure">
+    <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3Z"/><path d="M9 12l2 2 4-4"/></svg>Audited routing</span>
+    <span class="dot">&middot;</span>
+    <span>Non-custodial</span>
+    <span class="dot">&middot;</span>
+    <span>Sanctions-screened</span>
   </div>
 
-  <!-- FREEDOM STRIP -->
-  <div class="nx-trust-pill">
-    <span class="lbl"><span class="cross">&#10005;</span>No KYC</span>
-    <span class="sep">&middot;</span>
-    <span class="lbl"><span class="cross">&#10005;</span>No Account</span>
-    <span class="sep">&middot;</span>
-    <span class="lbl"><span class="cross">&#10005;</span>No Limits</span>
+  <!-- LIVE SWAP · JUPITER BADGE -->
+  <div class="nxb-live-bar glass">
+    <div class="jico">J</div>
+    <div class="txt"><b>Best price across Solana</b><span>Routed through Jupiter across every major DEX</span></div>
+    <span class="live"><span class="nxb-dot"></span>LIVE</span>
   </div>
 
-  <!-- STATS STRIP (live data into these IDs) -->
-  <div class="px-stats" id="nx-px-stats">
-    <div class="px-stat"><div class="px-stat-lbl">Market Cap</div><div class="px-stat-val" id="nx-stat-mcap">&mdash;</div></div>
-    <div class="px-stat"><div class="px-stat-lbl">Liquidity</div><div class="px-stat-val" id="nx-stat-liq">&mdash;</div></div>
-    <div class="px-stat"><div class="px-stat-lbl">24h Volume</div><div class="px-stat-val" id="nx-stat-vol">&mdash;</div></div>
-    <div class="px-stat"><div class="px-stat-lbl">24h Trades</div><div class="px-stat-val" id="nx-stat-tx">&mdash;</div></div>
+  <!-- TRUST SECTION (replaces the live price/stats card) -->
+  <div class="nx-trust glass">
+    <div class="nx-trust-h">Built on infrastructure <span>you can verify</span></div>
+    <div class="nx-trust-grid">
+      <div class="nx-trust-item">
+        <div class="nx-trust-k">Providers</div>
+        <div class="nx-trust-v">Swaps routed by <b>Jupiter</b>, Solana's leading DEX aggregator. Charts &amp; market data by <b>CoinGecko</b>.</div>
+      </div>
+      <div class="nx-trust-item">
+        <div class="nx-trust-k">Liquidity</div>
+        <div class="nx-trust-v">Aggregated across every major Solana DEX &mdash; Orca, Raydium, Meteora &amp; more &mdash; via Jupiter, for best-route pricing on any token.</div>
+      </div>
+      <div class="nx-trust-item">
+        <div class="nx-trust-k">Audited</div>
+        <div class="nx-trust-v">Jupiter's routing contracts are independently audited by <b>OtterSec</b> &amp; <b>Sec3</b>.</div>
+      </div>
+      <div class="nx-trust-item">
+        <div class="nx-trust-k">Compliant &amp; non-custodial</div>
+        <div class="nx-trust-v">Connecting wallets are sanctions-screened via <b>Chainalysis</b>. We never hold your keys or your funds.</div>
+      </div>
+      <div class="nx-trust-item">
+        <div class="nx-trust-k">Referrals</div>
+        <div class="nx-trust-v">Earn <b>50% of fees</b> on every pump.fun trade you refer. Expanding to all trades soon.</div>
+      </div>
+      <div class="nx-trust-item">
+        <div class="nx-trust-k">Our goal</div>
+        <div class="nx-trust-v">Make safe, self-custodial, no-KYC trading something anyone can do in seconds.</div>
+      </div>
+    </div>
+    <div class="nx-trust-pills">
+      <span class="lbl"><span class="cross">&#10005;</span>No KYC</span>
+      <span class="lbl"><span class="cross">&#10005;</span>No Account</span>
+      <span class="lbl"><span class="cross">&#10005;</span>No Limits</span>
+    </div>
   </div>
 
   <a href="https://swap.verixiaapps.com/?tab=bridge" class="nx-bridge-link">
@@ -783,10 +827,10 @@ main{max-width:540px;margin:0 auto;background:#fff;
     <div class="section-tag">OVERVIEW</div>
     <h2 class="section-title">Why Verixia</h2>
     <p class="section-lede">DeFi on Solana means the wallet is the account, the smart contract is the only intermediary, and the network does the rest in under a second.</p>
-    <div class="ai-article" data-ai-content><p>Want to buy Pyth with Solana? You’re in the right place. Verixia makes it fast and slick—no KYC, no accounts, just your wallet. Connect Phantom or any Solana wallet, and you’re ready to go. Phantom mobile connection clocks in at just 9 seconds before you’re swapping.</p>
-<p>Pyth’s on Solana, so you’re getting those 400ms finality vibes and ultra-low fees. Every swap on Solana through Verixia taps into Jupiter’s routing across 50+ DEXes for the best price fill. Quote shows up in 2 seconds, confirm in 1, and boom—you’ve got Pyth tokens without a hitch. Non-custodial means you keep your keys and coins the whole way.</p>
-<p>You don’t just buy Pyth and stop. Use the same wallet to explore the Wonderland tab for trending Solana memes or dive into brand tokens if you want some Apple or Tesla price-trackers settled in USDC. Verixia’s global DeFi jungle lets you send it with no limits—small gas minimums, no max caps, no freezes.</p>
-<p>Ready to buy Pyth with Solana? Just connect wallet, swap on Solana, and you’re done. No sign-ups, no waiting rooms—just pure DeFi vibes. Verixia keeps the hustle smooth so you can stack those tokens and explore the Solana ecosystem without any hassle.</p></div>
+    <div class="ai-article" data-ai-content><p>Want to buy Pyth with Solana? It’s a breeze on Verixia. No sign-ups, no KYC—just connect your wallet and you’re live. Phantom mobile connects in 9 seconds, then Jupiter finds the best route across 50+ Solana DEXes. Quote in 2 seconds, confirm in 1, and boom—you’re holding Pyth.</p>
+<p>Verixia’s non-custodial setup means your Solana stays in your wallet the whole time. The smart contract handles the swap directly between your wallet and the liquidity pool. No middlemen, no platform freezes, no withdrawal limits. Just fast, cheap swaps settled in under 400ms at fractions of a cent.</p>
+<p>You can also explore the Wonderland tab for trending Solana memes while you’re at it. It’s a fun way to vibe with the community and spot fresh token moves. Plus, if you want to bring assets from other chains first, you can bridge to Solana in seconds before swapping for Pyth.</p>
+<p>Ready to send it? Grab your wallet, hit the swap on Solana page, and buy Pyth with Solana in moments. Verixia keeps it smooth, global, and fully in your hands. Moon vibes guaranteed.</p></div>
   </section>
 
   <section class="section">
@@ -800,16 +844,16 @@ main{max-width:540px;margin:0 auto;background:#fff;
   <section class="section">
     <div class="section-tag">RELATED</div>
     <h2 class="section-title"><a href="/solana-swaps/">Solana Swaps Hub</a></h2>
-    <ul class="pair-grid"><li><a href="/swap-solana-to-bitcoin/">Swap Solana to Bitcoin on Verixia</a></li>
-<li><a href="/swap-sol-to-shib/">Swap SOL to SHIB on Verixia</a></li>
-<li><a href="/swap-kmno-for-jitosol-solana/">Swap Kmno for Jitosol Solana on Verixia</a></li>
-<li><a href="/why-is-my-solana-swap-pending/">Why Is My Solana Swap Pending?</a></li>
-<li><a href="/fastest-usdt-swap/">Fastest USDT Swap on Verixia</a></li>
-<li><a href="/swap-ponke-to-sol/">Swap PONKE to SOL on Verixia</a></li>
-<li><a href="/swap-btc-to-sol/">Swap BTC to SOL on Verixia</a></li>
-<li><a href="/swap-kmno-to-sol-solana/">Swap Kmno to SOL Solana on Verixia</a></li>
-<li><a href="/buy-apple-with-crypto/">Buy Apple with Crypto on Verixia</a></li>
-<li><a href="/why-is-my-ai16z-swap-stuck/">Why Is My ai16z Swap Stuck?</a></li>
+    <ul class="pair-grid"><li><a href="/aave-swap/">Aave Swap on Verixia</a></li>
+<li><a href="/ai16z-swap/">ai16z Swap on Verixia</a></li>
+<li><a href="/altcoin-swap/">Altcoin Swap on Verixia</a></li>
+<li><a href="/amazon-token-swap/">Amazon Token Swap on Verixia</a></li>
+<li><a href="/apple-token-swap/">Apple Token Swap on Verixia</a></li>
+<li><a href="/aptos-network-swap/">Aptos Network Swap on Verixia</a></li>
+<li><a href="/arbitrum-network-swap/">Arbitrum Network Swap on Verixia</a></li>
+<li><a href="/atlas-solana-dex-swap/">Atlas Solana DEX Swap on Verixia</a></li>
+<li><a href="/avalanche-network-swap/">Avalanche Network Swap on Verixia</a></li>
+<li><a href="/ban-solana-dex-swap/">Ban Solana DEX Swap on Verixia</a></li>
 </ul>
   </section>
 
@@ -2203,38 +2247,8 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
         }
       }
 
-      // Sparkline from the GeckoTerminal pool OHLCV. No real data -> retry with
-      // SOL so the chart always renders (never synthesized, never random).
-      if (!sparkEl) return;
-      var points = await fetchChartPoints(_chartPool);
-      if (!points || points.length < 4) {
-        if (mint !== SOL_MINT && _chartTries < 2) {
-          _chartTries++;
-          return bootPriceCard(SOL_MINT);
-        }
-        sparkEl.innerHTML = '';
-        if (rangeEl) rangeEl.textContent = '\u2014';
-        return;
-      }
-      var w = 320, h = 60, padX = 4, padY = 4;
-      var path = buildSmoothPath(points, w, h, padX, padY);
-      if (!path || !path.d) { sparkEl.innerHTML = ''; return; }
-      var wChg = ((points[points.length - 1].price - points[0].price) / points[0].price) * 100;
-      var isUp = Number.isFinite(wChg) ? wChg >= 0 : true;
-      var stroke = isUp ? '#0a7a4c' : '#9d8cff';
-      var fill   = isUp ? 'rgba(10,122,76,0.10)' : 'rgba(157,140,255,0.12)';
-      var lastPt = path.pts[path.pts.length - 1];
-      var areaD = path.d + ' L ' + lastPt.x.toFixed(2) + ' ' + (h - padY).toFixed(2) +
-                  ' L ' + path.pts[0].x.toFixed(2) + ' ' + (h - padY).toFixed(2) + ' Z';
-      sparkEl.innerHTML =
-        '<path d="' + areaD + '" fill="' + fill + '" stroke="none"/>' +
-        '<path d="' + path.d + '" fill="none" stroke="' + stroke + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
-      if (rangeEl) {
-        rangeEl.textContent = Number.isFinite(wChg)
-          ? (isUp ? '+' : '') + wChg.toFixed(2) + '%'
-          : '\u2014';
-        rangeEl.style.color = isUp ? '#0a7a4c' : '#9d8cff';
-      }
+      // Sparkline removed — the price card + stats above are populated from the
+      // single token-info call already made. No OHLCV fetch, no second API call.
     }
 
     function bootPresets() {
