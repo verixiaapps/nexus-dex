@@ -787,7 +787,7 @@ function FeaturedSignal({ token, whaleCount, onOpen, onTrade }) {
   if (!token) return null;
   const score = signalScore(token);
   return (
-    <div className="mw-featured" onClick={() => onOpen(token.mint)}>
+    <div className="mw-featured" onClick={() => onOpen(token)}>
       <div className="mw-feat-badge">⚡ TOP SIGNAL</div>
       <div className="mw-feat-body">
         <div className="mw-token-avatar">
@@ -811,8 +811,8 @@ function FeaturedSignal({ token, whaleCount, onOpen, onTrade }) {
         <div className="mw-fm"><span className="mw-fm-ico">💰</span><div className="mw-fm-val">${format(token.mcap)}</div><div className="mw-fm-lbl">Mcap</div></div>
       </div>
       <div className="mw-feat-cta">
-        <button type="button" className="mw-btn-grad" onClick={(e) => { e.stopPropagation(); onTrade(token.mint, 'buy'); }}>⚡ BUY NOW</button>
-        <button type="button" className="mw-btn-ghost" onClick={(e) => { e.stopPropagation(); onOpen(token.mint); }}>details →</button>
+        <button type="button" className="mw-btn-grad" onClick={(e) => { e.stopPropagation(); onTrade(token, 'buy'); }}>⚡ BUY NOW</button>
+        <button type="button" className="mw-btn-ghost" onClick={(e) => { e.stopPropagation(); onOpen(token); }}>details →</button>
       </div>
     </div>
   );
@@ -857,7 +857,7 @@ function WhaleRadar({ whaleTokens, onOpen, onTrade }) {
   return (
     <div className="mw-hscroll">
       {whaleTokens.map(w => (
-        <div key={w.mint} className="mw-whale-card" onClick={() => onOpen(w.mint)}>
+        <div key={w.mint} className="mw-whale-card" onClick={() => onOpen(w)}>
           <div className="mw-whale-row">
             <div className="mw-mini-avatar"><div className="mw-inner"><TokenIcon token={w} /></div></div>
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -870,7 +870,7 @@ function WhaleRadar({ whaleTokens, onOpen, onTrade }) {
             <span className="mw-l">🐋 {w.whaleCount || 1}</span>
             <span className="mw-r">+{format(w.whaleSol)} SOL</span>
           </div>
-          <button type="button" className="mw-trade-pill" onClick={(e) => { e.stopPropagation(); onTrade(w.mint, 'buy'); }}>BUY</button>
+          <button type="button" className="mw-trade-pill" onClick={(e) => { e.stopPropagation(); onTrade(w, 'buy'); }}>BUY</button>
         </div>
       ))}
     </div>
@@ -910,7 +910,7 @@ function BreakingOut({ tokens, whaleByMint, excludeMint, onOpen, onTrade }) {
               <div className={'mw-bo-pct' + ((p.token.change || 0) < 0 ? ' mw-down' : '')}>{formatPct(p.token.change)}</div>
               <div style={{ margin: '6px 0 2px' }}><MwSparkline mint={p.token.mint} price={p.token.price} change={p.token.change} pool={p.token.pool} w={150} h={28} full /></div>
               <div className="mw-bo-meta">{p.meta}</div>
-              <button type="button" className="mw-trade-pill" style={{ marginTop: 10 }} onClick={(e) => { e.stopPropagation(); onTrade(p.token.mint, 'buy'); }}>BUY</button>
+              <button type="button" className="mw-trade-pill" style={{ marginTop: 10 }} onClick={(e) => { e.stopPropagation(); onTrade(p.token, 'buy'); }}>BUY</button>
             </>
           ) : (
             <div className="mw-bo-empty">No matches yet.</div>
@@ -1256,7 +1256,7 @@ function NewLaunches({ tokens, onOpen, onTrade }) {
       ) : (
         <div className="mw-hscroll">
           {list.map(t => (
-            <div key={t.mint} className="mw-launch-card" onClick={() => onOpen(t.mint)}>
+            <div key={t.mint} className="mw-launch-card" onClick={() => onOpen(t)}>
               <div className="mw-launch-head">
                 <div className="mw-mini-avatar"><div className="mw-inner"><TokenIcon token={t} /></div></div>
                 <div className="mw-launch-info">
@@ -1268,7 +1268,7 @@ function NewLaunches({ tokens, onOpen, onTrade }) {
               <div className="mw-launch-row"><span className="mw-launch-l">Holders</span><span className="mw-launch-v">{t.holders ? format(t.holders) : '—'}</span></div>
               <div className="mw-launch-row"><span className="mw-launch-l">Liquidity</span><span className="mw-launch-v">${format(t.liquidity)}</span></div>
               <div className="mw-launch-row"><span className="mw-launch-l">Signal</span><span className="mw-launch-v" style={{ color: 'var(--green)' }}>{signalScore(t)}</span></div>
-              <button type="button" className="mw-trade-pill" style={{ marginTop: 10 }} onClick={(e) => { e.stopPropagation(); onTrade(t.mint, 'buy'); }}>BUY</button>
+              <button type="button" className="mw-trade-pill" style={{ marginTop: 10 }} onClick={(e) => { e.stopPropagation(); onTrade(t, 'buy'); }}>BUY</button>
             </div>
           ))}
         </div>
@@ -1293,7 +1293,7 @@ function TrendingNow({ tokens, onOpen }) {
       </div>
       <div className="mw-trend-list">
         {list.map((t, i) => (
-          <div key={t.mint} className="mw-trend-row" style={{ animationDelay: `${i * 0.03}s` }} onClick={() => onOpen(t.mint)}>
+          <div key={t.mint} className="mw-trend-row" style={{ animationDelay: `${i * 0.03}s` }} onClick={() => onOpen(t)}>
             <div className="mw-trend-rank">{i + 1}</div>
             <div className="mw-mini-avatar" style={{ width: 34, height: 34 }}>
               <div className="mw-inner" style={{ fontSize: 14 }}><TokenIcon token={t} /></div>
@@ -1973,6 +1973,13 @@ function MemeWonderland({ onConnectWallet } = {}) {
       setDiscovered(prev => prev[mint] ? prev : { ...prev, [mint]: mintOrToken });
     } else {
       mint = mintOrToken;
+      // String caller (launch/activity cards pass a bare mint): resolve it from
+      // any known list and register it, so tokenByMint() can find it and the
+      // view actually opens. Without this, a string mint never mounts.
+      if (mint) {
+        const found = tokenByMint(mint);
+        if (found) setDiscovered(prev => prev[mint] ? prev : { ...prev, [mint]: found });
+      }
     }
     if (!mint) return;
     setDetailMint(mint);
@@ -1984,6 +1991,10 @@ function MemeWonderland({ onConnectWallet } = {}) {
       setDiscovered(prev => prev[mintOrToken.mint] ? prev : { ...prev, [mintOrToken.mint]: mintOrToken });
       setSheet({ mint: mintOrToken.mint, mode });
     } else if (typeof mintOrToken === 'string') {
+      // Resolve + register the bare mint so the TradeSheet's tokenByMint() gate
+      // passes and the sheet mounts (fixes "click token, can't buy/sell").
+      const found = tokenByMint(mintOrToken);
+      if (found) setDiscovered(prev => prev[mintOrToken] ? prev : { ...prev, [mintOrToken]: found });
       setSheet({ mint: mintOrToken, mode });
     }
     setAmount('0.50'); setSelectedPreset('0.5');
@@ -2476,7 +2487,8 @@ function TradeSheet({
         }));
       } else {
         const mintPk = new PublicKey(inputMint);
-        const mintInfo = await connection.getAccountInfo(mintPk);
+        // Buy/sell critical path → trade RPC (Alchemy primary, Ankr fallback).
+        const mintInfo = await rpcRaceTrade('getMintInfo', c => c.getAccountInfo(mintPk));
         if (!mintInfo) throw new Error('Input mint not found on-chain.');
         const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
           ? TOKEN_2022_PROGRAM_ID
@@ -2508,14 +2520,16 @@ function TradeSheet({
       const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
       let alts = [];
       if (altKeys.length > 0) {
-        const infos = await connection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
+        const infos = await rpcRaceTrade('getAlts',
+          c => c.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k))));
         alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
           key:   new PublicKey(k),
           state: AddressLookupTableAccount.deserialize(infos[i].data),
         }) : null).filter(Boolean);
       }
 
-      const latest = await connection.getLatestBlockhash('confirmed');
+      const latest = await rpcRaceTrade('getLatestBlockhash',
+        c => c.getLatestBlockhash('confirmed'));
       const message = new TransactionMessage({
         payerKey:        wallet.publicKey,
         recentBlockhash: latest.blockhash,
@@ -2547,11 +2561,13 @@ function TradeSheet({
       }
 
       const signed = await wallet.signTransaction(tx);
+      const serialized = signed.serialize();
 
-      const sig = await connection.sendRawTransaction(signed.serialize(), {
+      // Send via trade RPC (Alchemy primary, Ankr fallback).
+      const sig = await rpcRaceTrade('sendTx', c => c.sendRawTransaction(serialized, {
         skipPreflight: false,
         maxRetries: 3,
-      });
+      }));
 
       let confirmed = false;
       try {
