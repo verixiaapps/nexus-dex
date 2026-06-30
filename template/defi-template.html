@@ -159,6 +159,19 @@ a{color:inherit;text-decoration:none}
 .nx-trust-pill .sep{display:none}
 .nx-trust-pill .lbl + .lbl{border-left:1px solid rgba(255,255,255,.16)}
 
+/* ---- LIVE SWAP / JUPITER BADGE (under the swap) ---- */
+@keyframes nxb-pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.nxb-live-bar{display:flex;align-items:center;gap:11px;border-radius:14px;padding:13px 15px;margin:12px 0}
+.nxb-live-bar .jico{width:26px;height:26px;border-radius:8px;flex:0 0 auto;display:grid;place-items:center;
+  background:linear-gradient(135deg,#c7f284,#19d27a);color:#06281a;font-weight:800;font-size:14px;font-family:'JetBrains Mono','DejaVu Sans Mono',monospace}
+.nxb-live-bar .txt{flex:1;min-width:0;line-height:1.3}
+.nxb-live-bar .txt b{font-weight:700;color:#fff;font-size:13.5px}
+.nxb-live-bar .txt span{display:block;font-size:11px;color:var(--dim);margin-top:2px}
+.nxb-live-bar .live{display:inline-flex;align-items:center;gap:6px;font-family:'JetBrains Mono','DejaVu Sans Mono',monospace;
+  font-size:9.5px;font-weight:700;letter-spacing:.12em;color:var(--g);
+  background:rgba(25,210,122,.12);border:1px solid rgba(25,210,122,.3);border-radius:999px;padding:5px 10px;flex:0 0 auto}
+.nxb-live-bar .live .nxb-dot{width:7px;height:7px;border-radius:50%;background:var(--g);box-shadow:0 0 8px var(--g);animation:nxb-pulse 1.5s ease-in-out infinite}
+
 /* ---- STATS STRIP ---- */
 .px-stats{margin:12px 0;display:flex;border-radius:15px;overflow:hidden;border:1px solid var(--line);
   background:linear-gradient(180deg,rgba(40,31,72,.6),rgba(16,12,36,.6));backdrop-filter:blur(8px)}
@@ -676,30 +689,19 @@ main{max-width:540px;margin:0 auto;background:#fff;
     <div class="nx-eyebrow"><span class="dot"></span><span class="txt">SOLANA &middot; NON-CUSTODIAL &middot; NO KYC</span></div>
     <h1 class="nx-h1">{{STATIC_H1}}</h1>
     <p class="nx-lede">{{STATIC_INTRO}}</p>
-
-    <!-- PRICE HEADER (live data into these IDs) -->
-    <div class="px-card glass" id="nx-px-card">
-      <div class="px-top">
-        <div class="px-l">
-          <div class="px-ico" id="nx-px-ico">N</div>
-          <div>
-            <div class="px-sym" id="nx-px-sym">&mdash;</div>
-            <div class="px-name" id="nx-px-name">&mdash;</div>
-          </div>
-        </div>
-        <div class="px-r">
-          <div class="px-now" id="nx-px-now">$&mdash;.&mdash;</div>
-          <div class="px-chg muted" id="nx-px-chg">&mdash; &middot; 24H</div>
-        </div>
-      </div>
-      <div class="spark-wrap">
-        <svg class="spark" id="nx-spark" viewBox="0 0 320 60" preserveAspectRatio="none"></svg>
-        <span class="spark-meta">7D</span>
-        <span class="spark-meta-r" id="nx-spark-range">&mdash;</span>
-      </div>
-      <a class="px-attr" href="https://www.geckoterminal.com" target="_blank" rel="noopener nofollow">Chart data &middot; GeckoTerminal</a>
-    </div>
   </section>
+
+  <!-- REFERRAL (highest-value CTA, moved to top above the swap) -->
+  <div class="nx-refer-stack">
+    <a class="nx-refer pump-tier" href="https://swap.verixiaapps.com">
+      <span class="nx-refer-l">
+        <span class="nx-refer-tag">REFERRAL</span>
+        <b>Earn <em>50%</em> of fees from everyone you refer</b>
+        <span>FOREVER &middot; PAID DAILY IN SOL</span>
+      </span>
+      <span class="nx-refer-r">Join &rarr;</span>
+    </a>
+  </div>
 
   <!-- LIVE SWAP (hero conversion) -->
   <div class="nx-swap-label">
@@ -726,16 +728,28 @@ main{max-width:540px;margin:0 auto;background:#fff;
     </div>
   </section>
 
-  <!-- REFERRAL (highest-value CTA, directly under the swap) -->
-  <div class="nx-refer-stack">
-    <a class="nx-refer pump-tier" href="https://swap.verixiaapps.com">
-      <span class="nx-refer-l">
-        <span class="nx-refer-tag">REFERRAL</span>
-        <b>Earn <em>50%</em> of fees from everyone you refer</b>
-        <span>FOREVER &middot; PAID DAILY IN SOL</span>
-      </span>
-      <span class="nx-refer-r">Join &rarr;</span>
-    </a>
+  <!-- LIVE SWAP · JUPITER BADGE -->
+  <div class="nxb-live-bar glass">
+    <div class="jico">J</div>
+    <div class="txt"><b>Best price across Solana</b><span>Routed through Jupiter across every major DEX</span></div>
+    <span class="live"><span class="nxb-dot"></span>LIVE</span>
+  </div>
+
+  <!-- PRICE HEADER (live data into these IDs) -->
+  <div class="px-card glass" id="nx-px-card">
+    <div class="px-top">
+      <div class="px-l">
+        <div class="px-ico" id="nx-px-ico">N</div>
+        <div>
+          <div class="px-sym" id="nx-px-sym">&mdash;</div>
+          <div class="px-name" id="nx-px-name">&mdash;</div>
+        </div>
+      </div>
+      <div class="px-r">
+        <div class="px-now" id="nx-px-now">$&mdash;.&mdash;</div>
+        <div class="px-chg muted" id="nx-px-chg">&mdash; &middot; 24H</div>
+      </div>
+    </div>
   </div>
 
   <!-- FREEDOM STRIP -->
@@ -2182,38 +2196,8 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
         }
       }
 
-      // Sparkline from the GeckoTerminal pool OHLCV. No real data -> retry with
-      // SOL so the chart always renders (never synthesized, never random).
-      if (!sparkEl) return;
-      var points = await fetchChartPoints(_chartPool);
-      if (!points || points.length < 4) {
-        if (mint !== SOL_MINT && _chartTries < 2) {
-          _chartTries++;
-          return bootPriceCard(SOL_MINT);
-        }
-        sparkEl.innerHTML = '';
-        if (rangeEl) rangeEl.textContent = '\u2014';
-        return;
-      }
-      var w = 320, h = 60, padX = 4, padY = 4;
-      var path = buildSmoothPath(points, w, h, padX, padY);
-      if (!path || !path.d) { sparkEl.innerHTML = ''; return; }
-      var wChg = ((points[points.length - 1].price - points[0].price) / points[0].price) * 100;
-      var isUp = Number.isFinite(wChg) ? wChg >= 0 : true;
-      var stroke = isUp ? '#0a7a4c' : '#9d8cff';
-      var fill   = isUp ? 'rgba(10,122,76,0.10)' : 'rgba(157,140,255,0.12)';
-      var lastPt = path.pts[path.pts.length - 1];
-      var areaD = path.d + ' L ' + lastPt.x.toFixed(2) + ' ' + (h - padY).toFixed(2) +
-                  ' L ' + path.pts[0].x.toFixed(2) + ' ' + (h - padY).toFixed(2) + ' Z';
-      sparkEl.innerHTML =
-        '<path d="' + areaD + '" fill="' + fill + '" stroke="none"/>' +
-        '<path d="' + path.d + '" fill="none" stroke="' + stroke + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
-      if (rangeEl) {
-        rangeEl.textContent = Number.isFinite(wChg)
-          ? (isUp ? '+' : '') + wChg.toFixed(2) + '%'
-          : '\u2014';
-        rangeEl.style.color = isUp ? '#0a7a4c' : '#9d8cff';
-      }
+      // Sparkline removed — the price card + stats above are populated from the
+      // single token-info call already made. No OHLCV fetch, no second API call.
     }
 
     function bootPresets() {
