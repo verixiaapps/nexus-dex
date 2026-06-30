@@ -37,6 +37,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Buffer } from 'buffer';
 import bs58 from 'bs58';
+import { useWallet } from '@solana/wallet-adapter-react';
 import {
   Connection,
   PublicKey, Keypair, VersionedTransaction, TransactionMessage, SystemProgram,
@@ -1485,33 +1486,86 @@ const SK_KEY         = 'lr_wallet_sk_v1';
 const BACKED_KEY     = 'lr_wallet_backed_v1';
 
 /* ============================================================
-   BURNER WALLET
+   BURNER WALLET — signature-derived, deterministic, nothing stored.
+
+   Same main wallet -> same burner, on any device, with no secret key
+   ever persisted. The connected main wallet signs ONE fixed message;
+   that signature is deterministic (same wallet + same bytes => same
+   signature every time), so hashing it to 32 bytes yields the same
+   seed, and Keypair.fromSeed yields the same burner — always.
+
+   The message below is a CONSTANT and must NEVER change: altering it
+   changes every user's derived burner address. Do not add a nonce,
+   timestamp, or version bump unless you intend to migrate everyone to
+   a new burner.
    ============================================================ */
-function loadOrCreateKeypair() {
-  let stored = null;
-  try { stored = localStorage.getItem(SK_KEY); } catch (e) {}
-  if (stored) {
-    try { return Keypair.fromSecretKey(bs58.decode(stored)); }
-    catch (e) {
-      // The stored key didn't parse. DON'T silently overwrite it — it may be
-      // recoverable (wrong encoding/length from another version) and clobbering
-      // it would strand any funds. Preserve it under a sidecar key, log loudly,
-      // and start a fresh burner so the app can still load.
-      try { if (!localStorage.getItem(SK_KEY + '_unparsed')) localStorage.setItem(SK_KEY + '_unparsed', stored); } catch (_) {}
-      try { console.error('[wallet] stored key did not parse; preserved at "' + SK_KEY + '_unparsed" and created a new burner. Recover the old one manually if it held funds.'); } catch (_) {}
-      const fresh = Keypair.generate();
-      try { localStorage.setItem(SK_KEY, bs58.encode(fresh.secretKey)); } catch (_) {}
-      return fresh;
-    }
-  }
-  const kp = Keypair.generate();
-  try { localStorage.setItem(SK_KEY, bs58.encode(kp.secretKey)); } catch (e) {}
-  return kp;
+const BURNER_DERIVE_MESSAGE =
+  'Nexus Ape — derive my trading wallet.\n\nThis signature creates your on-device trading wallet. It is deterministic and free. Only sign this on app.nexus.';
+
+// SHA-256 -> 32-byte seed via Web Crypto (built in, deterministic, no deps).
+async function sha256Bytes(bytes) {
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return new Uint8Array(digest);
 }
-function useLocalWallet() {
-  const kpRef = useRef(null);
-  if (!kpRef.current) kpRef.current = loadOrCreateKeypair();
-  const keypair = kpRef.current;
+
+// Derive the burner keypair from a main-wallet signMessage function.
+// Returns a Keypair, or throws if the wallet can't sign.
+async function deriveBurnerFromSignature(signMessage) {
+  if (typeof signMessage !== 'function') {
+    throw new Error('This wallet cannot sign messages, so a trading wallet can’t be created. Try Phantom.');
+  }
+  const msgBytes = new TextEncoder().encode(BURNER_DERIVE_MESSAGE);
+  const sig = await signMessage(msgBytes);           // Uint8Array, deterministic per wallet
+  if (!sig || !sig.length) throw new Error('No signature returned.');
+  const seed = await sha256Bytes(sig instanceof Uint8Array ? sig : new Uint8Array(sig));
+  return Keypair.fromSeed(seed.slice(0, 32));        // 32-byte seed -> stable keypair
+}
+
+// In-memory cache, keyed by main wallet pubkey. Never written to disk — the
+// burner is reproduced from the signature each session (cached until tab close).
+const _burnerMem = new Map(); // mainPubkey -> Keypair
+
+function useLocalWallet(mainPubkey, signMessage) {
+  const [keypair, setKeypair] = useState(() => (mainPubkey && _burnerMem.get(mainPubkey)) || null);
+  const [deriving, setDeriving] = useState(false);
+  const [error, setError] = useState(null);
+  const derivingRef = useRef(false);
+
+  // Main wallet changed (including disconnect): clear the active burner so a
+  // different (or no) main wallet never trades from the previous burner.
+  // No main wallet => no burner (your choice).
+  useEffect(() => {
+    if (!mainPubkey) { setKeypair(null); setError(null); return; }
+    const cached = _burnerMem.get(mainPubkey);
+    setKeypair(cached || null);
+    setError(null);
+  }, [mainPubkey]);
+
+  // Derive once (idempotent). Safe to call from an effect or a click. Resolves
+  // to the keypair, or null if it couldn't derive.
+  const deriveNow = useCallback(async () => {
+    if (!mainPubkey) return null;
+    const cached = _burnerMem.get(mainPubkey);
+    if (cached) { setKeypair(cached); return cached; }
+    if (derivingRef.current) return null;             // a derive is already in flight
+    derivingRef.current = true;
+    setDeriving(true); setError(null);
+    try {
+      const kp = await deriveBurnerFromSignature(signMessage);
+      _burnerMem.set(mainPubkey, kp);
+      setKeypair(kp);
+      return kp;
+    } catch (e) {
+      const msg = (e && e.message) || 'Could not create your trading wallet.';
+      // User rejecting the signature is normal — keep it quiet-ish.
+      setError(/reject|denied|cancel/i.test(msg) ? 'Signature needed to create your trading wallet.' : msg);
+      return null;
+    } finally {
+      derivingRef.current = false;
+      setDeriving(false);
+    }
+  }, [mainPubkey, signMessage]);
+
   const [backedUp, setBackedUp] = useState(() => {
     try { return localStorage.getItem(BACKED_KEY) === '1'; } catch (e) { return false; }
   });
@@ -1519,8 +1573,17 @@ function useLocalWallet() {
     try { localStorage.setItem(BACKED_KEY, '1'); } catch (e) {}
     setBackedUp(true);
   }, []);
-  const exportSecret = useCallback(() => bs58.encode(keypair.secretKey), [keypair]);
-  return { keypair, publicKey: keypair.publicKey, backedUp, markBackedUp, exportSecret };
+  const exportSecret = useCallback(() => (keypair ? bs58.encode(keypair.secretKey) : ''), [keypair]);
+
+  return {
+    keypair,
+    publicKey: keypair ? keypair.publicKey : null,
+    ready: !!keypair,
+    deriving,
+    error,
+    deriveNow,
+    backedUp, markBackedUp, exportSecret,
+  };
 }
 
 /* ============================================================
@@ -2409,7 +2472,7 @@ function WalletDrawer({ wallet, solBalance, solPrice, onWithdraw, onClose, busy,
   const [dest, setDest] = useState(''); const [amt, setAmt] = useState('');
   const [revealed, setRevealed] = useState(false);
   const qrRef = useRef(null);
-  const addr = wallet.publicKey.toBase58();
+  const addr = wallet.publicKey ? wallet.publicKey.toBase58() : '';
   const sol = (solBalance && solBalance.uiAmount) || 0;
   const ownedList = useMemo(() => {
     if (!balances) return [];
@@ -2423,7 +2486,7 @@ function WalletDrawer({ wallet, solBalance, solPrice, onWithdraw, onClose, busy,
       .sort((a, b) => b.usd - a.usd);
   }, [balances, resolveToken]);
   useEffect(() => {
-    if (tab !== 'deposit' || !qrRef.current) return;
+    if (tab !== 'deposit' || !qrRef.current || !addr) return;
     let alive = true;
     (async () => {
       try { const QR = await import('qrcode'); if (!alive || !qrRef.current) return; const toCanvas = QR.toCanvas || (QR.default && QR.default.toCanvas); if (typeof toCanvas === 'function') await toCanvas(qrRef.current, addr, { width: 160, margin: 1, color: { dark: '#0b0b0c', light: '#ffffff' } }); } catch (e) {}
@@ -2768,8 +2831,25 @@ function WatchedWallets({ open, onClose, solPrice, resolveToken }) {
    ============================================================ */
 export default function Ape({ mainWalletPubkey }) {
   useApCSS();
-  const wallet = useLocalWallet();
-  const walletStr = wallet.publicKey.toBase58();
+  // Main wallet's signMessage comes straight from the adapter (Phantom /
+  // WalletConnect). It's the signer that deterministically derives the burner.
+  const { signMessage } = useWallet();
+  const wallet = useLocalWallet(mainWalletPubkey, signMessage);
+  // Burner address is null until derived (first signature). Everything that
+  // reads walletStr must tolerate '' / null until then.
+  const walletStr = wallet.publicKey ? wallet.publicKey.toBase58() : '';
+
+  // Auto-derive the burner as soon as a main wallet is connected (and the user
+  // reached this page, i.e. not geo-blocked — the access gate upstream only
+  // renders <Ape> for allowed wallets). One signature popup, then cached for
+  // the session. If the user rejects, they can retry from the wallet drawer /
+  // trade actions, which also call deriveNow().
+  useEffect(() => {
+    if (mainWalletPubkey && !wallet.ready && !wallet.deriving) {
+      wallet.deriveNow();
+    }
+  }, [mainWalletPubkey, wallet.ready, wallet.deriving, wallet.deriveNow]);
+
   const { buyPresets, setBuyPresets, sellPresets, setSellPresets } = usePresets();
 
   const [recent, setRecent] = useState([]);
@@ -2961,6 +3041,14 @@ export default function Ape({ mainWalletPubkey }) {
 
   // FIX 3: balRpcRace called with a function (its real signature)
   const refreshSol = useCallback(async () => {
+    if (!wallet.publicKey) {
+      // Still pull SOL price even before the burner exists (it's global).
+      try {
+        const r = await fetch('/api/dex/sol-price');
+        if (r.ok) { const d = await r.json(); if (Number.isFinite(d?.price)) setSolPrice(p => Math.abs(p - d.price) < 0.01 ? p : d.price); }
+      } catch (e) {}
+      return;
+    }
     try {
       const lamps = await balRpcRace(conn => conn.getBalance(wallet.publicKey, BAL_COMMITMENT));
       setSolBalance(prev => { const ui = Number(lamps) / 1e9; if (prev && Math.abs(prev.uiAmount - ui) < 1e-9) return prev; return { lamports: lamps, uiAmount: ui }; });
@@ -2974,6 +3062,7 @@ export default function Ape({ mainWalletPubkey }) {
 
   // Balances — diffed before set
   const refreshBalances = useCallback(async () => {
+    if (!walletStr) return;
     try {
       const conn = getConn();
       const owner = new PublicKey(walletStr);
@@ -3002,6 +3091,7 @@ export default function Ape({ mainWalletPubkey }) {
   useEffect(() => { refreshBalances(); const id = setInterval(refreshBalances, POLL_BALANCE); return () => clearInterval(id); }, [refreshBalances]);
 
   const refreshOneToken = useCallback(async (mint) => {
+    if (!walletStr) return;
     try {
       const conn = getConn();
       const owner = new PublicKey(walletStr);
@@ -3153,6 +3243,14 @@ export default function Ape({ mainWalletPubkey }) {
 
   // FIX 1: executeSwap wrapper with correct arg shape for ape-helpers.executeSwap
   const executeSwap = useCallback(async ({ mode, token, swapParams, tradeLamports, feeLamports, totalLamports, tradeTokensRaw, tradeTokensUi, decimals }) => {
+    // Ensure the burner exists. Normally derived on connect, but a trade could
+    // fire during the derive window or after the user rejected the first prompt
+    // — in which case this re-prompts the signature. No burner => no trade.
+    let kp = wallet.keypair;
+    if (!kp) kp = await wallet.deriveNow();
+    if (!kp) throw new Error('Sign the wallet prompt to create your trading wallet, then try again.');
+    const userPk = kp.publicKey;
+    const burnerStr = userPk.toBase58();
     const params = swapParams || (mode === 'buy'
       ? { mode: 'buy', tradeLamports, feeLamports, totalLamports }
       : { mode: 'sell', tradeTokens: tradeTokensRaw, tradeTokensUi, feeLamports: feeLamports != null ? String(feeLamports) : '0', decimals: decimals != null ? Number(decimals) : 6 });
@@ -3160,10 +3258,10 @@ export default function Ape({ mainWalletPubkey }) {
       mode: params.mode,
       swapParams: params,
       token,
-      keypair: wallet.keypair,
-      userPk: wallet.publicKey,
+      keypair: kp,
+      userPk,
       tradeConnection,
-      walletStr,
+      walletStr: burnerStr,
       refWalletStr: mainWalletPubkey,
       solPrice: solPriceRef.current,
     });
@@ -3171,7 +3269,7 @@ export default function Ape({ mainWalletPubkey }) {
     setShowLure(false);
     setTimeout(() => { refreshSol(); refreshOneToken(token.mint); }, 800);
     return result;
-  }, [wallet.keypair, wallet.publicKey, tradeConnection, walletStr, mainWalletPubkey, refreshSol, refreshOneToken]);
+  }, [wallet.keypair, wallet.deriveNow, tradeConnection, mainWalletPubkey, refreshSol, refreshOneToken]);
 
   // FIX 5: result.sig (ape-helpers returns { confirmed, sig })
   // ── Token holdings (display only) ─────────────────────────────────
@@ -3246,14 +3344,17 @@ export default function Ape({ mainWalletPubkey }) {
 
   const onWithdraw = useCallback(async (dest, amount) => {
     if (!dest || !(amount > 0)) return;
+    let kp = wallet.keypair;
+    if (!kp) kp = await wallet.deriveNow();
+    if (!kp) { pushToast({ type: 'error', em: '⊘', body: 'Sign the wallet prompt first to unlock your trading wallet.' }); return; }
     setWithdrawBusy(true);
     try {
       const conn = getTradeConn();
       const lamports = Math.round(amount * 1e9);
-      const ix = SystemProgram.transfer({ fromPubkey: wallet.publicKey, toPubkey: new PublicKey(dest), lamports });
+      const ix = SystemProgram.transfer({ fromPubkey: kp.publicKey, toPubkey: new PublicKey(dest), lamports });
       const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash('confirmed');
-      const msg = new TransactionMessage({ payerKey: wallet.publicKey, recentBlockhash: blockhash, instructions: [ix] }).compileToV0Message();
-      const tx = new VersionedTransaction(msg); tx.sign([wallet.keypair]);
+      const msg = new TransactionMessage({ payerKey: kp.publicKey, recentBlockhash: blockhash, instructions: [ix] }).compileToV0Message();
+      const tx = new VersionedTransaction(msg); tx.sign([kp]);
       const sig = await conn.sendTransaction(tx);
       await conn.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'confirmed');
       setTimeout(refreshSol, 1000);
