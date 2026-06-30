@@ -172,6 +172,25 @@ a{color:inherit;text-decoration:none}
   background:rgba(25,210,122,.12);border:1px solid rgba(25,210,122,.3);border-radius:999px;padding:5px 10px;flex:0 0 auto}
 .nxb-live-bar .live .nxb-dot{width:7px;height:7px;border-radius:50%;background:var(--g);box-shadow:0 0 8px var(--g);animation:nxb-pulse 1.5s ease-in-out infinite}
 
+/* ---- TRUST SECTION ---- */
+.nx-reassure{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:7px;margin:12px 0 0;
+  font-family:'JetBrains Mono','DejaVu Sans Mono',monospace;font-size:10.5px;font-weight:600;color:var(--dim)}
+.nx-reassure span{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.nx-reassure svg{width:13px;height:13px;color:var(--g);flex:0 0 auto}
+.nx-reassure .dot{color:var(--g);opacity:.5}
+.nx-trust{margin:12px 0;border-radius:16px;padding:16px 16px 14px}
+.nx-trust-h{font-family:'Space Grotesk',sans-serif;font-size:15px;font-weight:700;color:#fff;letter-spacing:-.01em;margin-bottom:13px;text-align:center}
+.nx-trust-h span{color:var(--g)}
+.nx-trust-grid{display:flex;flex-direction:column;gap:11px}
+.nx-trust-item{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:baseline}
+.nx-trust-k{font-family:'JetBrains Mono','DejaVu Sans Mono',monospace;font-size:9.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--g);white-space:nowrap;padding-top:1px}
+.nx-trust-v{font-size:12px;line-height:1.45;color:var(--dim)}
+.nx-trust-v b{color:#fff;font-weight:700}
+.nx-trust-pills{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:14px;padding-top:13px;border-top:1px solid var(--line)}
+.nx-trust-pills .lbl{font-family:'JetBrains Mono','DejaVu Sans Mono',monospace;font-size:10.5px;color:#d7cffb;font-weight:600;display:inline-flex;align-items:center;gap:5px}
+.nx-trust-pills .cross{color:#ff6b8a;font-weight:800}
+@media(max-width:420px){.nx-trust-item{grid-template-columns:1fr;gap:3px}.nx-trust-k{padding-top:0}}
+
 /* ---- STATS STRIP ---- */
 .px-stats{margin:12px 0;display:flex;border-radius:15px;overflow:hidden;border:1px solid var(--line);
   background:linear-gradient(180deg,rgba(40,31,72,.6),rgba(16,12,36,.6));backdrop-filter:blur(8px)}
@@ -728,6 +747,15 @@ main{max-width:540px;margin:0 auto;background:#fff;
     </div>
   </section>
 
+  <!-- QUICK REASSURANCE (first-screen trust) -->
+  <div class="nx-reassure">
+    <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3Z"/><path d="M9 12l2 2 4-4"/></svg>Audited routing</span>
+    <span class="dot">&middot;</span>
+    <span>Non-custodial</span>
+    <span class="dot">&middot;</span>
+    <span>Sanctions-screened</span>
+  </div>
+
   <!-- LIVE SWAP · JUPITER BADGE -->
   <div class="nxb-live-bar glass">
     <div class="jico">J</div>
@@ -735,38 +763,40 @@ main{max-width:540px;margin:0 auto;background:#fff;
     <span class="live"><span class="nxb-dot"></span>LIVE</span>
   </div>
 
-  <!-- PRICE HEADER (live data into these IDs) -->
-  <div class="px-card glass" id="nx-px-card">
-    <div class="px-top">
-      <div class="px-l">
-        <div class="px-ico" id="nx-px-ico">N</div>
-        <div>
-          <div class="px-sym" id="nx-px-sym">&mdash;</div>
-          <div class="px-name" id="nx-px-name">&mdash;</div>
-        </div>
+  <!-- TRUST SECTION (replaces the live price/stats card) -->
+  <div class="nx-trust glass">
+    <div class="nx-trust-h">Built on infrastructure <span>you can verify</span></div>
+    <div class="nx-trust-grid">
+      <div class="nx-trust-item">
+        <div class="nx-trust-k">Providers</div>
+        <div class="nx-trust-v">Swaps routed by <b>Jupiter</b>, Solana's leading DEX aggregator. Charts &amp; market data by <b>CoinGecko</b>.</div>
       </div>
-      <div class="px-r">
-        <div class="px-now" id="nx-px-now">$&mdash;.&mdash;</div>
-        <div class="px-chg muted" id="nx-px-chg">&mdash; &middot; 24H</div>
+      <div class="nx-trust-item">
+        <div class="nx-trust-k">Liquidity</div>
+        <div class="nx-trust-v">Aggregated across every major Solana DEX &mdash; Orca, Raydium, Meteora &amp; more &mdash; via Jupiter, for best-route pricing on any token.</div>
+      </div>
+      <div class="nx-trust-item">
+        <div class="nx-trust-k">Audited</div>
+        <div class="nx-trust-v">Jupiter's routing contracts are independently audited by <b>OtterSec</b> &amp; <b>Sec3</b>.</div>
+      </div>
+      <div class="nx-trust-item">
+        <div class="nx-trust-k">Compliant &amp; non-custodial</div>
+        <div class="nx-trust-v">Connecting wallets are sanctions-screened via <b>Chainalysis</b>. We never hold your keys or your funds.</div>
+      </div>
+      <div class="nx-trust-item">
+        <div class="nx-trust-k">Referrals</div>
+        <div class="nx-trust-v">Earn <b>50% of fees</b> on every pump.fun trade you refer. Expanding to all trades soon.</div>
+      </div>
+      <div class="nx-trust-item">
+        <div class="nx-trust-k">Our goal</div>
+        <div class="nx-trust-v">Make safe, self-custodial, no-KYC trading something anyone can do in seconds.</div>
       </div>
     </div>
-  </div>
-
-  <!-- FREEDOM STRIP -->
-  <div class="nx-trust-pill">
-    <span class="lbl"><span class="cross">&#10005;</span>No KYC</span>
-    <span class="sep">&middot;</span>
-    <span class="lbl"><span class="cross">&#10005;</span>No Account</span>
-    <span class="sep">&middot;</span>
-    <span class="lbl"><span class="cross">&#10005;</span>No Limits</span>
-  </div>
-
-  <!-- STATS STRIP (live data into these IDs) -->
-  <div class="px-stats" id="nx-px-stats">
-    <div class="px-stat"><div class="px-stat-lbl">Market Cap</div><div class="px-stat-val" id="nx-stat-mcap">&mdash;</div></div>
-    <div class="px-stat"><div class="px-stat-lbl">Liquidity</div><div class="px-stat-val" id="nx-stat-liq">&mdash;</div></div>
-    <div class="px-stat"><div class="px-stat-lbl">24h Volume</div><div class="px-stat-val" id="nx-stat-vol">&mdash;</div></div>
-    <div class="px-stat"><div class="px-stat-lbl">24h Trades</div><div class="px-stat-val" id="nx-stat-tx">&mdash;</div></div>
+    <div class="nx-trust-pills">
+      <span class="lbl"><span class="cross">&#10005;</span>No KYC</span>
+      <span class="lbl"><span class="cross">&#10005;</span>No Account</span>
+      <span class="lbl"><span class="cross">&#10005;</span>No Limits</span>
+    </div>
   </div>
 
   <a href="https://swap.verixiaapps.com/?tab=bridge" class="nx-bridge-link">
