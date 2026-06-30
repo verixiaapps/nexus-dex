@@ -148,3 +148,33 @@ bonk exchange
 bonk swap
 bonk token swap
 borderless crypto exchange
+borderless finance
+bridge ada to arbitrum
+bridge ada to base
+bridge ada to optimism
+bridge ada to polygon
+bridge ada to solana
+bridge any chain to aptos
+bridge any chain to arbitrum
+bridge any chain to avalanche
+bridge any chain to base
+bridge any chain to bnb
+bridge any chain to ethereum
+bridge any chain to optimism
+bridge any chain to polygon
+bridge any chain to solana
+bridge any chain to sui
+bridge any token to any chain
+bridge aptos to arbitrum
+bridge aptos to avalanche
+bridge aptos to base
+bridge aptos to bnb
+bridge aptos to ethereum
+bridge aptos to optimism
+bridge aptos to polygon
+bridge aptos to solana
+bridge aptos to sui
+bridge aptos to tron
+bridge arbitrum
+bridge arbitrum to aptos
+bridge arbitrum to avalanche
