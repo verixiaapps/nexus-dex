@@ -2998,13 +2998,13 @@ function AppInner() {
       }}>
         {tab === 'swap' && (
           <>
-            <SwapHero />
-            <LiveTokenFeeds onSwitchTab={switchTab} onOpenToken={openToken} onConnectWallet={openWallet} />
+            <HomeReferralBanner onSwitchTab={switchTab} />
             <SwapLabel />
             <div ref={swapWidgetRef}>
               <SwapWidget key={swapOutputMint || 'default'} defaultOutputMint={swapOutputMint || undefined} {...sharedProps} />
             </div>
-            <HomeReferralBanner onSwitchTab={switchTab} />
+            <SwapHero />
+            <LiveTokenFeeds onSwitchTab={switchTab} onOpenToken={openToken} onConnectWallet={openWallet} />
             <HomeBelow onSwitchTab={switchTab} walletAddress={wallet.walletAddress} onOpenToken={openToken} />
           </>
         )}
