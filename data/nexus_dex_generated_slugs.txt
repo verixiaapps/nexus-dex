@@ -487,6 +487,7 @@ convert-solana-to-mog
 convert-solana-to-near
 convert-solana-to-op
 convert-solana-to-orca
+convert-solana-to-pengu
 copy-whale-trades
 cross-border-defi
 cross-chain-analytics
