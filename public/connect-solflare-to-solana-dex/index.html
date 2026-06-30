@@ -27,7 +27,7 @@
   "url": "https://swap.verixiaapps.com/connect-solflare-to-solana-dex/",
   "name": "Trade Connect Solflare Solana on Solana — One Wallet, No",
   "description": "Buy Connect Solflare Solana on Solana through Verixia. Connect wallet, pick token, confirm. Best price across 50+ DEXes. No account, no KYC, no waiting.",
-  "dateModified": "2026-06-30T15:43:33Z",
+  "dateModified": "2026-06-30T19:34:22Z",
   "isPartOf": { "@type": "WebSite", "url": "https://verixiaapps.com/", "name": "Verixia" },
   "publisher": { "@type": "Organization", "name": "Verixia", "url": "https://verixiaapps.com/" }
 }
@@ -394,20 +394,20 @@ a{color:inherit;text-decoration:none}
 .nx-eco-lbl{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;white-space:nowrap;color:var(--ink-2)}
 
 .nx-refer-stack{display:flex;flex-direction:column;gap:10px;margin-top:24px}
-.nx-refer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 16px;border-radius:16px;border:1px solid var(--border-hi);text-decoration:none;color:var(--ink);transition:transform .15s,box-shadow .15s;position:relative;overflow:hidden}
-.nx-refer:hover{transform:translateY(-1px);box-shadow:0 10px 24px rgba(160,231,255,.20)}
-.nx-refer.swap-tier{background:linear-gradient(135deg,rgba(127,255,212,.20),rgba(160,231,255,.20),rgba(255,143,190,.20))}
-.nx-refer.pump-tier{background:linear-gradient(135deg,rgba(255,212,107,.30),rgba(255,176,136,.28),rgba(255,143,190,.20));border-color:rgba(255,176,136,.55);background-size:200% 100%;animation:nx-shimmer 7s linear infinite}
-.nx-refer.pump-tier::after{content:'NEW';position:absolute;top:10px;right:78px;font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:800;letter-spacing:.10em;background:rgba(26,27,78,0.85);color:#FFD46B;padding:2px 6px;border-radius:999px}
+.nx-refer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-radius:14px;text-decoration:none;color:#fff;background:linear-gradient(100deg,#0a0a0a,#1c1c22);box-shadow:0 10px 30px rgba(10,10,10,.22);transition:transform .15s,box-shadow .15s;position:relative;overflow:hidden}
+.nx-refer:hover{transform:translateY(-1px);box-shadow:0 14px 34px rgba(10,10,10,.30)}
+.nx-refer.swap-tier{background:linear-gradient(100deg,#0a0a0a,#1c1c22)}
+.nx-refer.pump-tier{background:linear-gradient(100deg,#0a0a0a,#1c1c22)}
+.nx-refer.pump-tier::after{display:none}
 .nx-refer-l{display:flex;flex-direction:column;gap:3px;min-width:0}
-.nx-refer-tag{font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:800;color:var(--ink-3);letter-spacing:.14em;text-transform:uppercase;margin-bottom:2px}
-.nx-refer.pump-tier .nx-refer-tag{color:#8B4F00}
-.nx-refer-l b{font-family:'Instrument Serif',serif;font-style:italic;font-size:20px;line-height:1.1;color:var(--ink);font-weight:400;letter-spacing:-0.01em}
-.nx-refer-l b em{background:linear-gradient(120deg,#A0E7FF,#FF8FBE);-webkit-background-clip:text;background-clip:text;color:transparent;font-style:italic;font-weight:600}
-.nx-refer.pump-tier .nx-refer-l b em{background:linear-gradient(120deg,#FFB088,#FF8FBE,#B794F6);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:700}
-.nx-refer-l span:not(.nx-refer-tag){font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:600;color:var(--ink-2);letter-spacing:0.06em;margin-top:2px}
-.nx-refer-r{flex-shrink:0;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;color:var(--cyan);letter-spacing:0.08em;text-transform:uppercase}
-.nx-refer.pump-tier .nx-refer-r{color:#8B4F00}
+.nx-refer-tag{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;color:#9bf5cf;letter-spacing:.14em;text-transform:uppercase;margin-bottom:2px}
+.nx-refer.pump-tier .nx-refer-tag{color:#9bf5cf}
+.nx-refer-l b{font-family:'Space Grotesk',sans-serif;font-style:normal;font-size:17px;line-height:1.2;color:#fff;font-weight:800;letter-spacing:-.01em}
+.nx-refer-l b em{font-family:'JetBrains Mono',monospace;font-style:normal;font-weight:800;color:var(--up);-webkit-text-fill-color:initial;background:none}
+.nx-refer.pump-tier .nx-refer-l b em{font-family:'JetBrains Mono',monospace;font-style:normal;font-weight:800;color:var(--up);-webkit-text-fill-color:initial;background:none}
+.nx-refer-l span:not(.nx-refer-tag){font-family:'JetBrains Mono',monospace;font-size:9.5px;font-weight:600;color:#a7a7b2;letter-spacing:.06em;margin-top:2px}
+.nx-refer-r{flex-shrink:0;font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#9bf5cf;letter-spacing:.04em;text-transform:none;white-space:nowrap}
+.nx-refer.pump-tier .nx-refer-r{color:#9bf5cf}
 
 .ai-article{padding-top:8px}
 .ai-article p{background:var(--glass-strong);backdrop-filter:blur(10px);border:1px solid var(--hairline);border-left:3px solid var(--sky);border-radius:16px;padding:16px 18px;margin-bottom:10px;font-size:14px;line-height:1.6;color:var(--ink-2);position:relative;overflow:hidden}
@@ -827,10 +827,10 @@ main{max-width:540px;margin:0 auto;background:#fff;
     <div class="section-tag">OVERVIEW</div>
     <h2 class="section-title">Why Verixia</h2>
     <p class="section-lede">DeFi on Solana means the wallet is the account, the smart contract is the only intermediary, and the network does the rest in under a second.</p>
-    <div class="ai-article" data-ai-content><p>Want to connect Solflare to Solana DEX and swap tokens fast? First, open your Solflare wallet and hit connect on Verixia’s swap interface—no account, no KYC, just wallet. Pick your token, say RAY or BONK, enter the amount, and confirm. The swap settles in about 400ms, with fees so tiny they barely register. Your new tokens land instantly in the same wallet address—no waiting, no middlemen. On mobile, the whole flow takes under 15 seconds. Easy, right?</p>
-<p>Behind the scenes, Jupiter powers every swap on Verixia. It scans over 50 Solana pools, including concentrated liquidity pools like Raydium CLMM and Orca Whirlpool, to find the best route. Big swaps split across pools to keep slippage low and output high. That means your RAY swap won’t get wrecked by thin liquidity or price jumps. Jupiter’s live routing is why Verixia crushes simple one-pool trades.</p>
-<p>This flow beats any CEX swap, especially for Solflare users. No signup, no withdrawal queues, no KYC hassle. Your tokens never leave your wallet’s control—non-custodial all the way. Plus, you avoid delays and limits. The token you swap for lands right where you started, ready to send it, bag it, or bridge ETH to Solana next. It’s pure DeFi vibes, frictionless and global.</p>
-<p>Start small or go big—Verixia handles it all. Minimum swaps cover just gas, which is fractions of a cent, so $5 and up is smooth. No max limits here. Once you’re set, check out the Wonderland tab for meme vibes or catch live signals for fresh launches. Connecting Solflare to Solana DEX has never been this slick.</p></div>
+    <div class="ai-article" data-ai-content><p>Ready to connect Solflare to Solana DEX? Start by opening your Solflare wallet and head to Verixia’s swap interface. Link your wallet with a click—no sign-up or KYC needed. Pick your token, say RAY or BONK, type the amount, and hit confirm. The swap settles in under a second, landing the new token right in your Solflare wallet. From connection to confirmation, you’re looking at around 14 seconds on mobile—fast, smooth, and hassle-free.</p>
+<p>Behind the scenes, Jupiter powers your Verixia swap. It scans over 50 Solana pools—Raydium CLMM, Orca Whirlpool, Meteora DLMM—and picks the best combo for max output. Big swaps split across pools to keep slippage low. That means your RAY purchase gets the deepest liquidity and tightest price, not just a single thin pool. Jupiter’s routing flex is why Verixia’s swaps feel so clean.</p>
+<p>This beats any CEX swap hands down. No KYC, no accounts, no waiting for withdrawal queues. Your tokens land instantly in the same Solflare address that held your input. No middleman custody, no delays. Plus, Solana’s 400ms finality and fees under a cent make every step feel frictionless. Want to bridge ETH to Solana first? Do it, then swap on Verixia—your Solflare wallet stays front and center the whole time.</p>
+<p>Swap sizes? You’re good from $5 up, thanks to tiny gas costs. No max caps, no limits holding you back. Ready to ape into a new brand token or check the Wonderland tab for fresh meme vibes? Connect Solflare to Solana DEX, pick your token, and send it—all settled in USDC, all on your terms.</p></div>
   </section>
 
   <section class="section">
@@ -845,16 +845,16 @@ main{max-width:540px;margin:0 auto;background:#fff;
   <section class="section">
     <div class="section-tag">RELATED</div>
     <h2 class="section-title"><a href="/solana-bridges/">Solana Bridges Hub</a></h2>
-    <ul class="pair-grid"><li><a href="/bridge-xrp-to-polygon/">Bridge Xrp to Polygon on Verixia</a></li>
-<li><a href="/bridge-tron-to-base/">Bridge Tron to Base on Verixia</a></li>
-<li><a href="/bridge-usdt-to-optimism/">Bridge USDT to Optimism on Verixia</a></li>
-<li><a href="/bridge-sui-to-aptos/">Bridge Sui to Aptos on Verixia</a></li>
-<li><a href="/bridge-usdt-to-base/">Bridge USDT to Base on Verixia</a></li>
-<li><a href="/bridge-eth-to-solana-and-swap/">Bridge ETH to Solana and Swap on Verixia</a></li>
-<li><a href="/bridge-avalanche-to-sui/">Bridge Avalanche to Sui on Verixia</a></li>
-<li><a href="/bridge-tron-to-ethereum/">Bridge Tron to Ethereum on Verixia</a></li>
-<li><a href="/tron-bridge-from-solana/">Tron Bridge from Solana on Verixia</a></li>
-<li><a href="/bridge-tron-to-arbitrum/">Bridge Tron to Arbitrum on Verixia</a></li>
+    <ul class="pair-grid"><li><a href="/anonymous-bridge-crypto/">Anonymous Bridge Crypto on Verixia</a></li>
+<li><a href="/aptos-bridge-from-solana/">Aptos Bridge from Solana on Verixia</a></li>
+<li><a href="/arbitrum-bridge-from-solana/">Arbitrum Bridge from Solana on Verixia</a></li>
+<li><a href="/arbitrum-to-solana/">Arbitrum to Solana on Verixia</a></li>
+<li><a href="/avalanche-bridge-from-solana/">Avalanche Bridge from Solana on Verixia</a></li>
+<li><a href="/avalanche-to-solana/">Avalanche to Solana on Verixia</a></li>
+<li><a href="/base-bridge-from-solana/">Base Bridge from Solana on Verixia</a></li>
+<li><a href="/base-to-solana/">Base to Solana on Verixia</a></li>
+<li><a href="/best-bridge-for-solana/">Best Bridge for Solana</a></li>
+<li><a href="/best-cross-chain-bridge/">Best Cross Chain Bridge</a></li>
 </ul>
   </section>
 

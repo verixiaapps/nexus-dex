@@ -27,7 +27,7 @@
   "url": "https://swap.verixiaapps.com/convert-solana-to-bonk/",
   "name": "BONK on Solana — Ape on Verixia Wonderland",
   "description": "Ape BONK on Verixia Wonderland — Solana memes, Jupiter routing, one tap. No KYC. No accounts. No limits.",
-  "dateModified": "2026-06-30T15:48:04Z",
+  "dateModified": "2026-06-30T19:37:01Z",
   "isPartOf": { "@type": "WebSite", "url": "https://verixiaapps.com/", "name": "Verixia" },
   "publisher": { "@type": "Organization", "name": "Verixia", "url": "https://verixiaapps.com/" }
 }
@@ -394,20 +394,20 @@ a{color:inherit;text-decoration:none}
 .nx-eco-lbl{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;white-space:nowrap;color:var(--ink-2)}
 
 .nx-refer-stack{display:flex;flex-direction:column;gap:10px;margin-top:24px}
-.nx-refer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 16px;border-radius:16px;border:1px solid var(--border-hi);text-decoration:none;color:var(--ink);transition:transform .15s,box-shadow .15s;position:relative;overflow:hidden}
-.nx-refer:hover{transform:translateY(-1px);box-shadow:0 10px 24px rgba(160,231,255,.20)}
-.nx-refer.swap-tier{background:linear-gradient(135deg,rgba(127,255,212,.20),rgba(160,231,255,.20),rgba(255,143,190,.20))}
-.nx-refer.pump-tier{background:linear-gradient(135deg,rgba(255,212,107,.30),rgba(255,176,136,.28),rgba(255,143,190,.20));border-color:rgba(255,176,136,.55);background-size:200% 100%;animation:nx-shimmer 7s linear infinite}
-.nx-refer.pump-tier::after{content:'NEW';position:absolute;top:10px;right:78px;font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:800;letter-spacing:.10em;background:rgba(26,27,78,0.85);color:#FFD46B;padding:2px 6px;border-radius:999px}
+.nx-refer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-radius:14px;text-decoration:none;color:#fff;background:linear-gradient(100deg,#0a0a0a,#1c1c22);box-shadow:0 10px 30px rgba(10,10,10,.22);transition:transform .15s,box-shadow .15s;position:relative;overflow:hidden}
+.nx-refer:hover{transform:translateY(-1px);box-shadow:0 14px 34px rgba(10,10,10,.30)}
+.nx-refer.swap-tier{background:linear-gradient(100deg,#0a0a0a,#1c1c22)}
+.nx-refer.pump-tier{background:linear-gradient(100deg,#0a0a0a,#1c1c22)}
+.nx-refer.pump-tier::after{display:none}
 .nx-refer-l{display:flex;flex-direction:column;gap:3px;min-width:0}
-.nx-refer-tag{font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:800;color:var(--ink-3);letter-spacing:.14em;text-transform:uppercase;margin-bottom:2px}
-.nx-refer.pump-tier .nx-refer-tag{color:#8B4F00}
-.nx-refer-l b{font-family:'Instrument Serif',serif;font-style:italic;font-size:20px;line-height:1.1;color:var(--ink);font-weight:400;letter-spacing:-0.01em}
-.nx-refer-l b em{background:linear-gradient(120deg,#A0E7FF,#FF8FBE);-webkit-background-clip:text;background-clip:text;color:transparent;font-style:italic;font-weight:600}
-.nx-refer.pump-tier .nx-refer-l b em{background:linear-gradient(120deg,#FFB088,#FF8FBE,#B794F6);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:700}
-.nx-refer-l span:not(.nx-refer-tag){font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:600;color:var(--ink-2);letter-spacing:0.06em;margin-top:2px}
-.nx-refer-r{flex-shrink:0;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;color:var(--cyan);letter-spacing:0.08em;text-transform:uppercase}
-.nx-refer.pump-tier .nx-refer-r{color:#8B4F00}
+.nx-refer-tag{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;color:#9bf5cf;letter-spacing:.14em;text-transform:uppercase;margin-bottom:2px}
+.nx-refer.pump-tier .nx-refer-tag{color:#9bf5cf}
+.nx-refer-l b{font-family:'Space Grotesk',sans-serif;font-style:normal;font-size:17px;line-height:1.2;color:#fff;font-weight:800;letter-spacing:-.01em}
+.nx-refer-l b em{font-family:'JetBrains Mono',monospace;font-style:normal;font-weight:800;color:var(--up);-webkit-text-fill-color:initial;background:none}
+.nx-refer.pump-tier .nx-refer-l b em{font-family:'JetBrains Mono',monospace;font-style:normal;font-weight:800;color:var(--up);-webkit-text-fill-color:initial;background:none}
+.nx-refer-l span:not(.nx-refer-tag){font-family:'JetBrains Mono',monospace;font-size:9.5px;font-weight:600;color:#a7a7b2;letter-spacing:.06em;margin-top:2px}
+.nx-refer-r{flex-shrink:0;font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#9bf5cf;letter-spacing:.04em;text-transform:none;white-space:nowrap}
+.nx-refer.pump-tier .nx-refer-r{color:#9bf5cf}
 
 .ai-article{padding-top:8px}
 .ai-article p{background:var(--glass-strong);backdrop-filter:blur(10px);border:1px solid var(--hairline);border-left:3px solid var(--sky);border-radius:16px;padding:16px 18px;margin-bottom:10px;font-size:14px;line-height:1.6;color:var(--ink-2);position:relative;overflow:hidden}
@@ -827,9 +827,9 @@ main{max-width:540px;margin:0 auto;background:#fff;
     <div class="section-tag">OVERVIEW</div>
     <h2 class="section-title">Why Verixia</h2>
     <p class="section-lede">DeFi on Solana means the wallet is the account, the smart contract is the only intermediary, and the network does the rest in under a second.</p>
-    <div class="ai-article" data-ai-content><p>BONK’s the OG Solana dog meme that never quits. Deep pools, heavy 24/7 volume, and a vibe that keeps apes coming back for more. Convert Solana to BONK and you’re tapping into a meme with serious juice—right now, BONK trades at about $4.09e-6, moving fast and wild like any true meme token should.</p>
-<p>Ape on BONK through Verixia Wonderland—mobile-first, one tap, no KYC, no accounts. Connect Phantom or Solflare, pick BONK, and convert SOL with sub-cent fees and lightning-fast 400ms blocks. A $5K ape in BONK routes through Raydium and Meteora with just 0.4% impact. That’s deep liquidity for a meme, letting mid-size apes fill bags without getting wrecked by slippage. Plus, Verixia’s Jupiter routing finds the best pools instantly, even for fresh launches.</p>
-<p>Memes move fast. BONK’s daily swings hit 10-25%, so only ape what you can lose. Self-custody means you’re in control—moon or dump, you decide when to exit. Solana’s speed and cheap gas make meme trading actually fun, not a money sink. Catch fresh BONK vibes in Wonderland, and while you’re at it, check live signals and trending Solana tokens for the next big ape. Wanna go bigger? bridge ETH to Solana and send it all into the meme game.</p></div>
+    <div class="ai-article" data-ai-content><p>BONK is the OG Solana dog meme token with serious volume and deep pools. You want to convert Solana to BONK? Easy. BONK moves fast—like $4.14e-6 fast—and the vibe is pure degen energy. It’s the kind of meme that keeps Wonderland buzzing with fresh launches and hot action.</p>
+<p>Ape on BONK through Verixia Wonderland for the smoothest experience. Connect your Phantom or Solflare wallet, tap a few buttons, and your SOL converts to BONK in seconds. Verixia routes your $5K ape across Raydium and Meteora with just 0.4% impact—no slippage drama. That’s thanks to Jupiter aggregator pulling the deepest liquidity from multiple pools, so you get the best price without sweating gas fees or delays.</p>
+<p>Memes like BONK are wild—expect 10-25% daily swings. They moon hard, dump fast, and sometimes rug. You control your keys, you choose when to exit. Solana’s 400ms blocks and sub-cent fees make sending it on memes actually viable. No KYC, no accounts, just pure Solana vibes. Want to bridge ETH to Solana first? Do it quick and then ape BONK with zero hassle. Keep an eye on live signals for trending Solana tokens and catch the next wave before it hits Wonderland.</p></div>
   </section>
 
   <section class="section">
@@ -844,28 +844,28 @@ main{max-width:540px;margin:0 auto;background:#fff;
   <section class="section">
     <div class="section-tag">RELATED</div>
     <h2 class="section-title"><a href="/wonderland-memes/">Wonderland Memes Hub</a></h2>
-    <ul class="pair-grid"><li><a href="/meme-coin-bridge/">Meme Coin Bridge on Verixia</a></li>
-<li><a href="/swap-mew-for-hnt-solana/">Swap MEW for Hnt Solana on Verixia</a></li>
-<li><a href="/swap-kmno-for-pnut-solana/">Swap Kmno for PNUT Solana on Verixia</a></li>
-<li><a href="/pepe-exchange/">PEPE Exchange on Verixia</a></li>
-<li><a href="/swap-wif-for-pyth-solana/">Swap WIF for PYTH Solana on Verixia</a></li>
-<li><a href="/swap-mew-for-wen-solana/">Swap MEW for WEN Solana on Verixia</a></li>
-<li><a href="/why-is-pnut-swap-slow/">Why Is PNUT Swap Slow?</a></li>
-<li><a href="/swap-pnut-on-solana/">Swap PNUT on Solana on Verixia</a></li>
-<li><a href="/swap-pyth-for-pengu-solana/">Swap PYTH for PENGU Solana on Verixia</a></li>
-<li><a href="/swap-popcat-for-jitosol-solana/">Swap POPCAT for Jitosol Solana on Verixia</a></li>
+    <ul class="pair-grid"><li><a href="/best-meme-coin-dex/">Best Meme Coin DEX</a></li>
+<li><a href="/best-meme-coin-exchange/">Best Meme Coin Exchange</a></li>
+<li><a href="/best-meme-coin-swap/">Best Meme Coin Swap</a></li>
+<li><a href="/best-route-ai16z-to-bonk/">Best Route ai16z to BONK</a></li>
+<li><a href="/best-route-bonk-to-wif/">Best Route BONK to WIF</a></li>
+<li><a href="/best-route-drift-to-bonk/">Best Route Drift to BONK</a></li>
+<li><a href="/best-route-fartcoin-to-bonk/">Best Route FARTCOIN to BONK</a></li>
+<li><a href="/best-route-jito-to-bonk/">Best Route Jito to BONK</a></li>
+<li><a href="/best-route-jupiter-to-bonk/">Best Route Jupiter to BONK</a></li>
+<li><a href="/best-route-popcat-to-bonk/">Best Route POPCAT to BONK</a></li>
 </ul>
   </section>
 
   <section class="section">
     <div class="section-tag">MORE</div>
     <h2 class="section-title">Related <span class="grad">searches</span></h2>
-    <ul class="related-links"><li><a href="/swap-sol-to-bonk-solana/">Swap SOL to BONK Solana on Verixia</a></li>
+    <ul class="related-links"><li><a href="/convert-solana-to-fartcoin/">Convert Solana to FARTCOIN on Verixia</a></li>
+<li><a href="/convert-solana-to-pengu/">Convert Solana to PENGU on Verixia</a></li>
+<li><a href="/swap-sol-to-bonk-solana/">Swap SOL to BONK Solana on Verixia</a></li>
 <li><a href="/swap-usdc-to-bonk-solana/">Swap USDC to BONK Solana on Verixia</a></li>
 <li><a href="/swap-usdt-to-bonk-solana/">Swap USDT to BONK Solana on Verixia</a></li>
 <li><a href="/what-fee-to-swap-bonk-on-solana/">What Fee to Swap BONK on Solana?</a></li>
-<li><a href="/buy-bonk-with-solana/">Buy BONK with Solana on Verixia</a></li>
-<li><a href="/trade-solana-for-bonk/">Trade Solana for BONK on Verixia</a></li>
 </ul>
   </section>
 
@@ -2391,7 +2391,7 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
 })();
 </script>
 
-<script id="page-meta">window.__pageMeta = {"title":"BONK on Solana — Ape on Verixia Wonderland","description":"Ape BONK on Verixia Wonderland — Solana memes, Jupiter routing, one tap. No KYC. No accounts. No limits.","h1":"BONK — Ape on Wonderland","intro":"BONK on Verixia Wonderland. Jupiter-routed, one tap, no account. Memes are volatile — only ape what you can lose.","contentHeading":"Aping BONK on Wonderland","contentBridge":"Hub: Wonderland Memes","breadcrumb":"Convert Solana TO BONK","intent":"meme_token","subIntent":"BONK","framingName":"meme_story_lead","subject":"BONK","faq":[{"q":"Do I need an account?","a":"No. Verixia is DeFi. Connect a Solana wallet and ape. No email, no KYC, no sign-up."},{"q":"How volatile are memes?","a":"Very. 20-100% moves in a day are normal for fresh launches. Established memes (WIF, BONK, POPCAT) are still meme-volatile but with deeper pools. Only ape what you can lose."},{"q":"How do I buy BONK?","a":"Connect Phantom or Solflare, open Wonderland, tap BONK, hit Buy. Jupiter routes the trade through the deepest pools. Token lands in your wallet ready to sell whenever."},{"q":"Is this a rug?","a":"We can't promise any meme is safe. They moon, they dump, they sometimes rug. Verixia is non-custodial — you decide what to ape and when to exit. Only ape what you can lose."}],"recognitionChips":[{"l":"Wonderland tab","c":"All Solana memes in one feed. Live prices, one-tap ape."},{"l":"Fresh launches","c":"New SPL tokens become tradable the moment their pool registers on-chain. No listing review."},{"l":"Volatile by design","c":"Memes moon and dump. Only ape what you can lose. Self-custody means you exit when you decide."},{"l":"Sub-cent gas","c":"Solana fees make small ape sizes actually viable. $30 ape costs $30, not $30 plus $40 in gas."}],"supplementaryHeading":"Why Verixia","supplementaryIntro":"DeFi on Solana means the wallet is the account, the smart contract is the only intermediary, and the network does the rest in under a second.","supplementaryCards":[{"i":"⚡","title":"All Solana","body":"400ms blocks, sub-cent fees, no congestion. A $20 swap and a $20K swap settle the same way."},{"i":"🔑","title":"Your keys, your coins","body":"Non-custodial. The smart contract routes the swap directly between your wallet and the pool. Verixia never holds your funds."},{"i":"🌍","title":"Global DeFi","body":"No KYC, no accounts, no limits. Connect a wallet and you're in. Same product everywhere."}],"pageSignals":{"aggregateRatingJson":"{}"},"jitter":{"blockTimeMs":395,"dexCount":56,"walletsToday":8844,"swapsToday":43211,"aggImprovement":0.17,"settlementMs":381},"observations":["Live Bonk on Solana: $0.00000409.","Live Bonk on Solana via Jupiter (verified, deepest pool): $0.000004094, -3.28% 24h, $1.10M liquidity, $585.0K 24h volume, $360.25M market cap, 1,003,426 holders."]};</script>
+<script id="page-meta">window.__pageMeta = {"title":"BONK on Solana — Ape on Verixia Wonderland","description":"Ape BONK on Verixia Wonderland — Solana memes, Jupiter routing, one tap. No KYC. No accounts. No limits.","h1":"BONK — Ape on Wonderland","intro":"BONK on Verixia Wonderland. Jupiter-routed, one tap, no account. Memes are volatile — only ape what you can lose.","contentHeading":"Aping BONK on Wonderland","contentBridge":"Hub: Wonderland Memes","breadcrumb":"Convert Solana TO BONK","intent":"meme_token","subIntent":"BONK","framingName":"meme_story_lead","subject":"BONK","faq":[{"q":"Do I need an account?","a":"No. Verixia is DeFi. Connect a Solana wallet and ape. No email, no KYC, no sign-up."},{"q":"How volatile are memes?","a":"Very. 20-100% moves in a day are normal for fresh launches. Established memes (WIF, BONK, POPCAT) are still meme-volatile but with deeper pools. Only ape what you can lose."},{"q":"How do I buy BONK?","a":"Connect Phantom or Solflare, open Wonderland, tap BONK, hit Buy. Jupiter routes the trade through the deepest pools. Token lands in your wallet ready to sell whenever."},{"q":"Is this a rug?","a":"We can't promise any meme is safe. They moon, they dump, they sometimes rug. Verixia is non-custodial — you decide what to ape and when to exit. Only ape what you can lose."}],"recognitionChips":[{"l":"Wonderland tab","c":"All Solana memes in one feed. Live prices, one-tap ape."},{"l":"Fresh launches","c":"New SPL tokens become tradable the moment their pool registers on-chain. No listing review."},{"l":"Volatile by design","c":"Memes moon and dump. Only ape what you can lose. Self-custody means you exit when you decide."},{"l":"Sub-cent gas","c":"Solana fees make small ape sizes actually viable. $30 ape costs $30, not $30 plus $40 in gas."}],"supplementaryHeading":"Why Verixia","supplementaryIntro":"DeFi on Solana means the wallet is the account, the smart contract is the only intermediary, and the network does the rest in under a second.","supplementaryCards":[{"i":"⚡","title":"All Solana","body":"400ms blocks, sub-cent fees, no congestion. A $20 swap and a $20K swap settle the same way."},{"i":"🔑","title":"Your keys, your coins","body":"Non-custodial. The smart contract routes the swap directly between your wallet and the pool. Verixia never holds your funds."},{"i":"🌍","title":"Global DeFi","body":"No KYC, no accounts, no limits. Connect a wallet and you're in. Same product everywhere."}],"pageSignals":{"aggregateRatingJson":"{}"},"jitter":{"blockTimeMs":395,"dexCount":56,"walletsToday":8844,"swapsToday":43211,"aggImprovement":0.17,"settlementMs":381},"observations":["Live Bonk on Solana: $0.00000414.","Live Bonk on Solana via Jupiter (verified, deepest pool): $0.000004139, -4.90% 24h, $1.11M liquidity, $454.7K 24h volume, $364.22M market cap, 1,003,584 holders."]};</script>
 </body>
 </html>
  
