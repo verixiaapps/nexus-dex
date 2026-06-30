@@ -27,7 +27,7 @@
   "url": "https://swap.verixiaapps.com/buy-usdc-with-solana/",
   "name": "Buy USDC With Solana — Solana-Native DeFi | Verixia",
   "description": "Buy USDC With Solana on Verixia. No KYC. No accounts. No limits. Non-custodial. Global DeFi on Solana.",
-  "dateModified": "2026-06-30T15:35:17Z",
+  "dateModified": "2026-06-30T19:23:02Z",
   "isPartOf": { "@type": "WebSite", "url": "https://verixiaapps.com/", "name": "Verixia" },
   "publisher": { "@type": "Organization", "name": "Verixia", "url": "https://verixiaapps.com/" }
 }
@@ -394,20 +394,20 @@ a{color:inherit;text-decoration:none}
 .nx-eco-lbl{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;white-space:nowrap;color:var(--ink-2)}
 
 .nx-refer-stack{display:flex;flex-direction:column;gap:10px;margin-top:24px}
-.nx-refer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 16px;border-radius:16px;border:1px solid var(--border-hi);text-decoration:none;color:var(--ink);transition:transform .15s,box-shadow .15s;position:relative;overflow:hidden}
-.nx-refer:hover{transform:translateY(-1px);box-shadow:0 10px 24px rgba(160,231,255,.20)}
-.nx-refer.swap-tier{background:linear-gradient(135deg,rgba(127,255,212,.20),rgba(160,231,255,.20),rgba(255,143,190,.20))}
-.nx-refer.pump-tier{background:linear-gradient(135deg,rgba(255,212,107,.30),rgba(255,176,136,.28),rgba(255,143,190,.20));border-color:rgba(255,176,136,.55);background-size:200% 100%;animation:nx-shimmer 7s linear infinite}
-.nx-refer.pump-tier::after{content:'NEW';position:absolute;top:10px;right:78px;font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:800;letter-spacing:.10em;background:rgba(26,27,78,0.85);color:#FFD46B;padding:2px 6px;border-radius:999px}
+.nx-refer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-radius:14px;text-decoration:none;color:#fff;background:linear-gradient(100deg,#0a0a0a,#1c1c22);box-shadow:0 10px 30px rgba(10,10,10,.22);transition:transform .15s,box-shadow .15s;position:relative;overflow:hidden}
+.nx-refer:hover{transform:translateY(-1px);box-shadow:0 14px 34px rgba(10,10,10,.30)}
+.nx-refer.swap-tier{background:linear-gradient(100deg,#0a0a0a,#1c1c22)}
+.nx-refer.pump-tier{background:linear-gradient(100deg,#0a0a0a,#1c1c22)}
+.nx-refer.pump-tier::after{display:none}
 .nx-refer-l{display:flex;flex-direction:column;gap:3px;min-width:0}
-.nx-refer-tag{font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:800;color:var(--ink-3);letter-spacing:.14em;text-transform:uppercase;margin-bottom:2px}
-.nx-refer.pump-tier .nx-refer-tag{color:#8B4F00}
-.nx-refer-l b{font-family:'Instrument Serif',serif;font-style:italic;font-size:20px;line-height:1.1;color:var(--ink);font-weight:400;letter-spacing:-0.01em}
-.nx-refer-l b em{background:linear-gradient(120deg,#A0E7FF,#FF8FBE);-webkit-background-clip:text;background-clip:text;color:transparent;font-style:italic;font-weight:600}
-.nx-refer.pump-tier .nx-refer-l b em{background:linear-gradient(120deg,#FFB088,#FF8FBE,#B794F6);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:700}
-.nx-refer-l span:not(.nx-refer-tag){font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:600;color:var(--ink-2);letter-spacing:0.06em;margin-top:2px}
-.nx-refer-r{flex-shrink:0;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;color:var(--cyan);letter-spacing:0.08em;text-transform:uppercase}
-.nx-refer.pump-tier .nx-refer-r{color:#8B4F00}
+.nx-refer-tag{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;color:#9bf5cf;letter-spacing:.14em;text-transform:uppercase;margin-bottom:2px}
+.nx-refer.pump-tier .nx-refer-tag{color:#9bf5cf}
+.nx-refer-l b{font-family:'Space Grotesk',sans-serif;font-style:normal;font-size:17px;line-height:1.2;color:#fff;font-weight:800;letter-spacing:-.01em}
+.nx-refer-l b em{font-family:'JetBrains Mono',monospace;font-style:normal;font-weight:800;color:var(--up);-webkit-text-fill-color:initial;background:none}
+.nx-refer.pump-tier .nx-refer-l b em{font-family:'JetBrains Mono',monospace;font-style:normal;font-weight:800;color:var(--up);-webkit-text-fill-color:initial;background:none}
+.nx-refer-l span:not(.nx-refer-tag){font-family:'JetBrains Mono',monospace;font-size:9.5px;font-weight:600;color:#a7a7b2;letter-spacing:.06em;margin-top:2px}
+.nx-refer-r{flex-shrink:0;font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#9bf5cf;letter-spacing:.04em;text-transform:none;white-space:nowrap}
+.nx-refer.pump-tier .nx-refer-r{color:#9bf5cf}
 
 .ai-article{padding-top:8px}
 .ai-article p{background:var(--glass-strong);backdrop-filter:blur(10px);border:1px solid var(--hairline);border-left:3px solid var(--sky);border-radius:16px;padding:16px 18px;margin-bottom:10px;font-size:14px;line-height:1.6;color:var(--ink-2);position:relative;overflow:hidden}
@@ -827,10 +827,10 @@ main{max-width:540px;margin:0 auto;background:#fff;
     <div class="section-tag">OVERVIEW</div>
     <h2 class="section-title">Why Verixia</h2>
     <p class="section-lede">DeFi on Solana means the wallet is the account, the smart contract is the only intermediary, and the network does the rest in under a second.</p>
-    <div class="ai-article" data-ai-content><p>Want to buy USDC with Solana? It’s lightning-fast and dead simple on Verixia. No sign-ups, no KYC—just connect your wallet and you’re set. Solana settles transactions in 400ms with fees so low you barely notice. Your swap happens directly between your wallet and the liquidity pool, no middlemen holding your coins.</p>
-<p>Verixia taps into Jupiter’s routing across 50+ Solana DEXes to get you the best price when you swap on Solana. That means your SOL to USDC trade gets filled efficiently, with minimal slippage. On Phantom mobile, it takes about 9 seconds to connect, 2 seconds to quote, and 1 second to confirm. Done and dusted in under a dozen seconds.</p>
-<p>No limits hold you back. You can swap any amount of SOL for USDC, from a tiny gas fee minimum to as much as you want. Plus, your same wallet powers every Verixia product—whether you want to bridge to Solana, explore brand tokens, or check out trending Wonderland memes for some DeFi vibes. One wallet, endless moves.</p>
-<p>Ready to send it? Connect your wallet now and swap on Solana with Verixia. No accounts, no headaches, just pure DeFi freedom. Whether you’re loading up USDC for stable spending or diversifying your bag, Verixia keeps it smooth and simple every step of the way.</p></div>
+    <div class="ai-article" data-ai-content><p>Want to buy USDC with Solana fast and frictionless? Verixia makes it happen in seconds with zero sign-up. Just connect your Phantom wallet—no KYC, no accounts, no waiting. Solana’s lightning-fast 400ms finality means your swap on Solana settles before you blink, and fees barely register.</p>
+<p>The secret sauce? Jupiter routing. Every swap routes through 50+ Solana DEXes to snag the best price and lowest slippage. When you buy USDC with Solana here, the smart contract handles everything non-custodially—your funds never leave your wallet except to hit the pool. Phantom mobile connection takes 9 seconds; quote pops up in 2; confirm in 1. Done and dusted.</p>
+<p>Your Phantom wallet is your gateway to all Verixia vibes. Use the same wallet to swap on Solana, bridge to Solana from 69 chains, or dive into the Wonderland tab for trending Solana memes. No limits hold you back—swap tiny fractions or massive bags with zero caps and no freezes. Global DeFi means you’re always plugged in.</p>
+<p>Ready to send it? Buy USDC with Solana now and power your DeFi moves. Whether you’re gearing up for brand tokens or just stacking stablecoin, Verixia keeps it simple, fast, and cheap. Connect your wallet and swap on Solana in a flash—your USDC bag is waiting.</p></div>
   </section>
 
   <section class="section">
@@ -844,16 +844,16 @@ main{max-width:540px;margin:0 auto;background:#fff;
   <section class="section">
     <div class="section-tag">RELATED</div>
     <h2 class="section-title"><a href="/solana-swaps/">Solana Swaps Hub</a></h2>
-    <ul class="pair-grid"><li><a href="/swap-usdt-to-jto-solana/">Swap USDT to JTO Solana on Verixia</a></li>
-<li><a href="/best-route-near-swap/">Best Route Near Swap</a></li>
-<li><a href="/lowest-fee-link-swap/">Lowest Fee Link Swap on Verixia</a></li>
-<li><a href="/swap-usdt-to-samo-solana/">Swap USDT to Samo Solana on Verixia</a></li>
-<li><a href="/swap-ray-to-kmno/">Swap RAY to Kmno on Verixia</a></li>
-<li><a href="/swap-crypto-without-login/">Swap Crypto Without Login on Verixia</a></li>
-<li><a href="/swap-solana-to-bitcoin/">Swap Solana to Bitcoin on Verixia</a></li>
-<li><a href="/swap-sol-for-wen-solana/">Swap SOL for WEN Solana on Verixia</a></li>
-<li><a href="/why-did-my-render-swap-fail/">Why Did My Render Swap Fail?</a></li>
-<li><a href="/swap-sol-for-pyth-solana/">Swap SOL for PYTH Solana on Verixia</a></li>
+    <ul class="pair-grid"><li><a href="/aave-swap/">Aave Swap on Verixia</a></li>
+<li><a href="/ai16z-swap/">ai16z Swap on Verixia</a></li>
+<li><a href="/altcoin-swap/">Altcoin Swap on Verixia</a></li>
+<li><a href="/amazon-token-swap/">Amazon Token Swap on Verixia</a></li>
+<li><a href="/apple-token-swap/">Apple Token Swap on Verixia</a></li>
+<li><a href="/aptos-network-swap/">Aptos Network Swap on Verixia</a></li>
+<li><a href="/arbitrum-network-swap/">Arbitrum Network Swap on Verixia</a></li>
+<li><a href="/atlas-solana-dex-swap/">Atlas Solana DEX Swap on Verixia</a></li>
+<li><a href="/avalanche-network-swap/">Avalanche Network Swap on Verixia</a></li>
+<li><a href="/ban-solana-dex-swap/">Ban Solana DEX Swap on Verixia</a></li>
 </ul>
   </section>
 
