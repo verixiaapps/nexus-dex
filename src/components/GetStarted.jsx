@@ -17,7 +17,7 @@
 //     dRPC; DRPC_RPC_URL env var — no fallbacks) + parallel Jupiter meta
 //     (/api/jupiter/tokens/search) + Jupiter prices (direct lite-api.jup.ag,
 //     CSP-permitted).
-//   • xStock prices: one direct call to lite-api.jup.ag/price/v3 on mount.
+//   • xStock prices: one call to /api/jupiter/price (server proxy) on mount.
 //   • Manual refresh only. No polling.
 //   • SOL always shows. Other tokens need ≥ MIN_TOKEN_VALUE_USD ($1).
 //
@@ -629,7 +629,7 @@ async function fetchPricesBatched(mints) {
  for (let i = 0; i < mints.length; i += 100) chunks.push(mints.slice(i, i + 100));
  const results = await Promise.all(chunks.map(async (chunk) => {
    try {
-     const r = await fetch(`https://lite-api.jup.ag/price/v3?ids=${chunk.join(',')}`);
+     const r = await fetch(`/api/jupiter/price?ids=${chunk.join(',')}`);
      if (!r.ok) return {};
      return await r.json();
    } catch { return {}; }
@@ -646,7 +646,7 @@ async function fetchPricesBatched(mints) {
 async function fetchXStockPrices() {
  const mints = XSTOCKS_FEATURED.map(s => s.mint);
  try {
-   const r = await fetch(`https://lite-api.jup.ag/price/v3?ids=${mints.join(',')}`);
+   const r = await fetch(`/api/jupiter/price?ids=${mints.join(',')}`);
    if (!r.ok) return {};
    const data = await r.json();
    const out = {};
