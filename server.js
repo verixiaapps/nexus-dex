@@ -371,9 +371,42 @@ const _LR_PF_CACHE_MS = 30_000;
 const _lrPfCache  = new Map();
 let   _lrPfLogged = false;
 
+// pump.fun's Cloudflare periodically 530s / rate-limits our server IP. The
+// original code cached only SUCCESSES, so during a 530 window every enrichment
+// re-hit pump.fun (burning a 6s timeout each) and prolonged the block. These add
+// (1) negative-caching of failures for a short window, and (2) a circuit breaker
+// that briefly pauses ALL pump.fun calls after a burst of failures — so the IP
+// can recover. Success behaviour is unchanged. Entries live in the same _capMap'd
+// _lrPfCache, so this stays memory-bounded.
+const _LR_PF_FAIL_TTL_MS = 45_000;   // skip re-hitting a failed mint for 45s
+const _LR_PF_BREAKER_MS  = 60_000;   // after a burst, pause pump.fun for 60s
+const _LR_PF_FAIL_BURST  = 8;        // failures within the window to trip breaker
+const _LR_PF_FAIL_WINDOW = 20_000;   // rolling failure window
+let   _lrPfBreakerUntil  = 0;
+const _lrPfFailAt        = [];
+function _lrPfNoteFail(mint) {
+  const now = Date.now();
+  if (mint) { _lrPfCache.set(mint, { failed: true, ts: now }); _capMap(_lrPfCache, _LR_PF_CACHE_MAX); }
+  _lrPfFailAt.push(now);
+  const cut = now - _LR_PF_FAIL_WINDOW;
+  while (_lrPfFailAt.length && _lrPfFailAt[0] < cut) _lrPfFailAt.shift();
+  if (_lrPfFailAt.length >= _LR_PF_FAIL_BURST) {
+    _lrPfBreakerUntil = now + _LR_PF_BREAKER_MS;
+    _lrPfFailAt.length = 0;
+    if (!_lrPfLogged) { _lrPfLogged = true; }
+    console.warn('[lr-pf] circuit breaker OPEN — pausing pump.fun calls for', _LR_PF_BREAKER_MS / 1000, 's');
+  }
+}
+
 async function _lrFetchPumpInfo(mint, solPriceUsd) {
+  const now = Date.now();
+  // Circuit open → don't touch pump.fun at all; let callers use their fallbacks.
+  if (now < _lrPfBreakerUntil) return null;
   const hit = _lrPfCache.get(mint);
-  if (hit && Date.now() - hit.ts < _LR_PF_CACHE_MS) return hit;
+  if (hit) {
+    if (hit.failed) { if (now - hit.ts < _LR_PF_FAIL_TTL_MS) return null; }
+    else if (now - hit.ts < _LR_PF_CACHE_MS) return hit;
+  }
   try {
     const r = await fetchWithTimeout(
       _LR_PF_BASE + '/' + encodeURIComponent(mint),
@@ -385,6 +418,7 @@ async function _lrFetchPumpInfo(mint, solPriceUsd) {
         _lrPfLogged = true;
         console.warn('[lr-pf] non-OK from pump.fun:', r.status, '(likely Cloudflare / rate limit)');
       }
+      _lrPfNoteFail(mint);
       return null;
     }
     const d = await r.json();
@@ -393,6 +427,7 @@ async function _lrFetchPumpInfo(mint, solPriceUsd) {
         _lrPfLogged = true;
         console.warn('[lr-pf] mint mismatch — expected', mint, 'got', d?.mint);
       }
+      _lrPfNoteFail(mint);
       return null;
     }
     if (!_lrPfLogged) {
@@ -438,6 +473,7 @@ async function _lrFetchPumpInfo(mint, solPriceUsd) {
       _lrPfLogged = true;
       console.warn('[lr-pf] fetch failed:', e?.message);
     }
+    _lrPfNoteFail(mint);
     return null;
   }
 }
