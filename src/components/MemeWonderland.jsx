@@ -525,6 +525,10 @@ const SOL_MINT   = 'So11111111111111111111111111111111111111112';
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
 const FEE_BPS    = 300; // 3% total fee taken from input
 const SLIPPAGE_BPS = 500;
+// Identify pump.fun bonding-curve tokens by dexId (copied from server.js /
+// App.jsx). Used to route buys/sells: pump tokens → PumpPortal pump path,
+// everything else (graduated / normal SPL) → Jupiter.
+const PUMP_DEX_IDS = new Set(['pumpfun', 'pumpswap']);
 
 // ── RPC ──────────────────────────────────────────────────────────────
 // Same-origin server proxy → Alchemy mainnet. The server (server.js)
@@ -2360,6 +2364,13 @@ function TradeSheet({
   const inputSymbol  = isSell ? token.sym : 'SOL';
   const outputSymbol = isSell ? 'SOL' : token.sym;
 
+  // Route by token type: pump.fun bonding-curve → PumpPortal pump path;
+  // everything else (graduated / normal SPL) → Jupiter. Same identification
+  // the rest of the app uses (explicit route tag, else dexId).
+  const isPump = token.route
+    ? token.route === 'pump'
+    : PUMP_DEX_IDS.has(String(token.dexId || '').toLowerCase());
+
   const inputBalance = balances[inputMint];
   const inputBalStatus = balStateFor ? balStateFor(inputMint) : 'idle';
   const balanceKnown = inputBalStatus === 'ok';
@@ -2391,7 +2402,7 @@ function TradeSheet({
   const quoteAbortRef = useRef(null);
 
   useEffect(() => {
-    if (!rawAmount || inputMint === outputMint) {
+    if (!rawAmount || inputMint === outputMint || isPump) {
       setBuild(null);
       setQuoteError(null);
       return;
@@ -2443,18 +2454,25 @@ function TradeSheet({
     }, 350);
 
     return () => { clearTimeout(t); ac.abort(); };
-  }, [rawAmount, inputMint, outputMint, wallet.publicKey]);
+  }, [rawAmount, inputMint, outputMint, wallet.publicKey, isPump]);
 
   const outAmountUi = useMemo(() => {
-    if (!build) return null;
-    return Number(build.outAmount) / Math.pow(10, outputDecimals);
-  }, [build, outputDecimals]);
+    if (build) return Number(build.outAmount) / Math.pow(10, outputDecimals);
+    // Pump.fun tokens have no Jupiter quote — estimate from price feeds.
+    // The exact on-chain amount comes from the bonding curve at sign-time.
+    if (isPump && amtNum > 0 && token.price > 0 && solPrice > 0) {
+      return isSell
+        ? (amtNum * token.price) / solPrice   // tokens → SOL
+        : (amtNum * solPrice) / token.price;  // SOL → tokens
+    }
+    return null;
+  }, [build, outputDecimals, isPump, amtNum, token.price, solPrice, isSell]);
 
   const receiveAmount = useMemo(() => {
     if (quoting) return 'Quoting…';
     if (outAmountUi == null) return '—';
-    return format(outAmountUi) + ' ' + outputSymbol;
-  }, [quoting, outAmountUi, outputSymbol]);
+    return format(outAmountUi) + ' ' + outputSymbol + (isPump ? ' (est.)' : '');
+  }, [quoting, outAmountUi, outputSymbol, isPump]);
 
   const rate = useMemo(() => {
     if (!outAmountUi || !amtNum) return null;
@@ -2475,15 +2493,163 @@ function TradeSheet({
       setSwapError('Please connect a wallet (Phantom, Solflare, Backpack).');
       return;
     }
-    if (!build) {
-      setSwapError('No quote available — try again.');
-      return;
-    }
 
     setSwapping(true);
     setSwapError(null);
 
     try {
+      /* ═══ PUMP.FUN bonding-curve path (PumpPortal) ═══
+         Self-contained so this tab needs nothing from the LaunchRadar module.
+         BUY: full SOL to the curve + 3% SOL fee on top. SELL: `amount` is in
+         token units; 3% SOL fee estimated from price feeds, appended AFTER the
+         curve pays native SOL to the wallet. Build → splice fee → sim → sign →
+         send → rebroadcast until confirmed. All RPC on the sheet's connection. */
+      if (isPump) {
+        const CB_PROGRAM = 'ComputeBudget111111111111111111111111111111';
+        const isBuy = !isSell;
+
+        let pumpAmount, pumpDecimals, feeLamports;
+        if (isBuy) {
+          const tradeLamports = BigInt(rawAmount);        // rawAmount = SOL * 1e9
+          if (tradeLamports <= 0n) throw new Error('Amount too small.');
+          feeLamports = (tradeLamports * BigInt(FEE_BPS)) / 10000n;
+          if (feeLamports <= 0n) throw new Error('Fee rounds to zero — amount too small.');
+          pumpAmount = tradeLamports.toString();
+          pumpDecimals = undefined;
+        } else {
+          const tradeTokens = BigInt(rawAmount);          // rawAmount = tokens * 10^dec
+          if (tradeTokens <= 0n) throw new Error('Amount too small.');
+          pumpAmount = tradeTokens.toString();
+          pumpDecimals = inputDecimals;
+          feeLamports = 0n;
+          if (token?.price > 0 && solPrice > 0) {
+            const grossSol = (amtNum * token.price) / solPrice;
+            const lam = Math.floor(grossSol * (FEE_BPS / 10000) * 1e9);
+            if (lam > 0) feeLamports = BigInt(lam);
+          }
+          if (feeLamports <= 0n) throw new Error('Could not estimate sell fee — token or SOL price unavailable.');
+        }
+
+        // 1. PumpPortal builds the tx (same /api/ape/pump-trade the Ape page uses).
+        const rr = await fetch('/api/ape/pump-trade', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: isBuy ? 'buy' : 'sell',
+            mint:   token.mint,
+            user:   wallet.publicKey.toBase58(),
+            amount: pumpAmount,
+            ...(pumpDecimals != null ? { decimals: Number(pumpDecimals) } : {}),
+          }),
+        });
+        const pdata = await rr.json().catch(() => ({}));
+        if (!rr.ok) throw new Error(pdata?.error || ('pump HTTP ' + rr.status));
+        if (!pdata.tx || typeof pdata.tx !== 'string')
+          throw new Error(pdata?.error || 'Pump route returned no transaction.');
+
+        // 2. Decompile PumpPortal's v0 tx → flat instruction list (+ its ALTs).
+        const txBytes    = Buffer.from(pdata.tx, 'base64');
+        const builtTx    = VersionedTransaction.deserialize(txBytes);
+        const bmsg       = builtTx.message;
+        const lookupKeys = (bmsg.addressTableLookups || []).map(l => l.accountKey);
+        const pumpAlts   = [];
+        if (lookupKeys.length > 0) {
+          const infos = await connection.getMultipleAccountsInfo(lookupKeys);
+          for (let i = 0; i < lookupKeys.length; i++) {
+            if (!infos[i]) continue;
+            pumpAlts.push(new AddressLookupTableAccount({
+              key: lookupKeys[i],
+              state: AddressLookupTableAccount.deserialize(infos[i].data),
+            }));
+          }
+        }
+        const decompiled = TransactionMessage.decompile(bmsg, { addressLookupTableAccounts: pumpAlts });
+
+        // 3. 3% SOL fee transfer.
+        const feeIx = SystemProgram.transfer({
+          fromPubkey: wallet.publicKey,
+          toPubkey:   FEE_WALLET,
+          lamports:   Number(feeLamports),
+        });
+
+        // 4. Splice: BUY → after leading ComputeBudget ixs; SELL → at the end.
+        const pumpIxs = decompiled.instructions.slice();
+        if (isBuy) {
+          let insertAt = 0;
+          while (insertAt < pumpIxs.length && pumpIxs[insertAt].programId.toBase58() === CB_PROGRAM) insertAt++;
+          pumpIxs.splice(insertAt, 0, feeIx);
+        } else {
+          pumpIxs.push(feeIx);
+        }
+
+        // 5. Fresh blockhash, recompile with the SAME ALTs PumpPortal used.
+        const platest  = await connection.getLatestBlockhash('confirmed');
+        const pmessage = new TransactionMessage({
+          payerKey:        wallet.publicKey,
+          recentBlockhash: platest.blockhash,
+          instructions:    pumpIxs,
+        }).compileToV0Message(pumpAlts);
+        const ptx = new VersionedTransaction(pmessage);
+
+        // 6. Pre-sign simulation against fresh chain state.
+        try {
+          const sim = await connection.simulateTransaction(ptx, {
+            sigVerify: false, replaceRecentBlockhash: false, commitment: 'processed',
+          });
+          if (sim?.value?.err) {
+            const j = (sim?.value?.logs || []).join('\n').toLowerCase();
+            if (j.includes('slippage') || j.includes('toomuchsol') || j.includes('toolittlesol'))
+              throw new Error('Price moved past slippage — try again.');
+            if (j.includes('insufficient') || j.includes('debit an account'))
+              throw new Error('Not enough SOL for the trade + fees.');
+            throw new Error('Sim failed — price likely moved. Try again.');
+          }
+        } catch (simErr) {
+          if (simErr instanceof Error && /slippage|not enough sol|sim failed/i.test(simErr.message)) throw simErr;
+          console.warn('[mw pump-sim] non-fatal', simErr?.message);
+        }
+
+        // 7. Sign once, send skipPreflight, rebroadcast until confirmed.
+        const psigned = await wallet.signTransaction(ptx);
+        const praw    = psigned.serialize();
+        let psig;
+        try {
+          psig = await connection.sendRawTransaction(praw, { skipPreflight: true, maxRetries: 5 });
+        } catch (sendErr) {
+          throw new Error(friendlyError(sendErr));
+        }
+
+        let pconfirmed = false, ponchainErr = null;
+        const pstart = Date.now();
+        while (Date.now() - pstart < 60_000) {
+          try {
+            const st = await connection.getSignatureStatus(psig, { searchTransactionHistory: true });
+            if (st?.value?.err) { ponchainErr = st.value.err; break; }
+            const cs = st?.value?.confirmationStatus;
+            if (cs === 'confirmed' || cs === 'finalized') { pconfirmed = true; break; }
+          } catch {}
+          try {
+            const h = await connection.getBlockHeight('confirmed');
+            if (h > platest.lastValidBlockHeight) break;
+          } catch {}
+          try { await connection.sendRawTransaction(praw, { skipPreflight: true, maxRetries: 0 }); } catch {}
+          await new Promise(r => setTimeout(r, 2000));
+        }
+        if (ponchainErr) throw new Error('Trade failed on-chain — price likely moved past slippage.');
+
+        onSuccess({
+          signature: psig,
+          pending: !pconfirmed,
+          paid: amtNum.toFixed(4) + ' ' + inputSymbol,
+          got:  format(outAmountUi || 0) + ' ' + outputSymbol + ' (est.)',
+          price: token.price,
+        });
+        if (pconfirmed) setTimeout(() => refreshBalances(), 2000);
+        return;
+      }
+
+      // ═══ JUPITER path (graduated / non-pump) ═══
+      if (!build) throw new Error('No quote available — try again.');
       // 3% fee → FEE_WALLET, always in SOL (additional — the user still
       // receives the exact swap output). BUY (SOL input): 3% of the SOL spent.
       // SELL (SOL output): 3% of the SOL received from the swap.
@@ -2610,8 +2776,9 @@ function TradeSheet({
     }
   }, [
     wallet, build, inputMint, inputDecimals, outputDecimals,
-    inputSymbol, outputSymbol, rawAmount, amtNum, token.price,
+    inputSymbol, outputSymbol, rawAmount, amtNum, token, token.price,
     connection, onSuccess, refreshBalances,
+    isPump, isSell, solPrice, outAmountUi,
   ]);
 
   // Funds check: only enforce when we KNOW the balance.
@@ -2619,8 +2786,9 @@ function TradeSheet({
     ? amtNum > 0
     : (inputBalance && amtNum > 0 && inputBalance.uiAmount >= amtNum);
 
-  const canSwap  = !!wallet.publicKey && !!build && !quoting && !swapping &&
-                   amtNum > 0 && inputMint !== outputMint && hasFunds;
+  const canSwap  = !!wallet.publicKey && !swapping &&
+                   amtNum > 0 && inputMint !== outputMint && hasFunds &&
+                   (isPump || (!!build && !quoting));
 
   const setMax = () => {
     if (!inputBalance) return;
@@ -2635,9 +2803,9 @@ function TradeSheet({
       ? 'Connect Wallet'
       : amtNum <= 0
         ? 'Enter amount'
-        : quoting && !build
+        : (!isPump && quoting && !build)
           ? 'Getting quote…'
-          : !build
+          : (!isPump && !build)
             ? 'No route available'
             : !hasFunds
               ? `Insufficient ${inputSymbol}`
@@ -3242,27 +3410,6 @@ const LR_CSS = `
   .lr-feature-sym{font-size:22px}
   .lr-feature-avatar{width:48px;height:48px}
 }
-
-/* DARK THEME — Launches (mirrors Discover .mw-* dark block). Appended so it
-   wins the cascade; makes the Launches token page render dark, not white. */
-.lr-root{
-  --ink:#eceef2; --ink-2:#8b919b; --ink-3:#565c66;
-  --green:#2fd67b; --mint:#2fd67b; --red:#ff5a6a; --down:#ff5a6a; --pink:#ff5a6a;
-  --sky:#9b6bff; --vio:#9b6bff; --vio-soft:rgba(155,107,255,.14);
-  --border:#23262e; --hairline:#1d2027; --fill:#181b20;
-  --glass:#131519; --glass-strong:#15181d;
-  --surf:#131519; --surf2:#1c2128; --bg:#0a0b0d;
-  background:#0a0b0d;
-}
-.lr-card,.lr-orb,.lr-feature,.lr-chart,.lr-chart-frame-wrap,
-.lr-trade-card,.lr-trade-row{ background:#131519; }
-.lr-chart-state{ background:#101216; }
-.lr-trade-overlay{ background:rgba(10,11,13,.55); }
-.lr-mini-avatar,.lr-mini-avatar .lr-inner,
-.lr-trade-avatar,.lr-trade-avatar .lr-inner,
-.lr-trade-token-chip-logo{ background:#1c2128; }
-.lr-chart-ca-copy{ background:var(--fill); color:var(--ink); border:1px solid var(--border); }
-.lr-trade-token-chip{ background:var(--glass-strong); }
 `;
 
 function useLrCSS() {
@@ -3865,7 +4012,7 @@ function lrBuildEmbedSrc(pool, resKey) {
   const r = LR_CHART_RES.find(x => x.key === resKey) || LR_CHART_RES[0];
   if (pool.provider !== 'GECKOTERMINAL') return null;
   return 'https://www.geckoterminal.com/solana/pools/' + pool.addr +
-    '?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&bg_color=0a0b0d&resolution=' + r.gecko;
+    '?embed=1&info=0&swaps=0&grayscale=0&light_chart=1&bg_color=ffffff&resolution=' + r.gecko;
 }
 
 // ── Real pump.fun bonding-curve candles — COPIED VERBATIM from Ape.jsx
@@ -4193,700 +4340,6 @@ function SettingsModal({ buyPresets, setBuyPresets, sellPresets, setSellPresets,
             of expectedSol to FEE_WALLET, after the curve has paid
             native SOL into the user's wallet.
    ════════════════════════════════════════════════════════════════════ */
-/* ════════════════════════════════════════════════════════════════════
-   LAUNCHES TOKEN DETAIL — independent COPY of Discover's DetailView.
-   Same layout/stats/BUY-SELL as Discover; renders LaunchRadar's own
-   LrTokenChart (already dark, works in this scope). Discover untouched.
-   ════════════════════════════════════════════════════════════════════ */
-function lrTimeAgo(ms) {
-  const s = Math.floor((Date.now() - ms) / 1000);
-  if (s < 60)    return s + 's ago';
-  if (s < 3600)  return Math.floor(s / 60) + 'm ago';
-  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
-  return Math.floor(s / 86400) + 'd ago';
-}
-function LrDetailView({ token, onClose, onTrade }) {
-  useEffect(() => {
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = prev; };
-  }, []);
-
-  return (
-    <div className="mw-detail">
-      <div className="mw-detail-top">
-        <button type="button" className="mw-icon-btn" onClick={onClose}>←</button>
-        <div className="mw-detail-title">${token.sym} <span className="mw-check-mint">✓</span></div>
-        <button type="button" className="mw-icon-btn">↗</button>
-      </div>
-
-      <div className="mw-detail-hero">
-        <div className="mw-detail-emoji"><TokenIcon token={token} /></div>
-        <div className="mw-detail-info">
-          <div className="mw-detail-name">{token.sym}</div>
-          <div className="mw-detail-fullname">{token.name} · Solana</div>
-          <div className="mw-detail-price-row">
-            <div className="mw-detail-price">{formatPrice(token.price)}</div>
-          </div>
-        </div>
-      </div>
-
-      <LrTokenChart mint={token.mint} symbol={token.sym} poolHint={token.pool} />
-
-      <div className="mw-inline-actions">
-        <button type="button" className="mw-big-btn mw-buy"  onClick={() => onTrade('buy')}>🚀 BUY</button>
-        <button type="button" className="mw-big-btn mw-sell" onClick={() => onTrade('sell')}>💸 SELL</button>
-      </div>
-
-      {token.whaleSol ? (
-        <div className="mw-whale-banner">
-          <span className="mw-whale-banner-emoji">🐋</span>
-          <div>
-            <div className="mw-whale-banner-title">WHALE ENTRY{token.whaleAt ? ' · ' + lrTimeAgo(token.whaleAt) : ''}</div>
-            <div className="mw-whale-banner-sub">+{format(token.whaleSol)} SOL added to liquidity</div>
-          </div>
-        </div>
-      ) : null}
-
-      <div className="mw-stats-grid">
-        <div className="mw-stat">
-          <span className="mw-stat-icon">💰</span>
-          <div className="mw-stat-label">Market Cap</div>
-          <div className="mw-stat-value">${format(token.mcap)}</div>
-          <div className="mw-stat-sub">USD</div>
-        </div>
-        <div className="mw-stat">
-          <span className="mw-stat-icon">👥</span>
-          <div className="mw-stat-label">Holders</div>
-          <div className="mw-stat-value">{token.holders ? format(token.holders) : '—'}</div>
-          <div className="mw-stat-sub">on-chain</div>
-        </div>
-        <div className="mw-stat">
-          <span className="mw-stat-icon">⚡</span>
-          <div className="mw-stat-label">Volume 24h</div>
-          <div className="mw-stat-value">${format(token.volume24h)}</div>
-          <div className="mw-stat-sub">all DEXs</div>
-        </div>
-        <div className="mw-stat">
-          <span className="mw-stat-icon">💧</span>
-          <div className="mw-stat-label">Liquidity</div>
-          <div className="mw-stat-value">${format(token.liquidity)}</div>
-          <div className="mw-stat-sub">🔒 pooled</div>
-        </div>
-      </div>
-
-      <div className="mw-contract">
-        <div className="mw-contract-info">
-          <div className="mw-contract-label">Contract</div>
-          <div className="mw-contract-addr">{token.mint.slice(0, 8)}…{token.mint.slice(-6)}</div>
-        </div>
-        <button type="button" className="mw-copy-btn" onClick={() => navigator.clipboard?.writeText(token.mint)}>COPY</button>
-      </div>
-    </div>
-  );
-}
-
-
-/* ════════════════════════════════════════════════════════════════════
-   LAUNCHES JUPITER DRAWER — independent COPY of Discover's trade flow.
-   Byte-for-byte the same logic as Discover's TradeSheet/SuccessView, but
-   a separate instance in this scope so Discover is never affected.
-   ════════════════════════════════════════════════════════════════════ */
-const LR_SLIPPAGE_BPS = 500;
-function formatUsd(n) {
-  if (!Number.isFinite(n) || n <= 0) return '$0.00';
-  if (n >= 1e9)  return '$' + (n / 1e9).toFixed(2) + 'B';
-  if (n >= 1e6)  return '$' + (n / 1e6).toFixed(2) + 'M';
-  if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 2 });
-  if (n >= 1)    return '$' + n.toFixed(2);
-  if (n >= 0.01) return '$' + n.toFixed(2);
-  return '<$0.01';
-}
-const lrDeserIx = (ix) => ({
-  programId: new PublicKey(ix.programId),
-  keys: ix.accounts.map(a => ({
-    pubkey:     new PublicKey(a.pubkey),
-    isSigner:   a.isSigner,
-    isWritable: a.isWritable,
-  })),
-  data: Buffer.from(ix.data, 'base64'),
-});
-
-function LrTradeSheet({
-  token, solPrice, mode, setMode, amount, setAmount,
-  selectedPreset, handlePreset, onClose,
-  wallet, connection, balances, balStateFor, refreshBalances, onSuccess,
-}) {
-  const isSell = mode === 'sell';
-  const inputMint  = isSell ? token.mint : SOL_MINT;
-  const outputMint = isSell ? SOL_MINT  : token.mint;
-  const inputDecimals  = isSell ? (token.decimals ?? 6) : 9;
-  const outputDecimals = isSell ? 9 : (token.decimals ?? 6);
-  const inputSymbol  = isSell ? token.sym : 'SOL';
-  const outputSymbol = isSell ? 'SOL' : token.sym;
-
-  const inputBalance = balances[inputMint];
-  const inputBalStatus = balStateFor ? balStateFor(inputMint) : 'idle';
-  const balanceKnown = inputBalStatus === 'ok';
-  const amtNum = parseFloat(amount) || 0;
-
-  // ── PRICE-PER-UNIT for the input token. SOL → solPrice. Token → token.price.
-  const unitPriceUsd = isSell ? (token.price || 0) : (solPrice || 0);
-
-  // USD value of what the user is ABOUT TO TRADE (the amount typed).
-  const tradeUsdValue = amtNum * unitPriceUsd;
-
-  // USD value of the user's WALLET BALANCE. THIS is what should appear next
-  // to "Bal:" — fixes the bug where 0.001 SOL was showing as ~$37 (because
-  // the trade-amount USD was being reused as if it were balance USD).
-  const balanceUsdValue = inputBalance && unitPriceUsd > 0
-    ? inputBalance.uiAmount * unitPriceUsd
-    : null;
-
-  const rawAmount = useMemo(() => {
-    if (!amount) return '';
-    const n = Number(amount);
-    if (!Number.isFinite(n) || n <= 0) return '';
-    return Math.floor(n * Math.pow(10, inputDecimals)).toString();
-  }, [amount, inputDecimals]);
-
-  const [build, setBuild] = useState(null);
-  const [quoting, setQuoting] = useState(false);
-  const [quoteError, setQuoteError] = useState(null);
-  const quoteAbortRef = useRef(null);
-
-  useEffect(() => {
-    if (!rawAmount || inputMint === outputMint) {
-      setBuild(null);
-      setQuoteError(null);
-      return;
-    }
-    if (quoteAbortRef.current) quoteAbortRef.current.abort();
-    const ac = new AbortController();
-    quoteAbortRef.current = ac;
-
-    setQuoting(true);
-    setQuoteError(null);
-
-    const t = setTimeout(async () => {
-      try {
-        // Swap the FULL amount so the user receives the exact output. The 3%
-        // fee is a separate SOL transfer taken from the wallet (in handleSwap).
-        if (BigInt(rawAmount) <= 0n) {
-          setBuild(null);
-          setQuoting(false);
-          return;
-        }
-        const params = new URLSearchParams({
-          inputMint,
-          outputMint,
-          amount:      BigInt(rawAmount).toString(),
-          slippageBps: String(LR_SLIPPAGE_BPS),
-          taker:       wallet.publicKey
-            ? wallet.publicKey.toBase58()
-            : '11111111111111111111111111111111',
-        });
-        const r = await fetch(`/api/jupiter/build?${params}`, { signal: ac.signal });
-        if (!r.ok) {
-          const body = await r.json().catch(() => ({}));
-          throw new Error(body.error || `Quote failed (${r.status})`);
-        }
-        const data = await r.json();
-        if (!ac.signal.aborted) {
-          setBuild(data);
-          setQuoteError(null);
-        }
-      } catch (e) {
-        if (e.name === 'AbortError') return;
-        if (!ac.signal.aborted) {
-          setBuild(null);
-          setQuoteError(friendlyError(e));
-        }
-      } finally {
-        if (!ac.signal.aborted) setQuoting(false);
-      }
-    }, 350);
-
-    return () => { clearTimeout(t); ac.abort(); };
-  }, [rawAmount, inputMint, outputMint, wallet.publicKey]);
-
-  const outAmountUi = useMemo(() => {
-    if (!build) return null;
-    return Number(build.outAmount) / Math.pow(10, outputDecimals);
-  }, [build, outputDecimals]);
-
-  const receiveAmount = useMemo(() => {
-    if (quoting) return 'Quoting…';
-    if (outAmountUi == null) return '—';
-    return format(outAmountUi) + ' ' + outputSymbol;
-  }, [quoting, outAmountUi, outputSymbol]);
-
-  const rate = useMemo(() => {
-    if (!outAmountUi || !amtNum) return null;
-    return outAmountUi / amtNum;
-  }, [outAmountUi, amtNum]);
-
-  useEffect(() => {
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = prev; };
-  }, []);
-
-  const [swapping, setSwapping] = useState(false);
-  const [swapError, setSwapError] = useState(null);
-
-  const handleSwap = useCallback(async () => {
-    if (!wallet.publicKey || !wallet.signTransaction) {
-      setSwapError('Please connect a wallet (Phantom, Solflare, Backpack).');
-      return;
-    }
-    if (!build) {
-      setSwapError('No quote available — try again.');
-      return;
-    }
-
-    setSwapping(true);
-    setSwapError(null);
-
-    try {
-      // 3% fee → FEE_WALLET, always in SOL (additional — the user still
-      // receives the exact swap output). BUY (SOL input): 3% of the SOL spent.
-      // SELL (SOL output): 3% of the SOL received from the swap.
-      const feeLamports = inputMint === SOL_MINT
-        ? Number((BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n)
-        : Math.round(Number(build.outAmount) * FEE_BPS / 10000);
-      if (!(feeLamports > 0)) throw new Error('Fee rounds to zero — amount too small.');
-
-      const feeIxs = [
-        SystemProgram.transfer({
-          fromPubkey: wallet.publicKey,
-          toPubkey:   FEE_WALLET,
-          lamports:   feeLamports,
-        }),
-      ];
-
-      const ixs = [];
-      if (Array.isArray(build.computeBudgetInstructions))
-        for (const ix of build.computeBudgetInstructions) ixs.push(lrDeserIx(ix));
-      for (const ix of feeIxs) ixs.push(ix);
-      if (Array.isArray(build.setupInstructions))
-        for (const ix of build.setupInstructions) ixs.push(lrDeserIx(ix));
-      if (build.swapInstruction) ixs.push(lrDeserIx(build.swapInstruction));
-      if (build.cleanupInstruction) ixs.push(lrDeserIx(build.cleanupInstruction));
-      if (Array.isArray(build.otherInstructions))
-        for (const ix of build.otherInstructions) ixs.push(lrDeserIx(ix));
-
-      const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
-      let alts = [];
-      if (altKeys.length > 0) {
-        const infos = await connection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
-        alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
-          key:   new PublicKey(k),
-          state: AddressLookupTableAccount.deserialize(infos[i].data),
-        }) : null).filter(Boolean);
-      }
-
-      const latest = await connection.getLatestBlockhash('confirmed');
-      const message = new TransactionMessage({
-        payerKey:        wallet.publicKey,
-        recentBlockhash: latest.blockhash,
-        instructions:    ixs,
-      }).compileToV0Message(alts);
-      const tx = new VersionedTransaction(message);
-
-      const mapSimErr = (logs, err) => {
-        const j = ((logs || []).join('\n') + ' ' + JSON.stringify(err || '')).toLowerCase();
-        // Insufficient SOL for fees / account rent surfaces as "insufficient
-        // lamports" or a bare system-program Custom:1. For a SOL-funded swap this
-        // is the #1 cause — the destination token account alone needs ~0.002 SOL
-        // of rent-exempt lamports the wallet may not have.
-        if (j.includes('insufficient lamports') || j.includes('insufficient funds') || j.includes('rent') ||
-            j.includes('insufficient') || j.includes('"custom":1') || j.includes('custom program error: 0x1'))
-          return 'Not enough SOL — a swap needs about 0.002 SOL for the token account plus network fees. Add a little SOL and retry.';
-        if (j.includes('slippage') || j.includes('0x1771'))  return 'Price moved — try a higher slippage or smaller amount.';
-        if (j.includes('account not') || j.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
-        if (j.includes('blockhash') || j.includes('expired')) return 'Quote expired. Please refresh and retry.';
-        return null;
-      };
-      try {
-        const sim = await connection.simulateTransaction(tx, {
-          replaceRecentBlockhash: false,
-          sigVerify: false,
-        });
-        if (sim.value.err) {
-          throw new Error(mapSimErr(sim.value.logs, sim.value.err) || 'Swap can\u2019t complete \u2014 likely not enough SOL for fees + token-account rent (~0.002 SOL), or the price moved. Add a little SOL or try a smaller amount.');
-        }
-      } catch (simErr) {
-        if (simErr?.message && /not enough sol|balance|slippage|simulation failed|account not|expired|token account|rent|complete/i.test(simErr.message)) {
-          throw simErr;
-        }
-        console.warn('[swap] sim non-fatal', simErr);
-      }
-
-      const signed = await wallet.signTransaction(tx);
-
-      const sig = await connection.sendRawTransaction(signed.serialize(), {
-        skipPreflight: false,
-        maxRetries: 3,
-      });
-
-      let confirmed = false;
-      try {
-        const conf = await Promise.race([
-          connection.confirmTransaction({
-            signature: sig,
-            blockhash: latest.blockhash,
-            lastValidBlockHeight: latest.lastValidBlockHeight,
-          }, 'confirmed'),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
-        ]);
-        if (conf?.value?.err) throw new Error('Swap tx failed on-chain: ' + JSON.stringify(conf.value.err));
-        confirmed = true;
-      } catch (cfErr) {
-        const deadline = Date.now() + 20_000;
-        while (Date.now() < deadline) {
-          await new Promise(r => setTimeout(r, 2000));
-          try {
-            const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-            const cs = st?.value?.confirmationStatus;
-            if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
-            if (st?.value?.err) throw new Error('Swap tx failed on-chain.');
-          } catch (e) {
-            if (/failed on-chain/i.test(String(e.message))) throw e;
-          }
-        }
-      }
-
-      const outUi = Number(build.outAmount) / Math.pow(10, outputDecimals);
-      onSuccess({
-        signature: sig,
-        pending: !confirmed,
-        paid: amtNum.toFixed(4) + ' ' + inputSymbol,
-        got:  format(outUi) + ' ' + outputSymbol,
-        price: token.price,
-      });
-
-      if (confirmed) setTimeout(() => refreshBalances(), 2000);
-    } catch (e) {
-      console.error('[mw swap]', e);
-      setSwapError(friendlyError(e));
-    } finally {
-      setSwapping(false);
-    }
-  }, [
-    wallet, build, inputMint, inputDecimals, outputDecimals,
-    inputSymbol, outputSymbol, rawAmount, amtNum, token.price,
-    connection, onSuccess, refreshBalances,
-  ]);
-
-  // Funds check: only enforce when we KNOW the balance.
-  const hasFunds = !balanceKnown
-    ? amtNum > 0
-    : (inputBalance && amtNum > 0 && inputBalance.uiAmount >= amtNum);
-
-  const canSwap  = !!wallet.publicKey && !!build && !quoting && !swapping &&
-                   amtNum > 0 && inputMint !== outputMint && hasFunds;
-
-  const setMax = () => {
-    if (!inputBalance) return;
-    let maxAmt = inputBalance.uiAmount;
-    if (inputMint === SOL_MINT) maxAmt = Math.max(0, maxAmt - 0.002); // leave gas
-    setAmount(String(maxAmt));
-  };
-
-  const ctaLabel = swapping
-    ? (isSell ? 'Selling…' : 'Buying…')
-    : !wallet.publicKey
-      ? 'Connect Wallet'
-      : amtNum <= 0
-        ? 'Enter amount'
-        : quoting && !build
-          ? 'Getting quote…'
-          : !build
-            ? 'No route available'
-            : !hasFunds
-              ? `Insufficient ${inputSymbol}`
-              : (isSell ? '💸 SELL ' + token.sym : '⚡ BUY ' + token.sym);
-
-  // Honest balance display — the $ figure here ALWAYS reflects the balance,
-  // not the trade amount.
-  let balanceDisplay;
-  if (!wallet.publicKey) {
-    balanceDisplay = <span className="mw-muted-deep">Not connected</span>;
-  } else if (inputBalStatus === 'loading' || inputBalStatus === 'idle') {
-    balanceDisplay = <>Bal: <b>…</b></>;
-  } else if (inputBalStatus === 'fail') {
-    balanceDisplay = <span className="mw-bal-err">RPC unreachable</span>;
-  } else if (inputBalance) {
-    balanceDisplay = <>
-      Bal: <b>{format(inputBalance.uiAmount)}</b>
-      {balanceUsdValue != null ? <> · {formatUsd(balanceUsdValue)}</> : null}
-    </>;
-  } else {
-    balanceDisplay = <>Bal: <b>0</b> · $0.00</>;
-  }
-
-  return (
-    <>
-      <div className="mw-sheet-backdrop" onClick={swapping ? undefined : onClose}></div>
-      <div className="mw-sheet">
-        <div className="mw-grabber"></div>
-
-        <div className="mw-sheet-token-head">
-          <div className="mw-sheet-emoji"><TokenIcon token={token} /></div>
-          <div className="mw-sheet-token-info">
-            <div className="mw-sheet-token-name">${token.sym}</div>
-            <div className="mw-sheet-sub">
-              {token.age && <span className="mw-age-pill">{token.age} old</span>}
-            </div>
-          </div>
-          <button type="button" className="mw-icon-btn" onClick={onClose} disabled={swapping}>×</button>
-        </div>
-
-        <LrTokenChart mint={token.mint} symbol={token.sym} poolHint={token.pool} />
-
-        <div className={'mw-tab-switch' + (isSell ? ' mw-sell-mode' : '')}>
-          <div className="mw-tab-indicator"></div>
-          {['buy', 'sell'].map(m => (
-            <div
-              key={m}
-              className={'mw-tab' + (mode === m ? ' mw-active' : '')}
-              onClick={() => !swapping && setMode(m)}
-            >
-              {m.toUpperCase()}
-            </div>
-          ))}
-        </div>
-
-        <div className="mw-amount-section">
-          <div className="mw-amount-label">
-            <span>You Pay</span>
-            <span className="mw-balance">{balanceDisplay}</span>
-          </div>
-          <div className="mw-amount-input-wrap">
-            <input
-              className="mw-amount-input"
-              type="text"
-              inputMode="decimal"
-              value={amount}
-              onChange={(e) => {
-                const v = e.target.value.replace(/[^\d.]/g, '');
-                const parts = v.split('.');
-                if (parts.length > 2) return;
-                setAmount(v);
-              }}
-              disabled={swapping}
-            />
-            <div className="mw-currency">
-              <div className="mw-currency-icon"></div>
-              {inputSymbol}
-            </div>
-          </div>
-          {/* USD value of the trade amount lives here now, so it can't be
-              mistaken for the balance's USD value. */}
-          {amtNum > 0 && unitPriceUsd > 0 && (
-            <div className="mw-amount-usd">≈ {formatUsd(tradeUsdValue)}</div>
-          )}
-
-          <div className="mw-presets">
-            {['0.1', '0.5', '1', 'MAX'].map(p => (
-              <button
-                key={p}
-                type="button"
-                className={'mw-preset' + (selectedPreset === p ? ' mw-selected' : '')}
-                onClick={() => p === 'MAX' ? setMax() : handlePreset(p)}
-                disabled={swapping}
-              >
-                {p}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="mw-receive">
-          <div>
-            <div className="mw-receive-label">You Get</div>
-            <div className="mw-receive-amount">{receiveAmount}</div>
-          </div>
-          <div className="mw-receive-rate">
-            Rate<br />
-            <b>{rate ? `1 ${inputSymbol} = ${format(rate)} ${outputSymbol}` : '—'}</b>
-          </div>
-        </div>
-
-        {(swapError || quoteError) && (
-          <div style={{
-            margin: '12px 22px 0',
-            padding: '10px 14px',
-            borderRadius: 12,
-            background: 'rgba(209,75,106,0.1)',
-            border: '1px solid rgba(209,75,106,0.3)',
-            color: 'var(--red)',
-            fontSize: 12,
-            textAlign: 'center',
-            fontWeight: 500,
-          }}>
-            {swapError || quoteError}
-          </div>
-        )}
-
-        <div className="mw-cta-wrap">
-          <button
-            type="button"
-            className={'mw-cta' + (isSell ? ' mw-sell-cta' : '')}
-            onClick={handleSwap}
-            disabled={!canSwap}
-          >
-            {ctaLabel}
-          </button>
-          <div className="mw-trust">
-            Powered by <span className="mw-jup-badge"><span className="mw-jup-dot"></span><b>JUPITER</b></span> · Non-custodial 🔐
-          </div>
-        </div>
-      </div>
-    </>
-  );
-}
-
-function LrSuccessView({ data, token, onClose }) {
-  const [confetti, setConfetti] = useState([]);
-
-  useEffect(() => {
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = prev; };
-  }, []);
-
-  useEffect(() => {
-    const emojis = ['🎉','🚀','💎','🐸','✨','🍭','💸','⭐','🌈'];
-    setConfetti(Array.from({ length: 36 }, (_, i) => ({
-      id: i,
-      emoji: emojis[Math.floor(Math.random() * emojis.length)],
-      left: Math.random() * 100,
-      duration: 3 + Math.random() * 3,
-      delay: Math.random() * 1.5,
-      size: 16 + Math.random() * 14
-    })));
-  }, []);
-
-  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://nexus.app';
-  const shareUrl  = `${origin}/?t=${data.mint}`;
-  const shareText = `Just aped into $${token.sym} on @nexus 🚀\n\nBag: ${data.got}\nEntry: ${formatPrice(data.price)}`;
-  const solscanUrl = data.signature ? `https://solscan.io/tx/${data.signature}` : null;
-
-  return (
-    <div className="mw-success-overlay">
-      <div className="mw-confetti-rain">
-        {confetti.map(p => (
-          <div key={p.id} className="mw-confetti-piece" style={{
-            left: p.left + '%',
-            animationDuration: p.duration + 's',
-            animationDelay: p.delay + 's',
-            fontSize: p.size + 'px'
-          }}>{p.emoji}</div>
-        ))}
-      </div>
-
-      <div className="mw-success-top">
-        <button type="button" className="mw-icon-btn" onClick={onClose}>×</button>
-        {solscanUrl && (
-          <a className="mw-view-on" href={solscanUrl} target="_blank" rel="noreferrer">
-            VIEW ON SOLSCAN ↗
-          </a>
-        )}
-      </div>
-
-      <div className="mw-success">
-        <div className="mw-success-emoji">{data.pending ? '⏳' : '🎉'}</div>
-        <div className="mw-success-title">{data.pending ? 'Confirming…' : 'You aped!'}</div>
-        <div className="mw-success-sub">
-          {data.pending
-            ? 'Submitted — confirming on-chain'
-            : `Welcome to the ${token.sym} chat, anon ${token.emoji}`}
-        </div>
-      </div>
-
-      <div className="mw-flex-card">
-        <div className="mw-flex-top">
-          <div className="mw-flex-emoji"><TokenIcon token={token} /></div>
-          <div className="mw-flex-token">
-            <div className="mw-flex-sym">${token.sym}</div>
-            <div className="mw-flex-tag">{token.name}</div>
-          </div>
-        </div>
-        <div className="mw-flex-row"><span className="mw-flex-label">You paid</span><span className="mw-flex-value">{data.paid}</span></div>
-        <div className="mw-flex-row"><span className="mw-flex-label">Bag size</span><span className="mw-flex-value mw-big">{data.got}</span></div>
-        <div className="mw-flex-divider"></div>
-        <div className="mw-flex-row"><span className="mw-flex-label">Entry</span><span className="mw-flex-value" style={{ fontSize: '14px' }}>{formatPrice(data.price)}</span></div>
-        <div className="mw-flex-watermark">VIA <b>NEXUS</b></div>
-      </div>
-
-      <div className="mw-share-section">
-        <div className="mw-share-title">FLEX YOUR BAG 💪</div>
-        <div className="mw-share-grid">
-          <button type="button" className="mw-share-btn" style={{ '--mw-share-bg': '#000', '--mw-share-color': '#fff' }}
-            onClick={() => window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(shareUrl)}`, '_blank')}>
-            <div className="mw-share-icon">𝕏</div><div className="mw-share-label">Post on X</div>
-          </button>
-          <button type="button" className="mw-share-btn" style={{ '--mw-share-bg': '#229ED9', '--mw-share-color': '#fff' }}
-            onClick={() => window.open(`https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(shareText)}`, '_blank')}>
-            <div className="mw-share-icon">✈</div><div className="mw-share-label">Telegram</div>
-          </button>
-          <button type="button" className="mw-share-btn" style={{ '--mw-share-bg': 'rgba(127,255,212,0.3)', '--mw-share-color': '#1B7A4F' }}
-            onClick={() => navigator.clipboard?.writeText(shareUrl)}>
-            <div className="mw-share-icon">🔗</div><div className="mw-share-label">Copy Link</div>
-          </button>
-          <button type="button" className="mw-share-btn" style={{ '--mw-share-bg': 'rgba(255,212,107,0.3)', '--mw-share-color': '#B36B00' }}>
-            <div className="mw-share-icon">⬇</div><div className="mw-share-label">Save Card</div>
-          </button>
-        </div>
-      </div>
-
-      <div className="mw-done-wrap">
-        <button type="button" className="mw-done-btn" onClick={onClose}>🚀 BACK TO WONDERLAND</button>
-      </div>
-    </div>
-  );
-}
-
-
-/* Wrapper: holds the controlled state LrTradeSheet expects and renders the
-   copied drawer + success view. Uses THIS scope's wallet/connection/balances. */
-function LrJupiterDrawer({ token, initialMode = 'buy', onClose, wallet, connection, balances, refreshBalances, solPrice }) {
-  const [mode, setMode] = React.useState(initialMode);
-  const [amount, setAmount] = React.useState('0.50');
-  const [selectedPreset, setSelectedPreset] = React.useState('0.5');
-  const [success, setSuccess] = React.useState(null);
-  const handlePreset = (amt) => { setSelectedPreset(amt); setAmount(amt === 'MAX' ? '1.0' : amt); };
-  const handleAmount = (v) => { setAmount(v); setSelectedPreset(null); };
-  const balStateFor = React.useCallback((mint) => (balances && balances[mint] ? 'ok' : 'idle'), [balances]);
-
-  if (success && token) {
-    return <LrSuccessView data={success} token={token} onClose={() => { setSuccess(null); onClose && onClose(); }} />;
-  }
-  if (!token) return null;
-  return (
-    <LrTradeSheet
-      token={token}
-      solPrice={solPrice}
-      mode={mode}
-      setMode={setMode}
-      amount={amount}
-      setAmount={handleAmount}
-      selectedPreset={selectedPreset}
-      handlePreset={handlePreset}
-      onClose={onClose}
-      wallet={wallet}
-      connection={connection}
-      balances={balances}
-      balStateFor={balStateFor}
-      refreshBalances={refreshBalances}
-      onSuccess={(payload) => { setSuccess({ mint: token.mint, ...payload }); refreshBalances && refreshBalances(); }}
-    />
-  );
-}
-
-
 function TradeModal({
   token, initialMode, onClose, onConfirm,
   buyPresets, sellPresets,
@@ -5386,7 +4839,6 @@ function LaunchRadar({ onConnectWallet } = {}) {
   const { buyPresets, setBuyPresets, sellPresets, setSellPresets } = usePresets();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [tradeOpen, setTradeOpen] = useState(null);
-  const [detailOpen, setDetailOpen] = useState(null);
   const [lane, setLane] = useState('fresh');
   const [timeFilter, setTimeFilter] = useState('all');
   const [sortBy, setSortBy] = useState('newest');
@@ -5622,7 +5074,7 @@ function LaunchRadar({ onConnectWallet } = {}) {
      All RPC in this function uses tradeConnection so the Ankr fallback
      covers the entire buy/sell critical path.
      ════════════════════════════════════════════════════════════════ */
-  const executeSwap = useCallback(async ({ mode, swapParams, token }) => {
+  const executePumpSwap = useCallback(async ({ mode, swapParams, token }) => {
     if (!wallet.publicKey || !wallet.signTransaction) {
       throw new Error('Please connect a wallet (Phantom, Solflare, Backpack).');
     }
@@ -5748,6 +5200,191 @@ function LaunchRadar({ onConnectWallet } = {}) {
     return { sig, confirmed, mode, token, route: route.route };
   }, [wallet, connection, tradeConnection]);
 
+  /* ════════════════════════════════════════════════════════════════
+     executeRegularSwap — graduated / non-pump path (Jupiter). Ported
+     VERBATIM from App.jsx executeRegularSwap (itself ported from this
+     file's own TradeSheet handleSwap): /api/jupiter/build, full 3% fee
+     → FEE_WALLET, rpcRaceTrade (/api/trade-rpc) for the send / blockhash
+     / ALT / mint / sig-status critical path, and the hook's `connection`
+     (/api/solana-rpc) for sim + confirm. Build → sim → user signs THAT
+     tx → send. No refetch between sim and sign.
+     ════════════════════════════════════════════════════════════════ */
+  const executeRegularSwap = useCallback(async ({ mode, swapParams, token }) => {
+    if (!wallet.publicKey || !wallet.signTransaction) throw new Error('Please connect a wallet (Phantom, Solflare, Backpack).');
+    if (!swapParams) throw new Error('Nothing to trade.');
+    const isBuy = mode === 'buy';
+    const inputMint  = isBuy ? SOL_MINT : token.mint;
+    const outputMint = isBuy ? token.mint : SOL_MINT;
+    const dec = isBuy ? 9 : (swapParams.decimals || token.decimals || 6);
+    const rawAmount = BigInt(isBuy ? swapParams.totalLamports : swapParams.tradeTokens);
+    if (rawAmount <= 0n) throw new Error('Amount too small.');
+
+    const net = (rawAmount * BigInt(10000 - FEE_BPS)) / 10000n;
+    if (net <= 0n) throw new Error('Amount too small.');
+    const params = new URLSearchParams({
+      inputMint,
+      outputMint,
+      amount:      net.toString(),
+      slippageBps: String(SLIPPAGE_BPS),
+      taker:       wallet.publicKey
+        ? wallet.publicKey.toBase58()
+        : '11111111111111111111111111111111',
+    });
+    const r = await fetch(`/api/jupiter/build?${params}`);
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body.error || `Quote failed (${r.status})`);
+    }
+    const build = await r.json();
+
+      // Full 3% fee → FEE_WALLET
+      const feeAmount = (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n;
+      if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero — amount too small.');
+
+      const feeIxs = [];
+      if (inputMint === SOL_MINT) {
+        feeIxs.push(SystemProgram.transfer({
+          fromPubkey: wallet.publicKey,
+          toPubkey:   FEE_WALLET,
+          lamports:   Number(feeAmount),
+        }));
+      } else {
+        const mintPk = new PublicKey(inputMint);
+        // Buy/sell critical path → trade RPC (Alchemy primary, Ankr fallback).
+        const mintInfo = await rpcRaceTrade('getMintInfo', c => c.getAccountInfo(mintPk));
+        if (!mintInfo) throw new Error('Input mint not found on-chain.');
+        const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
+          ? TOKEN_2022_PROGRAM_ID
+          : TOKEN_PROGRAM_ID;
+
+        const sourceAta = getAssociatedTokenAddressSync(mintPk, wallet.publicKey, true, tokenProgram);
+        const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET,       true, tokenProgram);
+
+        feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
+          wallet.publicKey, destAta, FEE_WALLET, mintPk, tokenProgram,
+        ));
+        feeIxs.push(createTransferCheckedInstruction(
+          sourceAta, mintPk, destAta, wallet.publicKey,
+          feeAmount, dec, [], tokenProgram,
+        ));
+      }
+
+      const ixs = [];
+      if (Array.isArray(build.computeBudgetInstructions))
+        for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
+      for (const ix of feeIxs) ixs.push(ix);
+      if (Array.isArray(build.setupInstructions))
+        for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
+      if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
+      if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
+      if (Array.isArray(build.otherInstructions))
+        for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
+
+      const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
+      let alts = [];
+      if (altKeys.length > 0) {
+        const infos = await rpcRaceTrade('getAlts',
+          c => c.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k))));
+        alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
+          key:   new PublicKey(k),
+          state: AddressLookupTableAccount.deserialize(infos[i].data),
+        }) : null).filter(Boolean);
+      }
+
+      const latest = await rpcRaceTrade('getLatestBlockhash',
+        c => c.getLatestBlockhash('confirmed'));
+      const message = new TransactionMessage({
+        payerKey:        wallet.publicKey,
+        recentBlockhash: latest.blockhash,
+        instructions:    ixs,
+      }).compileToV0Message(alts);
+      const tx = new VersionedTransaction(message);
+
+      const mapSimErr = (logs, err) => {
+        const j = ((logs || []).join('\n') + ' ' + JSON.stringify(err || '')).toLowerCase();
+        // Insufficient SOL for fees / account rent surfaces as "insufficient
+        // lamports" or a bare system-program Custom:1. For a SOL-funded swap this
+        // is the #1 cause — the destination token account alone needs ~0.002 SOL
+        // of rent-exempt lamports the wallet may not have.
+        if (j.includes('insufficient lamports') || j.includes('insufficient funds') || j.includes('rent') ||
+            j.includes('insufficient') || j.includes('"custom":1') || j.includes('custom program error: 0x1'))
+          return 'Not enough SOL — a swap needs about 0.002 SOL for the token account plus network fees. Add a little SOL and retry.';
+        if (j.includes('slippage') || j.includes('0x1771'))  return 'Price moved — try a higher slippage or smaller amount.';
+        if (j.includes('account not') || j.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
+        if (j.includes('blockhash') || j.includes('expired')) return 'Quote expired. Please refresh and retry.';
+        return null;
+      };
+      try {
+        const sim = await connection.simulateTransaction(tx, {
+          replaceRecentBlockhash: false,
+          sigVerify: false,
+        });
+        if (sim.value.err) {
+          throw new Error(mapSimErr(sim.value.logs, sim.value.err) || 'Swap can\u2019t complete \u2014 likely not enough SOL for fees + token-account rent (~0.002 SOL), or the price moved. Add a little SOL or try a smaller amount.');
+        }
+      } catch (simErr) {
+        if (simErr?.message && /not enough sol|balance|slippage|simulation failed|account not|expired|token account|rent|complete/i.test(simErr.message)) {
+          throw simErr;
+        }
+        console.warn('[swap] sim non-fatal', simErr);
+      }
+
+      const signed = await wallet.signTransaction(tx);
+      const serialized = signed.serialize();
+
+      // Send via trade RPC (Alchemy primary, Ankr fallback).
+      const sig = await rpcRaceTrade('sendTx', c => c.sendRawTransaction(serialized, {
+        skipPreflight: false,
+        maxRetries: 3,
+      }));
+
+      let confirmed = false;
+      try {
+        const conf = await Promise.race([
+          connection.confirmTransaction({
+            signature: sig,
+            blockhash: latest.blockhash,
+            lastValidBlockHeight: latest.lastValidBlockHeight,
+          }, 'confirmed'),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
+        ]);
+        if (conf?.value?.err) throw new Error('Swap tx failed on-chain: ' + JSON.stringify(conf.value.err));
+        confirmed = true;
+      } catch (cfErr) {
+        const deadline = Date.now() + 20_000;
+        while (Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 2000));
+          try {
+            const st = await rpcRaceTrade('getSigStatus',
+              c => c.getSignatureStatus(sig, { searchTransactionHistory: true }));
+            const cs = st?.value?.confirmationStatus;
+            if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
+            if (st?.value?.err) throw new Error('Swap tx failed on-chain.');
+          } catch (e) {
+            if (/failed on-chain/i.test(String(e.message))) throw e;
+          }
+        }
+      }
+
+      if (confirmed) setTimeout(() => { refreshSol(); refreshOneToken(token.mint); }, 2000);
+      return { sig, confirmed, mode, token, route: 'jupiter' };
+  }, [wallet, connection, refreshSol, refreshOneToken]);
+
+  /* ════════════════════════════════════════════════════════════════
+     executeSwap — route dispatcher. pump.fun bonding-curve tokens go to
+     the PumpPortal pump path; everything else (graduated / normal SPL)
+     goes to Jupiter. Identified the same way the rest of the app does:
+     an explicit token.route tag when present, else the token's dexId.
+     ════════════════════════════════════════════════════════════════ */
+  const executeSwap = useCallback(async ({ mode, swapParams, token }) => {
+    const isPump = token.route
+      ? token.route === 'pump'
+      : PUMP_DEX_IDS.has(String(token.dexId || '').toLowerCase());
+    return isPump
+      ? executePumpSwap({ mode, swapParams, token })
+      : executeRegularSwap({ mode, swapParams, token });
+  }, [executePumpSwap, executeRegularSwap]);
+
   /* ──── card actions ──── */
   const onCardBuy = useCallback((token) => {
     if (!requireWallet()) return;
@@ -5765,7 +5402,7 @@ function LaunchRadar({ onConnectWallet } = {}) {
   // Tapping a token opens it for viewing (chart + info) WITHOUT requiring a
   // wallet. The wallet is only needed to actually confirm a buy/sell.
   const onView = useCallback((token) => {
-    setDetailOpen(token);
+    setTradeOpen({ token, mode: 'buy' });
     refreshSol();
     refreshOneToken(token.mint);
   }, [refreshSol, refreshOneToken]);
@@ -5956,27 +5593,19 @@ function LaunchRadar({ onConnectWallet } = {}) {
         />
       )}
 
-      {detailOpen && (
-        <LrDetailView
-          token={detailOpen}
-          onClose={() => setDetailOpen(null)}
-          onTrade={(m) => {
-            if (!requireWallet()) return;
-            setTradeOpen({ token: detailOpen, mode: m });
-          }}
-        />
-      )}
-
       {tradeOpen && (
-        <LrJupiterDrawer
+        <TradeModal
           token={tradeOpen.token}
           initialMode={tradeOpen.mode}
           onClose={() => setTradeOpen(null)}
-          wallet={wallet}
-          connection={connection}
-          balances={balances}
-          refreshBalances={refreshBalances}
+          onConfirm={handleTradeConfirm}
+          buyPresets={buyPresets}
+          sellPresets={sellPresets}
+          solBalance={solBalance}
+          tokenBalance={balances[tradeOpen.token.mint]}
           solPrice={solPrice}
+          connected={!!wallet.publicKey}
+          onConnect={requireWallet}
         />
       )}
 
