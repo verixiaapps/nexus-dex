@@ -883,6 +883,37 @@ app.get('/api/sol-price', async (req, res) => {
   catch (e) { logError('sol-price', e); res.status(500).json({ error: e.message || 'Unknown error' }); }
 });
 
+// Batched Jupiter price proxy. Holdings / Stocks / Get Started previously called
+// lite-api.jup.ag/price/v3 DIRECTLY from the browser; on shared mobile-carrier
+// IPs Jupiter's lite tier rate-limits those requests, so prices came back empty
+// → SOL showed "no price" and every stock showed "—" ($0.00 total). Routing
+// through the server (stable IP + short cache, shared across all users) fixes it.
+// Returns Jupiter's native shape verbatim: { "<mint>": { usdPrice, ... }, ... }.
+const _jupPriceCache = new Map(); // ids -> { at, data }
+const _JUP_PRICE_TTL_MS = 15_000;
+app.get('/api/jupiter/price', async (req, res) => {
+  try {
+    const ids = String(req.query.ids || '').trim();
+    if (!ids) return res.status(400).json({ error: 'Missing ids' });
+    const hit = _jupPriceCache.get(ids);
+    if (hit && Date.now() - hit.at < _JUP_PRICE_TTL_MS) return res.json(hit.data);
+    const response = await fetchWithTimeout(
+      `${JUPITER_PRICE_BASE}?ids=${ids}`,
+      { headers: { Accept: 'application/json' } },
+      8_000,
+    );
+    if (!response.ok) return res.status(response.status).json({ error: 'price upstream ' + response.status });
+    const data = await response.json();
+    _jupPriceCache.set(ids, { at: Date.now(), data });
+    _capMap(_jupPriceCache, 500);
+    return res.json(data);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'price timed out' });
+    logError('jupiter-price', e);
+    return res.status(500).json({ error: e.message || 'price error' });
+  }
+});
+
 /* ========================================================================
  * Whale events
  * ===================================================================== */
