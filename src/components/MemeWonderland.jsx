@@ -3635,12 +3635,12 @@ async function getPumpRoute({ action, mint, user, amount, decimals, connection }
   };
   if (decimals != null) body.decimals = Number(decimals);
 
-  // Build via the SAME PumpPortal route the Ape page uses (/api/ape/pump-trade).
-  // It returns a fully-built v0 transaction with CURRENT fee accounts, fixing the
-  // IncorrectProgramId the raw-SDK /api/pumpfun/trade path produced. This drawer
-  // keeps its OWN wallet flow (decompile → add 3% fee ix → simulate → sign →
-  // send); only the source of the tx changed. ape-pump-trade.js is untouched.
-  const r = await fetch('/api/ape/pump-trade', {
+  // Build via the self-contained inline route in server.js (/api/nx/pump-trade).
+  // It returns a fully-built v0 transaction with CURRENT fee accounts from
+  // PumpPortal, fixing the IncorrectProgramId the raw-SDK path produced. This
+  // drawer keeps its OWN connected-wallet flow (decompile → add 3% fee ix →
+  // simulate → sign → send); only the source of the tx changed.
+  const r = await fetch('/api/nx/pump-trade', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -3844,7 +3844,7 @@ function lrBuildEmbedSrc(pool, resKey) {
   const r = LR_CHART_RES.find(x => x.key === resKey) || LR_CHART_RES[0];
   if (pool.provider !== 'GECKOTERMINAL') return null;
   return 'https://www.geckoterminal.com/solana/pools/' + pool.addr +
-    '?embed=1&info=0&swaps=0&grayscale=0&light_chart=1&bg_color=ffffff&resolution=' + r.gecko;
+    '?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&bg_color=0a0b0d&resolution=' + r.gecko;
 }
 
 // ── Real pump.fun bonding-curve candles — COPIED VERBATIM from Ape.jsx
