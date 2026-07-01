@@ -5,6 +5,7 @@ import {
   TransactionInstruction,
   TransactionMessage,
   AddressLookupTableAccount,
+  SystemProgram,
   PublicKey,
 } from '@solana/web3.js';
 
@@ -246,13 +247,17 @@ body.nexus-scroll-locked{overflow:hidden}
 `;
 
 // =====================================================================
-// CONFIG — atomic Jupiter swap with 5% USDC fee
+// CONFIG — atomic Jupiter swap: user receives the EXACT swap output, plus a
+// separate 3% fee paid in SOL to FEE_WALLET in the SAME transaction (two
+// instructions, one atomic tx). Jupiter's native platformFeeBps can't take the
+// fee in SOL for a USDC↔stock pair, so the fee is a plain SystemProgram.transfer.
 // =====================================================================
 const FEE_WALLET   = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
-const FEE_BPS      = 500;
+const FEE_BPS      = 300;   // 3% platform fee, charged in SOL, additional to the swap
 const USDC_MINT    = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const SOL_MINT     = 'So11111111111111111111111111111111111111112';
 const USDC_DECIMALS = 6;
-const SLIPPAGE_BPS_MAX = 500;
+const SLIPPAGE_BPS_MAX = 300;   // hardcoded 3% max slippage
 const MIN_USDC = 1;
 const MAX_USDC = 50_000;
 
@@ -443,6 +448,25 @@ export async function fetchBrandIcons(mints) {
 }
 
 // ───────────────── JUPITER ROUTING — UNCHANGED ─────────────────
+// SOL/USD for converting the 3% fee into a lamports transfer. Server proxy
+// first (stable IP, not browser-rate-limited), Jupiter price proxy as a
+// fallback. Never throws — returns 0 if unavailable so the caller can bail.
+async function fetchSolUsd() {
+  try {
+    const r = await fetchWithTimeout('/api/sol-price', { headers: { Accept: 'application/json' } }, 6000);
+    const j = await r.json();
+    const p = Number(j?.price);
+    if (Number.isFinite(p) && p > 0) return p;
+  } catch (e) {}
+  try {
+    const r = await fetchWithTimeout('/api/jupiter/price?ids=' + SOL_MINT, { headers: { Accept: 'application/json' } }, 6000);
+    const j = await r.json();
+    const p = Number(j?.[SOL_MINT]?.usdPrice);
+    if (Number.isFinite(p) && p > 0) return p;
+  } catch (e) {}
+  return 0;
+}
+
 async function getJupiterQuote({ inputMint, outputMint, amountAtomic, slippageBps }) {
   const params = new URLSearchParams({
     inputMint, outputMint,
@@ -469,7 +493,13 @@ async function getJupiterSwapInstructions({ quoteResponse, userPublicKey }) {
         priorityLevel: 'high',
       },
     },
-    useSharedAccounts: false,
+    // xStocks are Token-2022. With shared accounts OFF, Jupiter inlines extra
+    // per-user intermediate accounts; combined with our prepended fee transfer
+    // that pushes the tx past Solana's 1232-byte limit, so the QUOTE succeeds
+    // but the buy/sell tx fails to build/send. Jupiter's default (shared
+    // accounts ON) is smaller and safe here because the xStocks transfer hook
+    // is initialized-but-disabled (no per-transfer extra accounts required).
+    useSharedAccounts: true,
   };
   const res = await fetchWithTimeout('/api/jupiter/swap-instructions', {
     method: 'POST',
@@ -482,6 +512,9 @@ async function getJupiterSwapInstructions({ quoteResponse, userPublicKey }) {
 }
 
 // ───────────────── INSTRUCTION BUILDERS — UNCHANGED ─────────────────
+// The fee is now a SOL transfer, so these SPL-ATA helpers are no longer called.
+// Kept for reference / potential USDC-fee reuse.
+// eslint-disable-next-line no-unused-vars
 function deriveAta(owner, mint, tokenProgramId = TOKEN_PROGRAM_ID) {
   const [ata] = PublicKey.findProgramAddressSync(
     [owner.toBuffer(), tokenProgramId.toBuffer(), mint.toBuffer()],
@@ -490,6 +523,7 @@ function deriveAta(owner, mint, tokenProgramId = TOKEN_PROGRAM_ID) {
   return ata;
 }
 
+// eslint-disable-next-line no-unused-vars
 function createIdempotentAtaIx(payer, ata, owner, mint, tokenProgramId = TOKEN_PROGRAM_ID) {
   return new TransactionInstruction({
     keys: [
@@ -505,6 +539,7 @@ function createIdempotentAtaIx(payer, ata, owner, mint, tokenProgramId = TOKEN_P
   });
 }
 
+// eslint-disable-next-line no-unused-vars
 function createTransferCheckedIx({ source, mint, destination, owner, amountAtomic, decimals, tokenProgramId = TOKEN_PROGRAM_ID }) {
   const data = new Uint8Array(10);
   data[0] = 12;
@@ -1450,9 +1485,9 @@ export function TradeModal({ open, brand, price, onClose, walletPubkey, onConnec
 
         let atomic;
         if (isBuy) {
-          const grossUsdcAtomic = Math.round(n * 10 ** USDC_DECIMALS);
-          const feeUsdcAtomic   = Math.floor(grossUsdcAtomic * FEE_BPS / 10000);
-          atomic = grossUsdcAtomic - feeUsdcAtomic;
+          // Swap the FULL USDC amount so the user receives the exact quoted
+          // stock. The 3% fee is a separate SOL transfer in the same tx.
+          atomic = Math.round(n * 10 ** USDC_DECIMALS);
         } else {
           if (!(price > 0)) { setQuote(null); setQuoting(false); return; }
           atomic = Math.round((n / price) * 10 ** brand.decimals);
@@ -1490,9 +1525,10 @@ export function TradeModal({ open, brand, price, onClose, walletPubkey, onConnec
   const grossOut    = outAtomic / 10 ** outDecimals;
 
   const feeBpsRatio    = FEE_BPS / 10000;
-  const platformFeeUsd = isBuy ? usd * feeBpsRatio : grossOut * feeBpsRatio;
-  const netOutUsdc  = !isBuy ? Math.max(0, grossOut - platformFeeUsd) : 0;
-  const outAmount   = isBuy ? grossOut : netOutUsdc;
+  // Fee is a separate SOL transfer, so the user receives the EXACT swap output
+  // on both buy and sell — the displayed amount is the full quote.
+  const platformFeeUsd = usd * feeBpsRatio;   // fee value in USD (charged in SOL)
+  const outAmount   = grossOut;
   const priceImpactPct = quote?.priceImpactPct ? Number(quote.priceImpactPct) * 100 : 0;
   // USD value of the brand tokens you'll receive on BUY (for sanity-check).
   const buyReceiveUsd = isBuy && price > 0 ? grossOut * price : 0;
@@ -1517,31 +1553,24 @@ export function TradeModal({ open, brand, price, onClose, walletPubkey, onConnec
     setError('');
 
     try {
-      const owner       = new PublicKey(walletPubkey);
-      const usdcMintPk  = new PublicKey(USDC_MINT);
+      const owner = new PublicKey(walletPubkey);
 
-      const userUsdcAta = deriveAta(owner,      usdcMintPk, TOKEN_PROGRAM_ID);
-      const feeUsdcAta  = deriveAta(FEE_WALLET, usdcMintPk, TOKEN_PROGRAM_ID);
+      // 3% platform fee, charged in SOL (additional — the user still receives
+      // the exact swap output). Convert the trade's USD value to lamports at the
+      // live SOL price, fetched fresh here so the fee is current at sign time.
+      const solUsdNow = await fetchSolUsd();
+      if (!(solUsdNow > 0)) throw new Error('Couldn’t fetch SOL price for the fee — try again');
+      const feeUsd      = usd * (FEE_BPS / 10000);
+      const feeLamports = Math.round((feeUsd / solUsdNow) * 1e9);
+      if (feeLamports <= 0) throw new Error('Amount too small');
 
-      let feeAtomic;
-      if (side === 'BUY') {
-        feeAtomic = BigInt(Math.round(usd * 10 ** USDC_DECIMALS)) * BigInt(FEE_BPS) / 10000n;
-      } else {
-        const worstUsdcOut = BigInt(quote.otherAmountThreshold || quote.outAmount || '0');
-        feeAtomic = (worstUsdcOut * BigInt(FEE_BPS)) / 10000n;
-      }
-      if (feeAtomic <= 0n) throw new Error('Amount too small');
-
+      // Two instructions, one atomic tx: the Jupiter swap + the SOL fee transfer
+      // to FEE_WALLET. Both land together or not at all.
       const feeIxs = [
-        createIdempotentAtaIx(owner, feeUsdcAta, FEE_WALLET, usdcMintPk, TOKEN_PROGRAM_ID),
-        createTransferCheckedIx({
-          source: userUsdcAta,
-          mint: usdcMintPk,
-          destination: feeUsdcAta,
-          owner,
-          amountAtomic: feeAtomic,
-          decimals: USDC_DECIMALS,
-          tokenProgramId: TOKEN_PROGRAM_ID,
+        SystemProgram.transfer({
+          fromPubkey: owner,
+          toPubkey:   FEE_WALLET,
+          lamports:   feeLamports,
         }),
       ];
 
@@ -1727,6 +1756,7 @@ export function TradeModal({ open, brand, price, onClose, walletPubkey, onConnec
               {quote && (
                 <div className="st-receive-meta">
                   {[
+                    ['Fee (3%)', '≈ ' + fmtUsd(platformFeeUsd) + ' in SOL'],
                     ['Price impact', priceImpactPct.toFixed(2) + '%'],
                     ['Route', (quote.routePlan?.length || 1) + ' hop' + ((quote.routePlan?.length || 1) === 1 ? '' : 's')],
                   ].map(([l, v]) => (
