@@ -2405,8 +2405,9 @@ function TradeSheet({
 
     const t = setTimeout(async () => {
       try {
-        const net = (BigInt(rawAmount) * BigInt(10000 - FEE_BPS)) / 10000n;
-        if (net <= 0n) {
+        // Swap the FULL amount so the user receives the exact output. The 3%
+        // fee is a separate SOL transfer taken from the wallet (in handleSwap).
+        if (BigInt(rawAmount) <= 0n) {
           setBuild(null);
           setQuoting(false);
           return;
@@ -2414,7 +2415,7 @@ function TradeSheet({
         const params = new URLSearchParams({
           inputMint,
           outputMint,
-          amount:      net.toString(),
+          amount:      BigInt(rawAmount).toString(),
           slippageBps: String(SLIPPAGE_BPS),
           taker:       wallet.publicKey
             ? wallet.publicKey.toBase58()
@@ -2483,38 +2484,21 @@ function TradeSheet({
     setSwapError(null);
 
     try {
-      const dec = inputDecimals;
+      // 3% fee → FEE_WALLET, always in SOL (additional — the user still
+      // receives the exact swap output). BUY (SOL input): 3% of the SOL spent.
+      // SELL (SOL output): 3% of the SOL received from the swap.
+      const feeLamports = inputMint === SOL_MINT
+        ? Number((BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n)
+        : Math.round(Number(build.outAmount) * FEE_BPS / 10000);
+      if (!(feeLamports > 0)) throw new Error('Fee rounds to zero — amount too small.');
 
-      // Full 3% fee → FEE_WALLET
-      const feeAmount = (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n;
-      if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero — amount too small.');
-
-      const feeIxs = [];
-      if (inputMint === SOL_MINT) {
-        feeIxs.push(SystemProgram.transfer({
+      const feeIxs = [
+        SystemProgram.transfer({
           fromPubkey: wallet.publicKey,
           toPubkey:   FEE_WALLET,
-          lamports:   Number(feeAmount),
-        }));
-      } else {
-        const mintPk = new PublicKey(inputMint);
-        const mintInfo = await connection.getAccountInfo(mintPk);
-        if (!mintInfo) throw new Error('Input mint not found on-chain.');
-        const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
-          ? TOKEN_2022_PROGRAM_ID
-          : TOKEN_PROGRAM_ID;
-
-        const sourceAta = getAssociatedTokenAddressSync(mintPk, wallet.publicKey, true, tokenProgram);
-        const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET,       true, tokenProgram);
-
-        feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
-          wallet.publicKey, destAta, FEE_WALLET, mintPk, tokenProgram,
-        ));
-        feeIxs.push(createTransferCheckedInstruction(
-          sourceAta, mintPk, destAta, wallet.publicKey,
-          feeAmount, dec, [], tokenProgram,
-        ));
-      }
+          lamports:   feeLamports,
+        }),
+      ];
 
       const ixs = [];
       if (Array.isArray(build.computeBudgetInstructions))
@@ -4205,28 +4189,27 @@ function TradeModal({
   const isBuy = mode === 'buy';
   const presets = isBuy ? buyPresets : sellPresets;
 
-  // BUY  → user enters X SOL.
-  //   totalLamports = X * 1e9               (wallet debit = X)
-  //   tradeLamports = floor(X * 1e9 * 0.97) (to pump curve via server)
-  //   feeLamports   = totalLamports - tradeLamports  (to FEE_WALLET)
+  // BUY  → user enters X SOL to spend on tokens.
+  //   tradeLamports = X * 1e9                 (full amount to the pump curve →
+  //                                            user receives the exact tokens)
+  //   feeLamports   = 3% of X, ADDITIONAL     (separate SystemProgram.transfer)
+  //   totalLamports = tradeLamports + feeLamports  (wallet debit shown to user)
   // SELL → user enters percent.
-  //   tradeTokens   = pct% of holding (raw units) → full sell
-  //   fee in SOL is computed AFTER server returns expectedSol
+  //   tradeTokens   = pct% of holding (raw units) → full sell (exact tokens)
+  //   fee in SOL is computed from price feeds (separate transfer)
   const swapParams = useMemo(() => {
     if (!amount) return null;
     const n = Number(amount);
     if (!Number.isFinite(n) || n <= 0) return null;
 
     if (isBuy) {
-      const totalLamports = BigInt(Math.floor(n * 1e9));
-      if (totalLamports <= 0n) return null;
-      // Pump curve is exact-out-tokens, max-in-SOL. Server slippage = 10% means
-      // the curve may pull up to 1.10× what we send. We need:
-      //   feeLamports + tradeLamports * 1.10 ≤ totalLamports
-      // So size the curve send accordingly.
-      const feeLamports   = (totalLamports * BigInt(FEE_BPS)) / 10000n;
-      const tradeLamports = ((totalLamports - feeLamports) * 100n) / 110n;
-      if (tradeLamports <= 0n || feeLamports <= 0n) return null;
+      // Full amount to the curve so the user gets the exact tokens X buys; the
+      // 3% fee is charged ON TOP in SOL (not skimmed from the trade).
+      const tradeLamports = BigInt(Math.floor(n * 1e9));
+      if (tradeLamports <= 0n) return null;
+      const feeLamports   = (tradeLamports * BigInt(FEE_BPS)) / 10000n;
+      if (feeLamports <= 0n) return null;
+      const totalLamports = tradeLamports + feeLamports;
       return {
         mode: 'buy',
         solAmount: n,
@@ -4674,6 +4657,9 @@ function LaunchCard({ token, owned, onBuy, onSell, isFresh, tintIndex = 0 }) {
 /* ════════════════════════════════════════════════════════════════════
    MAIN COMPONENT
    ════════════════════════════════════════════════════════════════════ */
+// Launches tab was removed; LaunchRadar is retained (unused) as the reference
+// implementation for folding fresh-launch filters/logic into Discover.
+// eslint-disable-next-line no-unused-vars
 function LaunchRadar({ onConnectWallet } = {}) {
   useLrCSS();
   useMwdLrCSS();
@@ -5352,29 +5338,11 @@ function useDhCSS() {
 
 export default function DiscoverHub(props) {
   useDhCSS();
-  const [view, setView] = useState('discover');
+  // Launches tab removed — Discover is the single view. All launch filtering
+  // now lives inside the Discover feed below.
   return (
     <div style={{ background: '#060708', minHeight: '100vh' }}>
-      <div className="dh-switch-wrap">
-        <div className="dh-switch" role="tablist" aria-label="View">
-          <button type="button" role="tab" aria-selected={view === 'discover'}
-            className={'dh-tab' + (view === 'discover' ? ' dh-active' : '')}
-            onClick={() => setView('discover')}>
-            Discover
-          </button>
-          <button type="button" role="tab" aria-selected={view === 'launches'}
-            className={'dh-tab' + (view === 'launches' ? ' dh-active' : '')}
-            onClick={() => setView('launches')}>
-            Launches
-          </button>
-        </div>
-      </div>
-      <div className="dh-page" hidden={view !== 'discover'}>
-        <MemeWonderland {...props} />
-      </div>
-      <div className="dh-page" hidden={view !== 'launches'}>
-        <LaunchRadar {...props} />
-      </div>
+      <MemeWonderland {...props} />
     </div>
   );
 }
