@@ -1546,79 +1546,10 @@ app.get('/api/dex/candles/:mint', async (req, res) => {
   }
 });
 
-app.post('/api/pumpfun/trade', async (req, res) => {
-  try {
-    const b = req.body || {};
-    const action = b.action;
-    if (action !== 'buy' && action !== 'sell')
-      return res.status(400).json({ error: 'action must be buy or sell' });
-    if (!b.mint || !PUMP_BASE58_RE.test(String(b.mint)))
-      return res.status(400).json({ error: 'Invalid mint' });
-    if (!b.user || !PUMP_BASE58_RE.test(String(b.user)))
-      return res.status(400).json({ error: 'Invalid user' });
-    if (b.amount == null) return res.status(400).json({ error: 'Missing amount' });
-
-    let amountStr, denominatedInSol;
-    if (action === 'buy') {
-      const lamports = BigInt(String(b.amount));
-      if (lamports <= 0n) return res.status(400).json({ error: 'Amount must be > 0' });
-      amountStr = (Number(lamports) / 1e9).toFixed(9);
-      denominatedInSol = 'true';
-    } else {
-      const raw = BigInt(String(b.amount));
-      if (raw <= 0n) return res.status(400).json({ error: 'Amount must be > 0' });
-      const decimals = Number(b.decimals ?? 6);
-      amountStr = (Number(raw) / Math.pow(10, decimals)).toString();
-      denominatedInSol = 'false';
-    }
-
-    const r = await fetchWithTimeout(
-      PUMPPORTAL_URL,
-      {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/octet-stream, application/json' },
-        body:    JSON.stringify({
-          publicKey:        b.user,
-          action,
-          mint:             b.mint,
-          amount:           amountStr,
-          denominatedInSol,
-          slippage:         PUMP_SLIPPAGE_PCT,
-          priorityFee:      PUMP_PRIORITY_FEE,
-          pool:             b.pool || 'auto',
-        }),
-      },
-      15_000,
-    );
-
-    if (!r.ok) {
-      const text = await r.text().catch(() => '');
-      logError('pumpfun-trade', new Error('PumpPortal HTTP ' + r.status + ': ' + text.slice(0, 200)));
-      const lower = text.toLowerCase();
-      if (lower.includes('not a pump') || lower.includes('invalid mint') || lower.includes('not found'))
-        return res.status(404).json({ error: 'Not a pump.fun token (PumpPortal does not support this mint).' });
-      if (lower.includes('insufficient'))
-        return res.status(400).json({ error: 'Not enough SOL for this trade + fees.' });
-      return res.status(r.status).json({ error: 'PumpPortal: ' + (text.slice(0, 200) || r.statusText) });
-    }
-
-    const buf = Buffer.from(await r.arrayBuffer());
-    if (buf.length === 0) return res.status(502).json({ error: 'PumpPortal returned empty body.' });
-
-    return res.json({
-      action,
-      route:       'pumpportal',
-      pool:        b.pool || 'auto',
-      slippagePct: PUMP_SLIPPAGE_PCT,
-      priorityFee: PUMP_PRIORITY_FEE,
-      tx:          buf.toString('base64'),
-    });
-  } catch (e) {
-    if (e.name === 'AbortError') return res.status(504).json({ error: 'PumpPortal timed out' });
-    logError('pumpfun-trade', e);
-    return res.status(500).json({ error: e.message || 'Unknown error' });
-  }
-});
+/* /api/pumpfun/trade is served by ./pumpfun-trade (SDK instruction builder).
+ * Mounted in its own dedicated section below, separate from Ape.
+ * The old inline PumpPortal proxy was removed: the drawer client expects a
+ * serialized `instructions[]` array, not a pre-built `tx`. */
 
 /* ========================================================================
  * Launch Radar — Jupiter Ultra V3 proxy
@@ -1985,6 +1916,16 @@ require('./referrals')(app, { rpcUrl: PRIMARY_RPC_URL });
  * ===================================================================== */
 require('./ape-pump-trade').mountRoutes(app);
 require('./ape-pump-candles').mountRoutes(app);
+
+/* ========================================================================
+ * Pump.fun bonding-curve trades (main drawer) — dedicated section.
+ * SEPARATE from Ape above. Serves POST /api/pumpfun/trade via the
+ * @pump-fun/pump-sdk instruction builder in ./pumpfun-trade.js.
+ * Uses the same Alchemy node (ALCHEMY_RPC_URL) as the rest of the app;
+ * the signed tx submits through /api/trade-rpc (Alchemy → Ankr fallback).
+ * Requires: npm install @pump-fun/pump-sdk @coral-xyz/anchor bn.js
+ * ===================================================================== */
+require('./pumpfun-trade').mountRoutes(app);
 
 /* ========================================================================
  * Admin dashboard — /api/visit + /api/admin/overview
