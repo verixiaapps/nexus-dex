@@ -1076,9 +1076,15 @@ function useTradeEngine() {
       }).compileToV0Message(alts);
       const tx = new VersionedTransaction(message);
 
-      const mapSimErr = (logs) => {
-        const j = (logs || []).join('\n').toLowerCase();
-        if (j.includes('insufficient') || j.includes('0x1')) return 'Insufficient balance for this swap.';
+      const mapSimErr = (logs, err) => {
+        const j = ((logs || []).join('\n') + ' ' + JSON.stringify(err || '')).toLowerCase();
+        // Insufficient SOL for fees / account rent surfaces as "insufficient
+        // lamports" or a bare system-program Custom:1. For a SOL-funded swap this
+        // is the #1 cause — the destination token account alone needs ~0.002 SOL
+        // of rent-exempt lamports the wallet may not have.
+        if (j.includes('insufficient lamports') || j.includes('insufficient funds') || j.includes('rent') ||
+            j.includes('insufficient') || j.includes('"custom":1') || j.includes('custom program error: 0x1'))
+          return 'Not enough SOL — a swap needs about 0.002 SOL for the token account plus network fees. Add a little SOL and retry.';
         if (j.includes('slippage') || j.includes('0x1771'))  return 'Price moved — try a higher slippage or smaller amount.';
         if (j.includes('account not') || j.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
         if (j.includes('blockhash') || j.includes('expired')) return 'Quote expired. Please refresh and retry.';
@@ -1090,10 +1096,10 @@ function useTradeEngine() {
           sigVerify: false,
         });
         if (sim.value.err) {
-          throw new Error(mapSimErr(sim.value.logs) || 'Swap simulation failed — the price may have moved.');
+          throw new Error(mapSimErr(sim.value.logs, sim.value.err) || 'Swap can\u2019t complete \u2014 likely not enough SOL for fees + token-account rent (~0.002 SOL), or the price moved. Add a little SOL or try a smaller amount.');
         }
       } catch (simErr) {
-        if (simErr?.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) {
+        if (simErr?.message && /not enough sol|balance|slippage|simulation failed|account not|expired|token account|rent|complete/i.test(simErr.message)) {
           throw simErr;
         }
         console.warn('[swap] sim non-fatal', simErr);
@@ -1681,9 +1687,15 @@ function JupiterTokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
       }).compileToV0Message(alts);
       const tx = new VersionedTransaction(message);
 
-      const mapSimErr = (logs) => {
-        const j = (logs || []).join('\n').toLowerCase();
-        if (j.includes('insufficient') || j.includes('0x1')) return 'Insufficient balance for this swap.';
+      const mapSimErr = (logs, err) => {
+        const j = ((logs || []).join('\n') + ' ' + JSON.stringify(err || '')).toLowerCase();
+        // Insufficient SOL for fees / account rent surfaces as "insufficient
+        // lamports" or a bare system-program Custom:1. For a SOL-funded swap this
+        // is the #1 cause — the destination token account alone needs ~0.002 SOL
+        // of rent-exempt lamports the wallet may not have.
+        if (j.includes('insufficient lamports') || j.includes('insufficient funds') || j.includes('rent') ||
+            j.includes('insufficient') || j.includes('"custom":1') || j.includes('custom program error: 0x1'))
+          return 'Not enough SOL — a swap needs about 0.002 SOL for the token account plus network fees. Add a little SOL and retry.';
         if (j.includes('slippage') || j.includes('0x1771'))  return 'Price moved — try a higher slippage or smaller amount.';
         if (j.includes('account not') || j.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
         if (j.includes('blockhash') || j.includes('expired')) return 'Quote expired. Please refresh and retry.';
@@ -1695,10 +1707,10 @@ function JupiterTokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
           sigVerify: false,
         });
         if (sim.value.err) {
-          throw new Error(mapSimErr(sim.value.logs) || 'Swap simulation failed — the price may have moved.');
+          throw new Error(mapSimErr(sim.value.logs, sim.value.err) || 'Swap can\u2019t complete \u2014 likely not enough SOL for fees + token-account rent (~0.002 SOL), or the price moved. Add a little SOL or try a smaller amount.');
         }
       } catch (simErr) {
-        if (simErr?.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) {
+        if (simErr?.message && /not enough sol|balance|slippage|simulation failed|account not|expired|token account|rent|complete/i.test(simErr.message)) {
           throw simErr;
         }
         console.warn('[swap] sim non-fatal', simErr);
