@@ -506,10 +506,12 @@ async function fetchPortfolio(addressStr) {
   });
 
   // Show a token only if it has a real price AND is worth at least $1.
-  // No-price tokens are hidden entirely (can't be valued / are dust).
+  // EXCEPTION: known xStocks (brand tokens) are real holdings, never dust — always
+  // show them so the wallet reflects what the user owns even if the price feed is
+  // momentarily down or the position is small.
   const filtered = enriched
     .filter(h => h.mint !== SOL_MINT)
-    .filter(h => h.hasPrice && h.value >= MIN_TOKEN_VALUE_USD);
+    .filter(h => BRAND_TOKENS[h.mint] || (h.hasPrice && h.value >= MIN_TOKEN_VALUE_USD));
 
   return {
     solBalance:  lamports / 1e9,
