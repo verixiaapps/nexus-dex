@@ -375,7 +375,7 @@ async function fetchWithTimeout(url, opts = {}, timeoutMs = 12_000) {
 export async function fetchBrandPrices(mints) {
   if (!mints.length) return {};
   try {
-    const url = `https://lite-api.jup.ag/price/v3?ids=${mints.join(',')}`;
+    const url = `/api/jupiter/price?ids=${mints.join(',')}`;
     const res = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 8_000);
     if (!res.ok) return {};
     const json = await res.json();
@@ -398,7 +398,7 @@ export async function fetchBrandPrices(mints) {
 export async function fetchBrandQuotes(mints) {
   if (!mints.length) return {};
   try {
-    const url = `https://lite-api.jup.ag/price/v3?ids=${mints.join(',')}`;
+    const url = `/api/jupiter/price?ids=${mints.join(',')}`;
     const res = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 8_000);
     if (!res.ok) return {};
     const json = await res.json();
