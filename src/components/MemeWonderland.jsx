@@ -2545,9 +2545,15 @@ function TradeSheet({
       }).compileToV0Message(alts);
       const tx = new VersionedTransaction(message);
 
-      const mapSimErr = (logs) => {
-        const j = (logs || []).join('\n').toLowerCase();
-        if (j.includes('insufficient') || j.includes('0x1')) return 'Insufficient balance for this swap.';
+      const mapSimErr = (logs, err) => {
+        const j = ((logs || []).join('\n') + ' ' + JSON.stringify(err || '')).toLowerCase();
+        // Insufficient SOL for fees / account rent surfaces as "insufficient
+        // lamports" or a bare system-program Custom:1. For a SOL-funded swap this
+        // is the #1 cause — the destination token account alone needs ~0.002 SOL
+        // of rent-exempt lamports the wallet may not have.
+        if (j.includes('insufficient lamports') || j.includes('insufficient funds') || j.includes('rent') ||
+            j.includes('insufficient') || j.includes('"custom":1') || j.includes('custom program error: 0x1'))
+          return 'Not enough SOL — a swap needs about 0.002 SOL for the token account plus network fees. Add a little SOL and retry.';
         if (j.includes('slippage') || j.includes('0x1771'))  return 'Price moved — try a higher slippage or smaller amount.';
         if (j.includes('account not') || j.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
         if (j.includes('blockhash') || j.includes('expired')) return 'Quote expired. Please refresh and retry.';
@@ -2559,10 +2565,10 @@ function TradeSheet({
           sigVerify: false,
         });
         if (sim.value.err) {
-          throw new Error(mapSimErr(sim.value.logs) || 'Swap simulation failed — the price may have moved.');
+          throw new Error(mapSimErr(sim.value.logs, sim.value.err) || 'Swap can\u2019t complete \u2014 likely not enough SOL for fees + token-account rent (~0.002 SOL), or the price moved. Add a little SOL or try a smaller amount.');
         }
       } catch (simErr) {
-        if (simErr?.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) {
+        if (simErr?.message && /not enough sol|balance|slippage|simulation failed|account not|expired|token account|rent|complete/i.test(simErr.message)) {
           throw simErr;
         }
         console.warn('[swap] sim non-fatal', simErr);
@@ -3923,9 +3929,10 @@ function LrTokenChart({ mint, symbol = '', poolHint = null }) {
   const [res, setRes]         = useState(LR_RES_DEFAULT);
   const [copied, setCopied]   = useState(false);
   const reqRef = useRef(0);
+  const [attempt, setAttempt] = useState(0);
 
   // Reset to the 1s view each time a different token opens.
-  useEffect(() => { setRes(LR_RES_DEFAULT); }, [mint]);
+  useEffect(() => { setRes(LR_RES_DEFAULT); setAttempt(0); }, [mint]);
 
   useEffect(() => {
     if (!mint) { setStatus('none'); setPool(null); setCandles(null); return; }
@@ -3945,12 +3952,11 @@ function LrTokenChart({ mint, symbol = '', poolHint = null }) {
       if (id !== reqRef.current) return;
       if (c) { setCandles(c); setPool({ provider: 'PUMP' }); setStatus('ok'); return; }
 
-      let networkOk = false;
       // Server-side pool resolution — reliable, not rate-limited.
       try {
         const sAddr = await lrServerPool(mint);
         if (id !== reqRef.current) return;
-        if (sAddr) { const p = { provider: 'GECKOTERMINAL', addr: sAddr }; _mwPoolCache.set(mint, p); networkOk = true; setPool(p); setStatus('ok'); return; }
+        if (sAddr) { const p = { provider: 'GECKOTERMINAL', addr: sAddr }; _mwPoolCache.set(mint, p); setPool(p); setStatus('ok'); return; }
       } catch {}
       if (id !== reqRef.current) return;
 
@@ -3961,7 +3967,6 @@ function LrTokenChart({ mint, symbol = '', poolHint = null }) {
           { headers: { Accept: 'application/json' } });
         if (id !== reqRef.current) return;
         if (r.ok) {
-          networkOk = true;
           const j = await r.json();
           if (id !== reqRef.current) return;
           const best = pickBestGeckoPool(j?.data, mint);
@@ -3971,9 +3976,24 @@ function LrTokenChart({ mint, symbol = '', poolHint = null }) {
       } catch {}
       if (id !== reqRef.current) return;
 
-      setStatus(networkOk ? 'none' : 'fail');
+      // Nothing resolved. On Launch Radar these are bonding-curve tokens; the
+      // real reason is almost always "too fresh to have candle data yet" (a
+      // <2-minute-old token can't have 2 one-minute candles, and has no
+      // GeckoTerminal pool). Show an honest waiting state, not a scary error —
+      // the retry effect below re-checks until candles exist.
+      setStatus('none');
     })();
-  }, [mint, poolHint]);
+  }, [mint, poolHint, attempt]);
+
+  // Fresh launches have no candle history for the first minute or two. Re-resolve
+  // on a bounded timer so the real chart appears automatically the moment
+  // pump.fun has >=2 candles, instead of leaving a dead "unavailable" panel.
+  useEffect(() => {
+    if (status === 'ok' || status === 'loading') return;
+    if (attempt >= 18) return; // ~2 min of retries, then stop quietly
+    const t = setTimeout(() => setAttempt(a => a + 1), 6500);
+    return () => clearTimeout(t);
+  }, [status, attempt]);
 
   // Re-fetch pump candles when the resolution changes.
   useEffect(() => {
@@ -4013,7 +4033,7 @@ function LrTokenChart({ mint, symbol = '', poolHint = null }) {
       ) : status === 'loading' ? (
         <div className="lr-chart-state"><div className="lr-chart-spin" /></div>
       ) : status === 'none' ? (
-        <div className="lr-chart-state">Live chart unavailable right now.</div>
+        <div className="lr-chart-state">Waiting for trade history — the chart appears once this launch has candle data.</div>
       ) : (
         <div className="lr-chart-state">Couldn’t load the chart. Try again shortly.</div>
       )}
