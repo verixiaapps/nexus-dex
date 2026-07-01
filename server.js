@@ -1995,6 +1995,111 @@ require('./ape-pump-candles').mountRoutes(app);
 require('./pumpfun-trade').mountRoutes(app);
 
 /* ========================================================================
+ * NEXUS LAUNCHES — self-contained pump.fun trade builder (inline).
+ *
+ * Own route, own naming, same node process. Does NOT depend on
+ * ./pumpfun-trade.js or ./ape-pump-trade.js. Serves the LaunchRadar drawer.
+ *
+ *   POST /api/nx/pump-trade   body { action:'buy'|'sell', mint, user,
+ *                                    amount, decimals?, pool? }
+ *     -> { action, route:'pumpportal', pool, slippagePct, priorityFee, tx }
+ *
+ * BUY  amount = SOL lamports (string). Client has already sized the trade
+ *      portion for the slippage upper-bound before calling.
+ * SELL amount = raw token units (string); decimals used to convert to UI.
+ *
+ * Returns a fully-built base64 v0 tx from PumpPortal with CURRENT fee
+ * accounts (avoids the IncorrectProgramId the raw-SDK path produced). The
+ * client decompiles it, splices the 3% platform fee, signs with the
+ * connected wallet, and submits via /api/trade-rpc (Alchemy → Ankr).
+ * ===================================================================== */
+const NX_PUMP_TRADE_TIMEOUT_MS = 15_000;
+
+app.post('/api/nx/pump-trade', async (req, res) => {
+  try {
+    const b      = req.body || {};
+    const action = b.action;
+
+    // ── Validate ──
+    if (action !== 'buy' && action !== 'sell')
+      return res.status(400).json({ error: 'action must be buy or sell' });
+    if (!b.mint || !PUMP_BASE58_RE.test(String(b.mint)))
+      return res.status(400).json({ error: 'Invalid mint' });
+    if (!b.user || !PUMP_BASE58_RE.test(String(b.user)))
+      return res.status(400).json({ error: 'Invalid user' });
+    if (b.amount == null)
+      return res.status(400).json({ error: 'Missing amount' });
+
+    // ── Convert amount to the units PumpPortal expects ──
+    let amountStr, denominatedInSol;
+    if (action === 'buy') {
+      // BUY: lamports (string) → SOL (denominatedInSol = true)
+      let lamports;
+      try { lamports = BigInt(String(b.amount)); }
+      catch { return res.status(400).json({ error: 'Invalid amount' }); }
+      if (lamports <= 0n) return res.status(400).json({ error: 'Amount must be > 0' });
+      amountStr        = (Number(lamports) / 1e9).toFixed(9);
+      denominatedInSol = 'true';
+    } else {
+      // SELL: raw token units (string) → UI amount (denominatedInSol = false)
+      let raw;
+      try { raw = BigInt(String(b.amount)); }
+      catch { return res.status(400).json({ error: 'Invalid amount' }); }
+      if (raw <= 0n) return res.status(400).json({ error: 'Amount must be > 0' });
+      const decimals   = Number(b.decimals ?? 6);
+      amountStr        = (Number(raw) / Math.pow(10, decimals)).toString();
+      denominatedInSol = 'false';
+    }
+
+    // ── Ask PumpPortal to build the tx ──
+    const response = await fetchWithTimeout(PUMPPORTAL_URL, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/octet-stream, application/json' },
+      body:    JSON.stringify({
+        publicKey:        b.user,
+        action,
+        mint:             b.mint,
+        amount:           amountStr,
+        denominatedInSol,
+        slippage:         PUMP_SLIPPAGE_PCT,
+        priorityFee:      PUMP_PRIORITY_FEE,
+        pool:             b.pool || 'auto',
+      }),
+    }, NX_PUMP_TRADE_TIMEOUT_MS);
+
+    if (!response.ok) {
+      const text  = await response.text().catch(() => '');
+      const lower = text.toLowerCase();
+      warnSampled('nx-pump-trade-http', 30_000, '[nx-pump-trade] PumpPortal HTTP ' + response.status + ': ' + text.slice(0, 200));
+      if (lower.includes('bonding curve complete') || lower.includes('graduated'))
+        return res.status(409).json({ error: 'Token graduated off the bonding curve — not tradable here.' });
+      if (lower.includes('not a pump') || lower.includes('invalid mint') || lower.includes('not found'))
+        return res.status(404).json({ error: 'Not a pump.fun bonding-curve token.' });
+      if (lower.includes('insufficient'))
+        return res.status(400).json({ error: 'Not enough SOL for this trade + fees.' });
+      return res.status(response.status).json({ error: 'PumpPortal: ' + (text.slice(0, 200) || response.statusText) });
+    }
+
+    const buf = Buffer.from(await response.arrayBuffer());
+    if (buf.length === 0) return res.status(502).json({ error: 'PumpPortal returned empty body.' });
+
+    return res.json({
+      action,
+      route:       'pumpportal',
+      pool:        b.pool || 'auto',
+      slippagePct: PUMP_SLIPPAGE_PCT,
+      priorityFee: PUMP_PRIORITY_FEE,
+      tx:          buf.toString('base64'),
+    });
+  } catch (e) {
+    if (e && e.name === 'AbortError')
+      return res.status(504).json({ error: 'PumpPortal timed out' });
+    logError('nx-pump-trade', e);
+    return res.status(500).json({ error: (e && e.message) ? e.message.slice(0, 200) : 'Unknown error' });
+  }
+});
+
+/* ========================================================================
  * Admin dashboard — /api/visit + /api/admin/overview
  * (mounted last so it can use the same data/ dir as referrals)
  * ===================================================================== */
