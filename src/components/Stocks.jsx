@@ -1175,11 +1175,13 @@ function StockChart({ mint, price, symbol }) {
   const [tf, setTf]         = useState(STK_EMBED_DEFAULT); // '1W' = 1 week
   const [pool, setPool]     = useState(null);              // { provider, addr }
   const [status, setStatus] = useState('loading');         // loading | ok | none | fail
+  const [nativePts, setNativePts] = useState(null);        // real closes fallback
   const [copied, setCopied] = useState(false);
   const reqRef = useRef(0);
 
-  // Reset to the 24-hour view each time a different stock opens.
+  // Reset views each time a different stock opens.
   useEffect(() => { setTf(STK_EMBED_DEFAULT); }, [mint]);
+  useEffect(() => { setNativePts(null); }, [mint]);
 
   useEffect(() => {
     if (!mint) { setStatus('none'); setPool(null); return; }
@@ -1194,7 +1196,25 @@ function StockChart({ mint, price, symbol }) {
       .catch(() => { if (id === reqRef.current) setStatus('fail'); });
   }, [mint]);
 
+  // Native OHLCV fallback: if no embed pool resolves, draw a REAL chart from the
+  // token's own candle closes (/api/dex/candles via stkFetchSeries) so a chart
+  // still shows. Also re-fetches when the timeframe changes in fallback mode.
+  useEffect(() => {
+    if (status !== 'none' && status !== 'fail') return;
+    let stop = false;
+    (async () => {
+      const s = await stkFetchSeries(mint, tf).catch(() => null);
+      if (!stop && s && s.length >= 2) setNativePts(s);
+    })();
+    return () => { stop = true; };
+  }, [status, mint, tf]);
+
   const src = useMemo(() => stkBuildEmbedSrc(pool, tf), [pool, tf]);
+  const nativeBuilt = (nativePts && nativePts.length >= 2) ? stkBuildPath(nativePts, 1000, 400, 6) : null;
+  const nativeUp = (nativePts && nativePts.length >= 2)
+    ? nativePts[nativePts.length - 1].c >= nativePts[0].c : true;
+  const nativeCol = nativeUp ? '#34d8a0' : '#ff6b6b';
+  const chartShown = (status === 'ok' && src) || !!nativeBuilt;
   const shortCa = mint ? mint.slice(0, 4) + '…' + mint.slice(-4) : '';
   const copyCa = async () => { try { await navigator.clipboard.writeText(mint); setCopied(true); setTimeout(() => setCopied(false), 1400); } catch (e) {} };
 
@@ -1206,7 +1226,7 @@ function StockChart({ mint, price, symbol }) {
           <span className="val">{shortCa}</span>
           <button type="button" className="cp" onClick={copyCa}>{copied ? 'COPIED' : 'COPY'}</button>
         </div>
-        <span className="st-chart-prov">{status === 'ok' ? 'GECKOTERMINAL' : 'CHART'}</span>
+        <span className="st-chart-prov">{status === 'ok' ? 'GECKOTERMINAL' : (nativeBuilt ? 'LIVE OHLCV' : 'CHART')}</span>
       </div>
       {status === 'ok' && src ? (
         <div className="st-chart-embed">
@@ -1219,6 +1239,13 @@ function StockChart({ mint, price, symbol }) {
             allow="clipboard-write"
           />
         </div>
+      ) : nativeBuilt ? (
+        <div className="st-chart-embed" style={{ background: '#0a0b0e' }}>
+          <svg viewBox="0 0 1000 400" preserveAspectRatio="none" style={{ width: '100%', height: '100%', display: 'block' }}>
+            <path d={nativeBuilt.area} fill={nativeUp ? 'rgba(52,216,160,0.14)' : 'rgba(255,107,107,0.14)'} />
+            <path d={nativeBuilt.line} fill="none" stroke={nativeCol} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+          </svg>
+        </div>
       ) : status === 'loading' ? (
         <div className="st-chart-embed st-chart-sk">
           <span className="st-chart-sk-gl" style={{ top: '25%' }} />
@@ -1227,15 +1254,15 @@ function StockChart({ mint, price, symbol }) {
           <svg className="st-chart-sk-svg" viewBox="0 0 300 150" preserveAspectRatio="none"><path d="M0 95 L40 88 L80 100 L120 82 L160 92 L200 70 L240 86 L300 64" /></svg>
         </div>
       ) : status === 'none' ? (
-        <div className="st-chart-embed st-chart-state">Loading live chart…</div>
+        <div className="st-chart-embed st-chart-state">Live chart unavailable right now.</div>
       ) : (
         <div className="st-chart-embed st-chart-state">Couldn’t load the chart. Try again shortly.</div>
       )}
       <div className="st-chart-tfs">
         {STK_TFS.map(t => (
-          <button key={t} className={'st-chart-tf' + (t === tf ? ' on' : '')} disabled={status !== 'ok'} onClick={() => setTf(t)}>{t}</button>
+          <button key={t} className={'st-chart-tf' + (t === tf ? ' on' : '')} disabled={!chartShown} onClick={() => setTf(t)}>{t}</button>
         ))}
-        <span className="st-chart-tfmeta">{status === 'ok' ? '● Live · ' + tf : 'Live'}</span>
+        <span className="st-chart-tfmeta">{status === 'ok' ? '● Live · ' + tf : (nativeBuilt ? '● ' + tf : 'Live')}</span>
       </div>
     </div>
   );
