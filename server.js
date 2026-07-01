@@ -187,6 +187,21 @@ function setCachedJson(url, status, payload, ttlMs) {
   if (getCache.size > 250) { const k = getCache.keys().next().value; if (k) getCache.delete(k); }
 }
 
+// Bound any mint/uri-keyed Map so continuous token ingestion can't grow it
+// without limit (Map preserves insertion order, so the first key is oldest).
+// Without this, _lrPfCache / _lrMetaCache / _apeCache leaked one entry per new
+// token forever → container OOM → SIGTERM restart loop.
+function _capMap(m, max) {
+  while (m.size > max) {
+    const k = m.keys().next().value;
+    if (k === undefined) break;
+    m.delete(k);
+  }
+}
+const _LR_PF_CACHE_MAX   = 2000;
+const _LR_META_CACHE_MAX = 2000;
+const _APE_CACHE_MAX     = 2000;
+
 /* ========================================================================
  * Launch Radar — LIVE feed via PumpPortal WebSocket
  * ===================================================================== */
@@ -416,6 +431,7 @@ async function _lrFetchPumpInfo(mint, solPriceUsd) {
 
     const out = { holders, liquidityUsd, imageUrl, graduated, bondingProgress, ts: Date.now() };
     _lrPfCache.set(mint, out);
+    _capMap(_lrPfCache, _LR_PF_CACHE_MAX);
     return out;
   } catch (e) {
     if (!_lrPfLogged) {
@@ -443,6 +459,7 @@ async function _lrFetchMetaImage(uri) {
     );
     if (!r.ok) {
       _lrMetaCache.set(uri, { image: null, ts: Date.now() });
+      _capMap(_lrMetaCache, _LR_META_CACHE_MAX);
       return null;
     }
     const d = await r.json();
@@ -450,6 +467,7 @@ async function _lrFetchMetaImage(uri) {
                   (typeof d?.image_url === 'string' && d.image_url) ||
                   (typeof d?.imageUrl  === 'string' && d.imageUrl)  || null;
     _lrMetaCache.set(uri, { image, ts: Date.now() });
+    _capMap(_lrMetaCache, _LR_META_CACHE_MAX);
     if (!_lrMetaLogged && image) {
       _lrMetaLogged = true;
       console.log('[lr-meta] image fallback live');
@@ -457,6 +475,7 @@ async function _lrFetchMetaImage(uri) {
     return image;
   } catch (e) {
     _lrMetaCache.set(uri, { image: null, ts: Date.now() });
+    _capMap(_lrMetaCache, _LR_META_CACHE_MAX);
     if (!_lrMetaLogged) {
       _lrMetaLogged = true;
       console.warn('[lr-meta] fetch failed:', e?.message);
@@ -2203,7 +2222,7 @@ function _apeShapeGt(d) {
 }
 
 function _apeGetCached(mint) { const h = _apeCache.get(mint); return (h && (Date.now() - h.at) < APE_TTL_MS) ? h.v : null; }
-function _apeSet(mint, v) { _apeCache.set(mint, { at: Date.now(), v }); }
+function _apeSet(mint, v) { _apeCache.set(mint, { at: Date.now(), v }); _capMap(_apeCache, _APE_CACHE_MAX); }
 
 async function _apeFetchToken(mint) {
   try {
