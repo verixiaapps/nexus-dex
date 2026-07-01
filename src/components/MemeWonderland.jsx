@@ -4657,9 +4657,6 @@ function LaunchCard({ token, owned, onBuy, onSell, isFresh, tintIndex = 0 }) {
 /* ════════════════════════════════════════════════════════════════════
    MAIN COMPONENT
    ════════════════════════════════════════════════════════════════════ */
-// Launches tab was removed; LaunchRadar is retained (unused) as the reference
-// implementation for folding fresh-launch filters/logic into Discover.
-// eslint-disable-next-line no-unused-vars
 function LaunchRadar({ onConnectWallet } = {}) {
   useLrCSS();
   useMwdLrCSS();
@@ -5338,11 +5335,35 @@ function useDhCSS() {
 
 export default function DiscoverHub(props) {
   useDhCSS();
-  // Launches tab removed — Discover is the single view. All launch filtering
-  // now lives inside the Discover feed below.
+  // Single Discover view with two modes. "Trending" = the Jupiter feed +
+  // Jupiter swap drawer. "New Launches" = the fresh pump.fun feed with ALL its
+  // filters + the pump.fun trade drawer. Both components stay mounted so the
+  // live feeds and scroll positions persist when flipping. The pump trade path
+  // and its filters live inside the LaunchRadar IIFE, so this reuses that whole
+  // working unit rather than copying it across the sealed scope.
+  const [mode, setMode] = useState('trending');
   return (
     <div style={{ background: '#060708', minHeight: '100vh' }}>
-      <MemeWonderland {...props} />
+      <div className="dh-switch-wrap">
+        <div className="dh-switch" role="tablist" aria-label="Discover mode">
+          <button type="button" role="tab" aria-selected={mode === 'trending'}
+            className={'dh-tab' + (mode === 'trending' ? ' dh-active' : '')}
+            onClick={() => setMode('trending')}>
+            Trending
+          </button>
+          <button type="button" role="tab" aria-selected={mode === 'new'}
+            className={'dh-tab' + (mode === 'new' ? ' dh-active' : '')}
+            onClick={() => setMode('new')}>
+            New Launches
+          </button>
+        </div>
+      </div>
+      <div className="dh-page" hidden={mode !== 'trending'}>
+        <MemeWonderland {...props} />
+      </div>
+      <div className="dh-page" hidden={mode !== 'new'}>
+        <LaunchRadar {...props} />
+      </div>
     </div>
   );
 }
