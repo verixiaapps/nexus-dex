@@ -1147,6 +1147,7 @@ function PumpTokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
     }
     return { mode: 'sell', decimals, percentage: pct, tradeTokens: tradeTokens.toString(), tradeTokensUi, feeLamports };
   }, [amount, isBuy, token, tokenBalance, solPrice]);
+  /* ════════════════════════════════════════════════════════════════════
      PUMP.FUN PATH — LaunchRadar executeSwap moved in VERBATIM (body
      character-for-character; only the wrapper name + local tradeConnection +
      balance refresh differ). Mirrors the Jupiter handleSwap placement above.
