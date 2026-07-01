@@ -1808,7 +1808,11 @@ async function getPumpRoute({ action, mint, user, amount, decimals, connection }
   };
   if (decimals != null) body.decimals = Number(decimals);
 
-  const r = await fetch('/api/pumpfun/trade', {
+  // Build via the SAME PumpPortal route the Ape page uses (/api/ape/pump-trade),
+  // which returns a fully-built v0 tx with CURRENT fee accounts. The old
+  // /api/pumpfun/trade (raw SDK) returned bare instructions with no .tx, so this
+  // path always failed on the data.tx check. Drawer keeps its own sim/sign/send.
+  const r = await fetch('/api/ape/pump-trade', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -2256,8 +2260,16 @@ function saveSeenMap(walletAddress, map) {
 export default function Holdings({ onConnectWallet }) {
   useHpCSS();
 
-  const { isConnected, walletAddress } = useNexusWallet();
+  // Wallet identity: the adapter (useWallet) is the source of truth — it's what
+  // signs every trade on this page and across the app. The Nexus context is a
+  // fallback. Previously balance keyed ONLY off useNexusWallet().walletAddress,
+  // so when the adapter was connected but that context lagged/returned empty,
+  // loadPortfolio early-returned and the balance never showed. Deriving from the
+  // adapter first fixes that; isConnected is true if EITHER source is connected.
+  const { isConnected: nexusConnected, walletAddress: nexusAddr } = useNexusWallet();
   const { publicKey, signTransaction, connected } = useWallet();
+  const walletAddress = publicKey ? publicKey.toBase58() : (nexusAddr || null);
+  const isConnected   = connected || nexusConnected || !!publicKey;
 
   const [portfolio, setPortfolio]   = useState(null);
   const [loading, setLoading]       = useState(true);
