@@ -2887,6 +2887,10 @@ function SuccessView({ data, token, onClose }) {
   );
 }
 
+// Expose the working Discover trade drawer + success view so the Launches tab
+// can reuse the EXACT same Jupiter buy/sell flow (no logic duplication).
+MemeWonderland.TradeSheet  = TradeSheet;
+MemeWonderland.SuccessView = SuccessView;
 return MemeWonderland;
 })();
 
@@ -3242,6 +3246,43 @@ const LR_CSS = `
   .lr-feature-sym{font-size:22px}
   .lr-feature-avatar{width:48px;height:48px}
 }
+
+/* ════════════════════════════════════════════════════════════════════
+   DARK TERMINAL THEME — Launches (mirrors the Discover .mw-* dark block)
+   Appended override (wins the cascade). Keeps Launches visually identical
+   to the Discover tab so the token detail page renders dark, not white.
+   ════════════════════════════════════════════════════════════════════ */
+.lr-root{
+  --ink:#eceef2; --ink-2:#8b919b; --ink-3:#565c66;
+  --green:#2fd67b; --mint:#2fd67b; --red:#ff5a6a; --down:#ff5a6a; --pink:#ff5a6a;
+  --sky:#9b6bff; --vio:#9b6bff; --vio-soft:rgba(155,107,255,.14);
+  --border:#23262e; --hairline:#1d2027; --fill:#181b20;
+  --glass:#131519; --glass-strong:#15181d;
+  --surf:#131519; --surf2:#1c2128; --bg:#0a0b0d;
+  background:#0a0b0d;
+}
+
+/* surfaces that hard-code white → dark */
+.lr-card,
+.lr-orb,
+.lr-feature,
+.lr-chart,
+.lr-chart-frame-wrap,
+.lr-trade-card,
+.lr-trade-row{ background:#131519; }
+.lr-chart-state{ background:#101216; }
+
+/* full-screen / overlay layers */
+.lr-trade-overlay{ background:rgba(10,11,13,.55); }
+
+/* near-black chips → lifted so they read on a dark surface */
+.lr-mini-avatar,.lr-mini-avatar .lr-inner,
+.lr-trade-avatar,.lr-trade-avatar .lr-inner,
+.lr-trade-token-chip-logo{ background:#1c2128; }
+
+/* light-on-dark action chips (were #0a0a0a/#fff) */
+.lr-chart-ca-copy{ background:var(--fill); color:var(--ink); border:1px solid var(--border); }
+.lr-trade-token-chip{ background:var(--glass-strong); }
 `;
 
 function useLrCSS() {
@@ -4172,6 +4213,68 @@ function SettingsModal({ buyPresets, setBuyPresets, sellPresets, setSellPresets,
             of expectedSol to FEE_WALLET, after the curve has paid
             native SOL into the user's wallet.
    ════════════════════════════════════════════════════════════════════ */
+/* ════════════════════════════════════════════════════════════════════
+   LrJupiterTrade — Launches trade drawer that REUSES Discover's exact
+   working Jupiter buy/sell flow (MemeWonderland.TradeSheet). No trade
+   logic is duplicated here: this adapter only supplies the controlled
+   state (amount / mode / preset) and the success view that TradeSheet
+   expects, wired to LaunchRadar's own wallet / connection / balances.
+   ════════════════════════════════════════════════════════════════════ */
+function LrJupiterTrade({
+  token, initialMode = 'buy', onClose,
+  wallet, connection, balances, refreshBalances, solPrice,
+}) {
+  const Sheet   = MemeWonderland.TradeSheet;
+  const Success = MemeWonderland.SuccessView;
+
+  const [mode, setMode]                     = React.useState(initialMode);
+  const [amount, setAmount]                 = React.useState('0.50');
+  const [selectedPreset, setSelectedPreset] = React.useState('0.5');
+  const [success, setSuccess]               = React.useState(null);
+
+  const handlePreset = (amt) => { setSelectedPreset(amt); setAmount(amt === 'MAX' ? '1.0' : amt); };
+  const handleAmount = (v)   => { setAmount(v); setSelectedPreset(null); };
+
+  // TradeSheet reads balStateFor(mint) only to know if a balance is loaded.
+  // LaunchRadar doesn't track per-mint load state, so treat "present" as ok.
+  const balStateFor = React.useCallback(
+    (mint) => (balances && balances[mint] ? 'ok' : 'idle'),
+    [balances]
+  );
+
+  if (success && token) {
+    return (
+      <Success
+        data={success}
+        token={token}
+        onClose={() => { setSuccess(null); onClose && onClose(); }}
+      />
+    );
+  }
+
+  if (!token) return null;
+
+  return (
+    <Sheet
+      token={token}
+      solPrice={solPrice}
+      mode={mode}
+      setMode={setMode}
+      amount={amount}
+      setAmount={handleAmount}
+      selectedPreset={selectedPreset}
+      handlePreset={handlePreset}
+      onClose={onClose}
+      wallet={wallet}
+      connection={connection}
+      balances={balances}
+      balStateFor={balStateFor}
+      refreshBalances={refreshBalances}
+      onSuccess={(payload) => { setSuccess({ mint: token.mint, ...payload }); refreshBalances && refreshBalances(); }}
+    />
+  );
+}
+
 function TradeModal({
   token, initialMode, onClose, onConfirm,
   buyPresets, sellPresets,
@@ -5241,18 +5344,15 @@ function LaunchRadar({ onConnectWallet } = {}) {
       )}
 
       {tradeOpen && (
-        <TradeModal
+        <LrJupiterTrade
           token={tradeOpen.token}
           initialMode={tradeOpen.mode}
           onClose={() => setTradeOpen(null)}
-          onConfirm={handleTradeConfirm}
-          buyPresets={buyPresets}
-          sellPresets={sellPresets}
-          solBalance={solBalance}
-          tokenBalance={balances[tradeOpen.token.mint]}
+          wallet={wallet}
+          connection={connection}
+          balances={balances}
+          refreshBalances={refreshBalances}
           solPrice={solPrice}
-          connected={!!wallet.publicKey}
-          onConnect={requireWallet}
         />
       )}
 
