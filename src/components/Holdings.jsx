@@ -555,7 +555,7 @@ async function fetchPricesBatched(mints) {
   for (let i = 0; i < mints.length; i += 100) chunks.push(mints.slice(i, i + 100));
   const results = await Promise.all(chunks.map(async (chunk) => {
     try {
-      const r = await fetch(`https://lite-api.jup.ag/price/v3?ids=${chunk.join(',')}`);
+      const r = await fetch(`/api/jupiter/price?ids=${chunk.join(',')}`);
       if (!r.ok) return {};
       return await r.json();
     } catch { return {}; }
