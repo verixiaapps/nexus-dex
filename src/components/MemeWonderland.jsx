@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { BRANDS, fetchBrandQuotes, fetchBrandIcons, stkFetchSeries, stkThrottle } from './Stocks.jsx';
+import { BRANDS, fetchBrandPrices, stkFetchSeries, stkThrottle } from './Stocks.jsx';
 
 // =====================================================================
 // Discover — the main discovery page. Self-contained by design (mirrors
@@ -8,7 +8,7 @@ import { BRANDS, fetchBrandQuotes, fetchBrandIcons, stkFetchSeries, stkThrottle 
 // break the build. Sources are IDENTICAL to LiveTokenFeeds:
 //   /api/dex/launches                          → pump.fun launches
 //   /api/jupiter/tokens/v2/toporganicscore/24h → graduated (Jupiter)
-//   BRANDS + fetchBrandQuotes/Icons          → xStocks
+//   BRANDS + fetchBrandPrices                → xStocks (icons fetched inline)
 // Every token is opened via onOpenToken(), so the existing pump/Jupiter
 // TokenSheet and StockTradeModal handle trading unchanged.
 // =====================================================================
@@ -82,6 +82,26 @@ function uniqMint(list){
     if(seen.has(t.mint)||seen.has(clone)) return false;
     seen.add(t.mint); seen.add(clone); return true;
   });
+}
+
+// xStock logos — inlined exactly like App.js's appFetchBrandIcons (same
+// /api/jupiter/tokens/search endpoint). Kept local so Discover depends only on
+// the Stocks.jsx exports App.js already imports (BRANDS, fetchBrandPrices,
+// stkFetchSeries, stkThrottle) — never a newer export the live bundle may lack.
+async function fetchStockIcons(mints){
+  if(!mints||!mints.length) return {};
+  try{
+    const ctrl=new AbortController();
+    const timer=setTimeout(()=>ctrl.abort(),8000);
+    const r=await fetch(`/api/jupiter/tokens/search?query=${encodeURIComponent(mints.join(','))}`,{headers:{Accept:'application/json'},signal:ctrl.signal});
+    clearTimeout(timer);
+    if(!r.ok) return {};
+    const data=await r.json();
+    const arr=Array.isArray(data)?data:(data?.tokens||[]);
+    const out={};
+    for(const tk of arr){ const id=tk?.id||tk?.address; if(!id) continue; const url=tk.icon||tk.logoURI||null; if(url) out[id]=url; }
+    return out;
+  }catch{ return {}; }
 }
 
 // ── normalizers — same mapping + route tags App/TokenSheet expect ─────
@@ -304,27 +324,24 @@ export default function Discover({ onSwitchTab, onOpenToken, onConnectWallet }){
     return ()=>{ dead=true; clearInterval(id); };
   },[]);
 
-  // xStocks — real wiring, matched to the Stocks page / XStocksStrip:
-  //   fetchBrandQuotes(mints) → { mint: { price, change } }  (Jupiter price v3)
-  //   fetchBrandIcons(mints)  → { mint: logoURL }
-  // BRANDS carry { mint, symbol, name, ticker, decimals, sector }; display uses
-  // the ticker (TSLA), decimals come from the brand (8). Opening one routes to
-  // StockTradeModal via App.openToken, which matches on mint.
+  // xStocks — uses only the Stocks.jsx exports App.js already imports, so it
+  // can't call an undefined function in the live bundle. Price from
+  // fetchBrandPrices ({mint: price}); 24h direction comes from the '1M' series
+  // (pctFromSeries, like XStocksStrip); logos via the inline search fetch.
+  // Opening one routes to StockTradeModal through App.openToken (matched by mint).
   const [stockIcons,setStockIcons]=useState({});
   useEffect(()=>{
     let dead=false;
     const picks=BRANDS.slice(0,12);
     const mints=picks.map(b=>b.mint);
-    fetchBrandIcons(mints).then(ic=>{ if(!dead) setStockIcons(ic||{}); }).catch(()=>{});
+    fetchStockIcons(mints).then(ic=>{ if(!dead) setStockIcons(ic||{}); }).catch(()=>{});
     const load=async()=>{
-      const q=await fetchBrandQuotes(mints).catch(()=>({}));
+      const prices=await fetchBrandPrices(mints).catch(()=>({}));
       if(dead) return;
       const list=picks.map(b=>{
-        const info=q?.[b.mint];
-        const price=Number(info?.price)||0;
-        const change=Number.isFinite(info?.change)?info.change:0;
+        const price=Number(prices?.[b.mint])||0;
         return { mint:b.mint, sym:b.ticker, name:b.name, icon:null, emoji:(b.ticker||'?').charAt(0),
-          price, change, mcap:0, liquidity:0, holders:0, volume24h:0,
+          price, change:0, mcap:0, liquidity:0, holders:0, volume24h:0,
           age:'24/7', ageMs:Infinity, decimals:b.decimals,
           sub:`${b.name} · Tokenized equity · 24/7`, route:'stock', kind:'stock' };
       }).filter(x=>x.price>0);
@@ -349,8 +366,8 @@ export default function Discover({ onSwitchTab, onOpenToken, onConnectWallet }){
     return ()=>{ dead=true; clearInterval(id); };
   },[]);
 
-  // merge → score → decorate. Stocks score high on safety, momentum from real
-  // 24h change; their logos come from fetchBrandIcons.
+  // merge → score → decorate. Stocks score high on safety, momentum from the
+  // '1M' series direction; their logos come from the inline icon fetch.
   const all=useMemo(()=>{
     const merged=uniqMint([...pumpToks,...jupToks,...stockToks]);
     return merged.map(t=>{
