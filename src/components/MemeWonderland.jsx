@@ -3645,29 +3645,24 @@ async function getPumpRoute({ action, mint, user, amount, decimals, connection }
   };
   if (decimals != null) body.decimals = Number(decimals);
 
-  const r = await fetch('/api/pumpfun/trade', {
+  // Build via the SAME PumpPortal route the Ape page uses (/api/ape/pump-trade).
+  // It returns a fully-built v0 transaction with CURRENT fee accounts, fixing the
+  // IncorrectProgramId the raw-SDK /api/pumpfun/trade path produced. This drawer
+  // keeps its OWN wallet flow (decompile → add 3% fee ix → simulate → sign →
+  // send); only the source of the tx changed. ape-pump-trade.js is untouched.
+  const r = await fetch('/api/ape/pump-trade', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data?.error || ('pump HTTP ' + r.status));
-  if (!Array.isArray(data.instructions) || data.instructions.length === 0)
-    throw new Error(data?.error || 'Pump route returned no instructions.');
+  if (!data.tx || typeof data.tx !== 'string')
+    throw new Error(data?.error || 'Pump route returned no transaction.');
 
-  // Server (pumpfun-trade.js) builds the bonding-curve ixs and serializes them;
-  // deserialize into the {programId, keys, data} shape TransactionMessage takes
-  // (same pattern as SwapWidget's deserIx). Bonding-curve txs carry no ALTs.
-  const instructions = data.instructions.map((ix) => ({
-    programId: new PublicKey(ix.programId),
-    keys: (ix.accounts || []).map((a) => ({
-      pubkey:     new PublicKey(a.pubkey),
-      isSigner:   !!a.isSigner,
-      isWritable: !!a.isWritable,
-    })),
-    data: Buffer.from(ix.data, 'base64'),
-  }));
-  const alts = [];
+  // PumpPortal builds ONE v0 tx (ComputeBudget ixs included). Decompile into
+  // { instructions, alts } — exactly what the sheet's executeSwap consumes.
+  const { instructions, alts } = await decodeBuiltTx(data.tx, connection);
   try {
     console.log('[lr-pump]', action, '| pool:', data.pool,
       '| ixs:', instructions.length, '| alts:', alts.length,
@@ -3785,6 +3780,10 @@ function useTokenIcon(token) {
 // never rate-limited/CORS-blocked). Picks the base-token-matched, deepest pool.
 // Server-side pool resolution (never browser-rate-limited): /api/nx/pool first,
 // then the existing /api/ape/curve. Both return a GeckoTerminal pool address.
+// LaunchRadar-local pool cache. Discover has its own _mwPoolCache in a
+// separate sealed scope this block cannot see, so it keeps its own.
+const _mwPoolCache = new Map(); // mint -> { provider, addr }
+
 async function lrServerPool(mint) {
   try {
     const r = await fetch('/api/nx/pool/' + encodeURIComponent(mint), { headers: { Accept: 'application/json' } });
@@ -3858,34 +3857,96 @@ function lrBuildEmbedSrc(pool, resKey) {
     '?embed=1&info=0&swaps=0&grayscale=0&light_chart=1&bg_color=ffffff&resolution=' + r.gecko;
 }
 
+// ── Real pump.fun bonding-curve candles — COPIED VERBATIM from Ape.jsx
+// (loadPumpCandles + PumpCandleChart). Fresh launches have no GeckoTerminal pool
+// yet, so this renders their REAL on-curve candles as native SVG. Only Ape's two
+// chart CSS classes are swapped for this file's lr-chart styling / inline SVG.
+const _pumpCandleCache = new Map();
+async function loadPumpCandles(mint, opts) {
+  const o = opts || {};
+  const tf = Number(o.timeframeMin) > 0 ? Number(o.timeframeMin) : 1;
+  const limit = Number(o.limit) > 0 ? Number(o.limit) : 200;
+  if (!mint) return null;
+  const key = mint + ':' + tf;
+  if (_pumpCandleCache.has(key)) return _pumpCandleCache.get(key);
+  try {
+    const r = await fetch('/api/ape/pump-candles/' + encodeURIComponent(mint) + '?tf=' + tf + '&limit=' + limit,
+      { headers: { Accept: 'application/json' } });
+    if (!r.ok) return null;
+    const d = await r.json();
+    const candles = Array.isArray(d && d.candles) ? d.candles : null;
+    if (!candles || candles.length < 2) return null;
+    _pumpCandleCache.set(key, candles);
+    return candles;
+  } catch (e) { return null; }
+}
+function PumpCandleChart({ candles }) {
+  if (!Array.isArray(candles) || candles.length < 2) {
+    return <div className="lr-chart-state">No candle history yet.</div>;
+  }
+  const W = 1000, H = 400, padY = 16;
+  const data = candles.slice(-90);
+  const n = data.length;
+  let min = Infinity, max = -Infinity;
+  for (const k of data) { if (k.l < min) min = k.l; if (k.h > max) max = k.h; }
+  if (!(max > min)) { max = min + (Math.abs(min) * 0.001 || 1e-9); }
+  const rng = max - min;
+  const slot = W / n;
+  const bw = Math.max(1, slot * 0.6);
+  const yOf = (v) => padY + (1 - (v - min) / rng) * (H - 2 * padY);
+  const UP = '#11b87f', DN = '#f0425a';
+  return (
+    <svg viewBox={'0 0 ' + W + ' ' + H} preserveAspectRatio="none" aria-hidden="true"
+      style={{ width: '100%', height: '100%', display: 'block', background: '#0a0b0e' }}>
+      {data.map((k, i) => {
+        const cx = i * slot + slot / 2;
+        const isUp = Number(k.c) >= Number(k.o);
+        const col = isUp ? UP : DN;
+        const top = Math.min(yOf(k.o), yOf(k.c));
+        const bh = Math.max(1, Math.abs(yOf(k.c) - yOf(k.o)));
+        return (
+          <g key={i}>
+            <line x1={cx} x2={cx} y1={yOf(k.h).toFixed(1)} y2={yOf(k.l).toFixed(1)} stroke={col} strokeWidth="1.3" />
+            <rect x={(cx - bw / 2).toFixed(1)} y={top.toFixed(1)} width={bw.toFixed(1)} height={bh.toFixed(1)} fill={col} />
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+const PUMP_TF_MIN = { '1s': 1, '15s': 1, '1m': 1, '5m': 5, '1h': 60, '1H': 60 };
+
 function LrTokenChart({ mint, symbol = '', poolHint = null }) {
-  const [status, setStatus] = useState('loading'); // loading | ok | none | fail
-  const [pool, setPool]     = useState(null);       // { provider, addr }
-  const [res, setRes]       = useState(LR_RES_DEFAULT);
-  const [copied, setCopied] = useState(false);
+  const [status, setStatus]   = useState('loading'); // loading | ok | none | fail
+  const [pool, setPool]       = useState(null);       // { provider, addr } | { provider:'PUMP' }
+  const [candles, setCandles] = useState(null);
+  const [res, setRes]         = useState(LR_RES_DEFAULT);
+  const [copied, setCopied]   = useState(false);
   const reqRef = useRef(0);
 
   // Reset to the 1s view each time a different token opens.
   useEffect(() => { setRes(LR_RES_DEFAULT); }, [mint]);
 
   useEffect(() => {
-    if (!mint) { setStatus('none'); setPool(null); return; }
+    if (!mint) { setStatus('none'); setPool(null); setCandles(null); return; }
     const id = ++reqRef.current;
-    // Feed already gave us a contract-matched pool → chart immediately (+ cache).
+    // Feed already gave us a contract-matched (graduated) pool → embed it.
     if (poolHint && typeof poolHint === 'string') {
       const p = { provider: 'GECKOTERMINAL', addr: poolHint };
       _mwPoolCache.set(mint, p);
       setPool(p); setStatus('ok'); return;
     }
-    // Already resolved this token once → load instantly from cache, no network.
-    const cached = _mwPoolCache.get(mint);
-    if (cached) { setPool(cached); setStatus('ok'); return; }
-    setStatus('loading'); setPool(null);
+    setStatus('loading'); setPool(null); setCandles(null);
 
     (async () => {
-      let networkOk = false;
+      // Launch Radar is bonding-curve first: real pump.fun candles cover the
+      // fresh launches GeckoTerminal hasn't indexed yet.
+      const c = await loadPumpCandles(mint, { limit: 200, timeframeMin: PUMP_TF_MIN[res] || 1 });
+      if (id !== reqRef.current) return;
+      if (c) { setCandles(c); setPool({ provider: 'PUMP' }); setStatus('ok'); return; }
 
-      // 0) Server-side pool resolution — reliable, not rate-limited.
+      let networkOk = false;
+      // Server-side pool resolution — reliable, not rate-limited.
       try {
         const sAddr = await lrServerPool(mint);
         if (id !== reqRef.current) return;
@@ -3893,7 +3954,7 @@ function LrTokenChart({ mint, symbol = '', poolHint = null }) {
       } catch {}
       if (id !== reqRef.current) return;
 
-      // GeckoTerminal only — covers pump.fun bonding-curve pools and graduated pairs.
+      // GeckoTerminal — covers graduated pairs.
       try {
         const r = await fetch(
           `https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}/pools`,
@@ -3910,13 +3971,23 @@ function LrTokenChart({ mint, symbol = '', poolHint = null }) {
       } catch {}
       if (id !== reqRef.current) return;
 
-      // No pool. If GeckoTerminal responded, the token just isn't indexed yet
-      // (typical for a seconds-old bonding curve); otherwise it's a network failure.
       setStatus(networkOk ? 'none' : 'fail');
     })();
   }, [mint, poolHint]);
 
-  const src = useMemo(() => lrBuildEmbedSrc(pool, res), [pool, res]);
+  // Re-fetch pump candles when the resolution changes.
+  useEffect(() => {
+    if (pool?.provider !== 'PUMP' || !mint) return;
+    let stop = false;
+    (async () => {
+      const c = await loadPumpCandles(mint, { limit: 200, timeframeMin: PUMP_TF_MIN[res] || 1 });
+      if (!stop && c) setCandles(c);
+    })();
+    return () => { stop = true; };
+  }, [pool, res, mint]);
+
+  const isPumpChart = pool?.provider === 'PUMP';
+  const src = useMemo(() => (isPumpChart ? null : lrBuildEmbedSrc(pool, res)), [pool, res, isPumpChart]);
   const shortCa = mint ? mint.slice(0, 4) + '…' + mint.slice(-4) : '';
   const copyCa = async () => {
     try { await navigator.clipboard.writeText(mint); setCopied(true); setTimeout(() => setCopied(false), 1400); } catch {}
@@ -3930,9 +4001,11 @@ function LrTokenChart({ mint, symbol = '', poolHint = null }) {
           <span className="lr-chart-ca-v">{shortCa}</span>
           <button type="button" className="lr-chart-ca-copy" onClick={copyCa}>{copied ? 'COPIED' : 'COPY'}</button>
         </div>
-        <span className="lr-chart-src">{pool?.provider || 'CHART'}</span>
+        <span className="lr-chart-src">{isPumpChart ? 'PUMP.FUN' : (pool?.provider || 'CHART')}</span>
       </div>
-      {status === 'ok' && src ? (
+      {status === 'ok' && isPumpChart ? (
+        <div className="lr-chart-frame-wrap"><PumpCandleChart candles={candles} /></div>
+      ) : status === 'ok' && src ? (
         <div className="lr-chart-frame-wrap">
           <iframe key={pool.provider + pool.addr + res} className="lr-chart-frame" src={src} title={(symbol || 'Token') + ' price chart'}
             loading="lazy" allow="clipboard-write" />
