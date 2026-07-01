@@ -504,27 +504,86 @@ function buildEmbedSrc(pool, resKey) {
     '?embed=1&info=0&swaps=0&grayscale=0&light_chart=1&bg_color=ffffff&resolution=' + r.gecko;
 }
 
-function SheetChart({ mint, sym, poolHint = null }) {
-  const [status, setStatus] = useState('loading'); // loading | ok | none | fail
-  const [pool, setPool]     = useState(null);       // { provider, addr }
-  const [res, setRes]       = useState(CHART_RES_DEFAULT);
+// ── Real pump.fun bonding-curve candles — COPIED VERBATIM from Ape.jsx
+// (loadPumpCandles + PumpCandleChart). Fresh pump tokens have no GeckoTerminal
+// pool yet, so this renders their REAL on-curve candles as native SVG instead of
+// an empty embed. Only the two Ape CSS classes are swapped for inline styles.
+const _pumpCandleCache = new Map();
+async function loadPumpCandles(mint, opts) {
+  const o = opts || {};
+  const tf = Number(o.timeframeMin) > 0 ? Number(o.timeframeMin) : 1;
+  const limit = Number(o.limit) > 0 ? Number(o.limit) : 200;
+  if (!mint) return null;
+  const key = mint + ':' + tf;
+  if (_pumpCandleCache.has(key)) return _pumpCandleCache.get(key);
+  try {
+    const r = await fetch('/api/ape/pump-candles/' + encodeURIComponent(mint) + '?tf=' + tf + '&limit=' + limit,
+      { headers: { Accept: 'application/json' } });
+    if (!r.ok) return null;
+    const d = await r.json();
+    const candles = Array.isArray(d && d.candles) ? d.candles : null;
+    if (!candles || candles.length < 2) return null;
+    _pumpCandleCache.set(key, candles);
+    return candles;
+  } catch (e) { return null; }
+}
+function PumpCandleChart({ candles }) {
+  if (!Array.isArray(candles) || candles.length < 2) {
+    return <span style={{ fontFamily: MONO, fontSize: 11, color: C.ink3, padding: '0 24px' }}>No candle history yet.</span>;
+  }
+  const W = 1000, H = 400, padY = 16;
+  const data = candles.slice(-90);
+  const n = data.length;
+  let min = Infinity, max = -Infinity;
+  for (const k of data) { if (k.l < min) min = k.l; if (k.h > max) max = k.h; }
+  if (!(max > min)) { max = min + (Math.abs(min) * 0.001 || 1e-9); }
+  const rng = max - min;
+  const slot = W / n;
+  const bw = Math.max(1, slot * 0.6);
+  const yOf = (v) => padY + (1 - (v - min) / rng) * (H - 2 * padY);
+  const UP = '#11b87f', DN = '#f0425a';
+  return (
+    <svg viewBox={'0 0 ' + W + ' ' + H} preserveAspectRatio="none" aria-hidden="true"
+      style={{ width: '100%', height: '100%', display: 'block', background: '#0a0b0e' }}>
+      {data.map((k, i) => {
+        const cx = i * slot + slot / 2;
+        const isUp = Number(k.c) >= Number(k.o);
+        const col = isUp ? UP : DN;
+        const top = Math.min(yOf(k.o), yOf(k.c));
+        const bh = Math.max(1, Math.abs(yOf(k.c) - yOf(k.o)));
+        return (
+          <g key={i}>
+            <line x1={cx} x2={cx} y1={yOf(k.h).toFixed(1)} y2={yOf(k.l).toFixed(1)} stroke={col} strokeWidth="1.3" />
+            <rect x={(cx - bw / 2).toFixed(1)} y={top.toFixed(1)} width={bw.toFixed(1)} height={bh.toFixed(1)} fill={col} />
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+// pump.fun candle timeframe is in MINUTES (min 1). Map the sheet's resolution
+// buttons onto the closest supported pump timeframe.
+const PUMP_TF_MIN = { '1s': 1, '15s': 1, '1m': 1, '5m': 5, '1h': 60 };
+
+function SheetChart({ mint, sym, poolHint = null, pumpFirst = false }) {
+  const [status, setStatus]   = useState('loading'); // loading | ok | none | fail
+  const [pool, setPool]       = useState(null);       // { provider, addr } | { provider:'PUMP' }
+  const [candles, setCandles] = useState(null);       // pump SVG candle data
+  const [res, setRes]         = useState(CHART_RES_DEFAULT);
   const reqRef = useRef(0);
 
   useEffect(() => { setRes(CHART_RES_DEFAULT); }, [mint]);
 
+  // Resolve the chart source once per token. For bonding-curve (pump) tokens,
+  // try real pump.fun candles first; fall back to a GeckoTerminal pool.
   useEffect(() => {
-    if (!mint) { setStatus('none'); setPool(null); return; }
+    if (!mint) { setStatus('none'); setPool(null); setCandles(null); return; }
     const id = ++reqRef.current;
-    // Feed already gave us a contract-matched pool → chart immediately.
-    if (poolHint && typeof poolHint === 'string') {
-      setPool({ provider: 'GECKOTERMINAL', addr: poolHint }); setStatus('ok'); return;
-    }
-    setStatus('loading'); setPool(null);
+    setStatus('loading'); setPool(null); setCandles(null);
     let stop = false;
     const alive = () => !stop && id === reqRef.current;
 
-    // CoinGecko (GeckoTerminal) only. Contract-matched pool, painted the instant
-    // it resolves. A couple of quick retries cover seconds-old mints.
     const fetchGecko = async () => {
       try {
         const r = await fetch(
@@ -536,13 +595,24 @@ function SheetChart({ mint, sym, poolHint = null }) {
         return addr ? { provider: 'GECKOTERMINAL', addr } : null;
       } catch { return null; }
     };
-
     const fetchServer = async () => {
       const addr = await appServerPool(mint);
       return addr ? { provider: 'GECKOTERMINAL', addr } : null;
     };
+
     (async () => {
-      // Server proxy first — reliable.
+      // Pump bonding-curve tokens: real pump.fun candles first (covers fresh
+      // launches GeckoTerminal hasn't indexed). poolHint means it already has a
+      // graduated pool, so skip straight to the embed.
+      if (pumpFirst && !poolHint) {
+        const c = await loadPumpCandles(mint, { limit: 200, timeframeMin: PUMP_TF_MIN[res] || 1 });
+        if (!alive()) return;
+        if (c) { setCandles(c); setPool({ provider: 'PUMP' }); setStatus('ok'); return; }
+      }
+      // Feed already gave us a contract-matched pool → embed immediately.
+      if (poolHint && typeof poolHint === 'string') {
+        setPool({ provider: 'GECKOTERMINAL', addr: poolHint }); setStatus('ok'); return;
+      }
       const s = await fetchServer();
       if (!alive()) return;
       if (s) { setPool(s); setStatus('ok'); return; }
@@ -556,22 +626,36 @@ function SheetChart({ mint, sym, poolHint = null }) {
     })();
 
     return () => { stop = true; };
-  }, [mint, poolHint]);
+  }, [mint, poolHint, pumpFirst]);
 
-  const src = useMemo(() => buildEmbedSrc(pool, res), [pool, res]);
+  // Re-fetch pump candles when the resolution changes (embed handles its own).
+  useEffect(() => {
+    if (pool?.provider !== 'PUMP' || !mint) return;
+    let stop = false;
+    (async () => {
+      const c = await loadPumpCandles(mint, { limit: 200, timeframeMin: PUMP_TF_MIN[res] || 1 });
+      if (!stop && c) setCandles(c);
+    })();
+    return () => { stop = true; };
+  }, [pool, res, mint]);
+
+  const isPumpChart = pool?.provider === 'PUMP';
+  const src = useMemo(() => (isPumpChart ? null : buildEmbedSrc(pool, res)), [pool, res, isPumpChart]);
 
   return (
     <div style={{ marginTop: 14 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
         <span style={{ fontFamily: MONO, fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', color: C.ink3 }}>CA {mint ? mint.slice(0, 4) + '…' + mint.slice(-4) : ''}</span>
-        <span style={{ fontFamily: MONO, fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: C.ink3 }}>{pool?.provider || 'CHART'}</span>
+        <span style={{ fontFamily: MONO, fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: C.ink3 }}>{isPumpChart ? 'PUMP.FUN' : (pool?.provider || 'CHART')}</span>
       </div>
       <div style={{
         width: '100%', height: 'clamp(300px,44dvh,440px)', borderRadius: 16, overflow: 'hidden',
-        border: '1px solid ' + C.hairline, background: '#fff', position: 'relative',
+        border: '1px solid ' + C.hairline, background: isPumpChart ? '#0a0b0e' : '#fff', position: 'relative',
         display: status === 'ok' ? 'block' : 'grid', placeItems: 'center', textAlign: 'center',
       }}>
-        {status === 'ok' && src ? (
+        {status === 'ok' && isPumpChart ? (
+          <PumpCandleChart candles={candles} />
+        ) : status === 'ok' && src ? (
           <iframe
             key={pool.provider + ':' + pool.addr + ':' + res}
             src={src}
@@ -716,24 +800,22 @@ async function decodeBuiltTx(b64, connection) {
 async function getPumpRoute({ action, mint, user, amount, decimals, connection }) {
   const body = { action, mint, user: user.toBase58(), amount: String(amount) };
   if (decimals != null) body.decimals = Number(decimals);
-  const r = await fetch('/api/pumpfun/trade', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  // Build via the SAME PumpPortal route the Ape page uses (/api/ape/pump-trade).
+  // It returns a fully-built v0 transaction whose fee accounts are current, which
+  // fixes the IncorrectProgramId the raw-SDK /api/pumpfun/trade path produced on
+  // fresh pump tokens. IMPORTANT: this drawer keeps its OWN wallet flow — we only
+  // take the built tx from PumpPortal, then decompile → add the 3% fee ix →
+  // simulate → user signs → send. (The Ape page's burner-key/no-sim flow is not
+  // used here.) /api/pumpfun/trade and ape-pump-trade.js are left untouched.
+  const r = await fetch('/api/ape/pump-trade', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data?.error || ('pump HTTP ' + r.status));
-  if (!Array.isArray(data.instructions) || data.instructions.length === 0)
-    throw new Error(data?.error || 'Pump route returned no instructions.');
-  // Server (pumpfun-trade.js) builds the bonding-curve ixs and serializes them;
-  // deserialize into the {programId, keys, data} shape TransactionMessage takes
-  // (same pattern as SwapWidget's deserIx). Bonding-curve txs carry no ALTs.
-  const instructions = data.instructions.map((ix) => ({
-    programId: new PublicKey(ix.programId),
-    keys: (ix.accounts || []).map((a) => ({
-      pubkey:     new PublicKey(a.pubkey),
-      isSigner:   !!a.isSigner,
-      isWritable: !!a.isWritable,
-    })),
-    data: Buffer.from(ix.data, 'base64'),
-  }));
-  return { instructions, alts: [], pool: data.pool, route: data.route };
+  if (!data.tx || typeof data.tx !== 'string')
+    throw new Error(data?.error || 'Pump route returned no transaction.');
+  // PumpPortal builds ONE v0 tx (its own ComputeBudget ixs included). Decompile
+  // into { instructions, alts } — exactly what executePumpSwap consumes.
+  const { instructions, alts } = await decodeBuiltTx(data.tx, connection);
+  return { instructions, alts, pool: data.pool, route: data.route };
 }
 
 // Balances + SOL price + executeSwap, packaged as a hook so TokenSheet stays clean.
@@ -1334,7 +1416,7 @@ function PumpTokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
           </div>
         </div>
 
-        <SheetChart mint={token.mint} sym={token.sym} poolHint={token.pool} />
+        <SheetChart mint={token.mint} sym={token.sym} poolHint={token.pool} pumpFirst />
 
         {token.stats && (
           <div style={{ marginTop: 12, fontFamily: MONO, fontSize: 11, color: C.ink3, letterSpacing: '0.02em' }}>{token.stats}</div>
