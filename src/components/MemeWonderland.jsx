@@ -22,6 +22,60 @@ const MONO = "'JetBrains Mono', monospace";
 const SERIF = "'Instrument Serif', serif";
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 
+// ── Debug overlay ─────────────────────────────────────────────────────
+// Paints a RAW-DOM panel (not React) so it survives even when an uncaught
+// render error tears the React root down to a white screen. Shows the real
+// error message + stack with Copy/Dismiss. Because it's driven by a global
+// window listener, it catches crashes ANYWHERE — including the trade sheet,
+// which App renders in its own tree, outside this component.
+function paintDebug(title, message, stack, componentStack){
+  try{
+    let el = document.getElementById('nx-debug-overlay');
+    if(!el){ el = document.createElement('div'); el.id='nx-debug-overlay'; document.body.appendChild(el); }
+    el.style.cssText='position:fixed;inset:0;z-index:2147483647;background:#0b0b0c;color:#e6e6e6;font:12px/1.55 ui-monospace,Menlo,Consolas,monospace;padding:18px 14px 60px;overflow:auto;-webkit-overflow-scrolling:touch';
+    el.innerHTML='';
+    const head=document.createElement('div');
+    head.style.cssText='color:#f0425a;font-weight:700;font-size:14px;margin-bottom:6px';
+    head.textContent='\u26A0 '+(title||'Runtime error');
+    el.appendChild(head);
+    const add=(label,text)=>{ if(!text) return;
+      const l=document.createElement('div'); l.style.cssText='color:#9d8cff;font-weight:700;letter-spacing:.08em;margin:14px 0 4px'; l.textContent=label;
+      const p=document.createElement('pre'); p.style.cssText='margin:0;white-space:pre-wrap;word-break:break-word;color:#c9d1d9'; p.textContent=String(text);
+      el.appendChild(l); el.appendChild(p);
+    };
+    add('MESSAGE', message);
+    add('STACK', stack);
+    add('COMPONENT STACK', componentStack);
+    const mk=(txt,bg,right,fn)=>{ const b=document.createElement('button'); b.textContent=txt; b.style.cssText='position:fixed;top:12px;right:'+right+'px;background:'+bg+';color:#fff;border:none;border-radius:8px;padding:8px 13px;font:700 12px monospace;z-index:2147483647'; b.onclick=fn; el.appendChild(b); };
+    mk('Copy','#16c08a',14,()=>{ try{ navigator.clipboard.writeText([title,message,stack,componentStack].filter(Boolean).join('\n\n')); }catch(_){} });
+    mk('Dismiss','#3a3a3a',88,()=>{ el.remove(); });
+  }catch(_){}
+}
+
+class DiscoverBoundary extends React.Component {
+  constructor(p){ super(p); this.state={ err:null }; }
+  static getDerivedStateFromError(err){ return { err }; }
+  componentDidCatch(err, info){ paintDebug('Discover render error', err&&(err.message||String(err)), err&&err.stack, info&&info.componentStack); }
+  componentDidMount(){
+    this._onErr = (e)=>{ const er=e.error||e; paintDebug('Uncaught error', (er&&er.message)||e.message||String(er), er&&er.stack, null); };
+    this._onRej = (e)=>{ const r=e.reason||e; paintDebug('Unhandled promise rejection', (r&&r.message)||String(r), r&&r.stack, null); };
+    window.addEventListener('error', this._onErr);
+    window.addEventListener('unhandledrejection', this._onRej);
+  }
+  componentWillUnmount(){
+    window.removeEventListener('error', this._onErr);
+    window.removeEventListener('unhandledrejection', this._onRej);
+  }
+  render(){
+    if(this.state.err){
+      return (<div style={{padding:'40px 16px',fontFamily:MONO,fontSize:12,color:'#f0425a'}}>
+        Discover failed to render — see the debug panel below. {String((this.state.err&&this.state.err.message)||this.state.err)}
+      </div>);
+    }
+    return this.props.children;
+  }
+}
+
 // ── formatters (kept local — same behavior as App.fmtUsd/fmtPct) ──────
 function fmtUsd(n){
   if(!Number.isFinite(n)||n<=0) return '—';
@@ -273,7 +327,7 @@ function TokenRow({ t, rank, last, onOpen }){
 // =====================================================================
 // MAIN
 // =====================================================================
-export default function Discover({ onSwitchTab, onOpenToken, onConnectWallet }){
+function DiscoverInner({ onSwitchTab, onOpenToken, onConnectWallet }){
   const [pumpToks,setPumpToks]=useState([]);
   const [jupToks,setJupToks]=useState([]);
   const [stockToks,setStockToks]=useState([]);
@@ -411,16 +465,22 @@ export default function Discover({ onSwitchTab, onOpenToken, onConnectWallet }){
   // pool (pickBestGeckoPool). Jupiter tokens already carry no pool, so they
   // always take the same contract-matched path.
   const open=(t)=>{
-    const payload={
-      ...t,
-      ico:t.icon||t.emoji,
-      grad: t.route==='stock'?'linear-gradient(135deg,#2f6bff,#1e49c9)':'linear-gradient(135deg,#f5921b,#d4760a)',
-      price:t.price, pct:t.pct, tf:'1D',
-      stats:`MC ${fmtUsd(t.mcap)} · Liq ${fmtUsd(t.liquidity)}`,
-      tab: t.route==='stock'?'markets':t.route==='jupiter'?'wonderland':'launchradar',
+    // Hand the sheet the SAME shape the home feed (LiveTokenFeeds) passes.
+    // Strip Discover-only extras (sig/score/pts/kind/ageMs) so nothing unexpected
+    // reaches PumpTokenSheet / JupiterTokenSheet. Pump pool nulled for
+    // contract-safe chart resolution.
+    const { sig, score, pts, kind, ageMs, ...clean } = t;
+    const payload = {
+      ...clean,
+      ico: clean.icon || clean.emoji,
+      grad: clean.route==='stock' ? 'linear-gradient(135deg,#2f6bff,#1e49c9)' : 'linear-gradient(135deg,#f5921b,#d4760a)',
+      price: clean.price, pct: t.pct, tf: '1D',
+      stats: `MC ${fmtUsd(clean.mcap)} · Liq ${fmtUsd(clean.liquidity)}`,
+      tab: clean.route==='stock' ? 'markets' : clean.route==='jupiter' ? 'wonderland' : 'launchradar',
     };
-    if(t.route==='pump') payload.pool=null;   // contract-matched resolver only
-    return onOpenToken(payload);
+    if (payload.route==='pump') payload.pool = null;
+    try { return onOpenToken(payload); }
+    catch (e) { paintDebug('onOpenToken threw', e && (e.message||String(e)), e && e.stack, null); }
   };
 
   const counts=useMemo(()=>({
@@ -563,4 +623,10 @@ export default function Discover({ onSwitchTab, onOpenToken, onConnectWallet }){
       <div style={{textAlign:'center',fontFamily:MONO,fontSize:9,fontWeight:700,color:C.ink3,letterSpacing:'0.1em',margin:'18px 0 4px'}}>NON-CUSTODIAL · NO ACCOUNT · YOUR KEYS</div>
     </div>
   );
+}
+
+// Wrap the page so any render crash (including the trade sheet, via the global
+// listener) surfaces a full on-screen debug panel instead of a white screen.
+export default function Discover(props){
+  return <DiscoverBoundary><DiscoverInner {...props} /></DiscoverBoundary>;
 }
