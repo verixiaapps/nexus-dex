@@ -29,6 +29,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNexusWallet } from '../WalletContext.js';
+import { useWallet } from '@solana/wallet-adapter-react';
 
 // =====================================================================
 // INLINE CSS — Wonderland palette · Instrument Serif + Space Grotesk
@@ -802,7 +803,15 @@ function MoonPayMini({ walletAddress }) {
 export default function GetStarted({ onConnectWallet, onSwitchTab }) {
  useWpCSS();
 
- const { isConnected, walletAddress } = useNexusWallet();
+ // Wallet identity: the adapter (useWallet) is the source of truth — it's the
+ // canonical connection used across the app. The Nexus context is a fallback.
+ // Keying only off useNexusWallet meant that when the adapter was connected but
+ // that context lagged/returned empty, this page showed the disconnected screen
+ // and never loaded the balance. Adapter-first fixes that.
+ const { isConnected: nexusConnected, walletAddress: nexusAddr } = useNexusWallet();
+ const { publicKey, connected } = useWallet();
+ const walletAddress = publicKey ? publicKey.toBase58() : (nexusAddr || null);
+ const isConnected   = connected || nexusConnected || !!publicKey;
 
  // Portfolio state (connected view)
  const [portfolio, setPortfolio]   = useState(null);
