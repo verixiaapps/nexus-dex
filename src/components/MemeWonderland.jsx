@@ -2125,6 +2125,12 @@ const MW_CHART_RES = [
 const MW_RES_DEFAULT = '1s';
 
 
+// Session pool cache: every mint→pool we successfully resolve is remembered for
+// the life of the page. Once a token's chart resolves, re-opening it loads
+// INSTANTLY from cache and never re-hits the network (the only thing that can
+// fail). Cache as much as we can catch, so charts always load thereafter.
+const _mwPoolCache = new Map(); // mint -> { provider, addr }
+
 // Resolve a pool address from the server /api/dex/token proxy (server-to-server,
 // never rate-limited/CORS-blocked). Picks the base-token-matched, deepest pool.
 // Server-side pool resolution (never browser-rate-limited): /api/nx/pool first,
@@ -2180,10 +2186,15 @@ function MwTokenChart({ mint, symbol = '', poolHint = null }) {
   useEffect(() => {
     if (!mint) { setStatus('none'); setPool(null); return; }
     const id = ++reqRef.current;
-    // Feed already gave us a contract-matched pool → chart immediately.
+    // Feed already gave us a contract-matched pool → chart immediately (+ cache).
     if (poolHint && typeof poolHint === 'string') {
-      setPool({ provider: 'GECKOTERMINAL', addr: poolHint }); setStatus('ok'); return;
+      const p = { provider: 'GECKOTERMINAL', addr: poolHint };
+      _mwPoolCache.set(mint, p);
+      setPool(p); setStatus('ok'); return;
     }
+    // Already resolved this token once → load instantly from cache, no network.
+    const cached = _mwPoolCache.get(mint);
+    if (cached) { setPool(cached); setStatus('ok'); return; }
     setStatus('loading'); setPool(null);
 
     (async () => {
@@ -2196,7 +2207,7 @@ function MwTokenChart({ mint, symbol = '', poolHint = null }) {
         if (sAddr) chosen = { provider: 'GECKOTERMINAL', addr: sAddr };
       } catch {}
       if (id !== reqRef.current) return;
-      if (chosen) { setPool(chosen); setStatus('ok'); return; }
+      if (chosen) { _mwPoolCache.set(mint, chosen); setPool(chosen); setStatus('ok'); return; }
       // 1) Direct GeckoTerminal (last resort).
       try {
         const r = await fetchTO(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}/pools`, 4500);
@@ -2207,7 +2218,7 @@ function MwTokenChart({ mint, symbol = '', poolHint = null }) {
         }
       } catch {}
       if (id !== reqRef.current) return;
-      if (chosen) { setPool(chosen); setStatus('ok'); return; }
+      if (chosen) { _mwPoolCache.set(mint, chosen); setPool(chosen); setStatus('ok'); return; }
 
       // No contract-matched pool yet (typical for a seconds-old bonding curve).
       setStatus('none');
@@ -2544,7 +2555,7 @@ function TradeSheet({
       };
       try {
         const sim = await connection.simulateTransaction(tx, {
-          replaceRecentBlockhash: true,
+          replaceRecentBlockhash: false,
           sigVerify: false,
         });
         if (sim.value.err) {
@@ -3641,9 +3652,22 @@ async function getPumpRoute({ action, mint, user, amount, decimals, connection }
   });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data?.error || ('pump HTTP ' + r.status));
-  if (!data.tx) throw new Error('PumpPortal returned no tx.');
+  if (!Array.isArray(data.instructions) || data.instructions.length === 0)
+    throw new Error(data?.error || 'Pump route returned no instructions.');
 
-  const { instructions, alts } = await decodeBuiltTx(data.tx, connection);
+  // Server (pumpfun-trade.js) builds the bonding-curve ixs and serializes them;
+  // deserialize into the {programId, keys, data} shape TransactionMessage takes
+  // (same pattern as SwapWidget's deserIx). Bonding-curve txs carry no ALTs.
+  const instructions = data.instructions.map((ix) => ({
+    programId: new PublicKey(ix.programId),
+    keys: (ix.accounts || []).map((a) => ({
+      pubkey:     new PublicKey(a.pubkey),
+      isSigner:   !!a.isSigner,
+      isWritable: !!a.isWritable,
+    })),
+    data: Buffer.from(ix.data, 'base64'),
+  }));
+  const alts = [];
   try {
     console.log('[lr-pump]', action, '| pool:', data.pool,
       '| ixs:', instructions.length, '| alts:', alts.length,
@@ -3847,10 +3871,15 @@ function LrTokenChart({ mint, symbol = '', poolHint = null }) {
   useEffect(() => {
     if (!mint) { setStatus('none'); setPool(null); return; }
     const id = ++reqRef.current;
-    // Feed already gave us a contract-matched pool → chart immediately.
+    // Feed already gave us a contract-matched pool → chart immediately (+ cache).
     if (poolHint && typeof poolHint === 'string') {
-      setPool({ provider: 'GECKOTERMINAL', addr: poolHint }); setStatus('ok'); return;
+      const p = { provider: 'GECKOTERMINAL', addr: poolHint };
+      _mwPoolCache.set(mint, p);
+      setPool(p); setStatus('ok'); return;
     }
+    // Already resolved this token once → load instantly from cache, no network.
+    const cached = _mwPoolCache.get(mint);
+    if (cached) { setPool(cached); setStatus('ok'); return; }
     setStatus('loading'); setPool(null);
 
     (async () => {
@@ -3860,7 +3889,7 @@ function LrTokenChart({ mint, symbol = '', poolHint = null }) {
       try {
         const sAddr = await lrServerPool(mint);
         if (id !== reqRef.current) return;
-        if (sAddr) { networkOk = true; setPool({ provider: 'GECKOTERMINAL', addr: sAddr }); setStatus('ok'); return; }
+        if (sAddr) { const p = { provider: 'GECKOTERMINAL', addr: sAddr }; _mwPoolCache.set(mint, p); networkOk = true; setPool(p); setStatus('ok'); return; }
       } catch {}
       if (id !== reqRef.current) return;
 
@@ -3876,7 +3905,7 @@ function LrTokenChart({ mint, symbol = '', poolHint = null }) {
           if (id !== reqRef.current) return;
           const best = pickBestGeckoPool(j?.data, mint);
           const addr = best?.attributes?.address;
-          if (addr) { setPool({ provider: 'GECKOTERMINAL', addr }); setStatus('ok'); return; }
+          if (addr) { const p = { provider: 'GECKOTERMINAL', addr }; _mwPoolCache.set(mint, p); setPool(p); setStatus('ok'); return; }
         }
       } catch {}
       if (id !== reqRef.current) return;
@@ -4863,7 +4892,7 @@ function LaunchRadar({ onConnectWallet } = {}) {
     try {
       const sim = await tradeConnection.simulateTransaction(tx, {
         sigVerify: false,
-        replaceRecentBlockhash: true,
+        replaceRecentBlockhash: false,
         commitment: 'processed',
       });
       simLogs = sim?.value?.logs || null;
