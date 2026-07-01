@@ -719,9 +719,21 @@ async function getPumpRoute({ action, mint, user, amount, decimals, connection }
   const r = await fetch('/api/pumpfun/trade', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data?.error || ('pump HTTP ' + r.status));
-  if (!data.tx) throw new Error('PumpPortal returned no tx.');
-  const { instructions, alts } = await decodeBuiltTx(data.tx, connection);
-  return { instructions, alts, pool: data.pool, route: data.route };
+  if (!Array.isArray(data.instructions) || data.instructions.length === 0)
+    throw new Error(data?.error || 'Pump route returned no instructions.');
+  // Server (pumpfun-trade.js) builds the bonding-curve ixs and serializes them;
+  // deserialize into the {programId, keys, data} shape TransactionMessage takes
+  // (same pattern as SwapWidget's deserIx). Bonding-curve txs carry no ALTs.
+  const instructions = data.instructions.map((ix) => ({
+    programId: new PublicKey(ix.programId),
+    keys: (ix.accounts || []).map((a) => ({
+      pubkey:     new PublicKey(a.pubkey),
+      isSigner:   !!a.isSigner,
+      isWritable: !!a.isWritable,
+    })),
+    data: Buffer.from(ix.data, 'base64'),
+  }));
+  return { instructions, alts: [], pool: data.pool, route: data.route };
 }
 
 // Balances + SOL price + executeSwap, packaged as a hook so TokenSheet stays clean.
@@ -819,7 +831,7 @@ function useTradeEngine() {
     try {
       const sim = await tradeConnection.simulateTransaction(tx, {
         sigVerify: false,
-        replaceRecentBlockhash: true,
+        replaceRecentBlockhash: false,
         commitment: 'processed',
       });
       simLogs = sim?.value?.logs || null;
@@ -992,7 +1004,7 @@ function useTradeEngine() {
       };
       try {
         const sim = await connection.simulateTransaction(tx, {
-          replaceRecentBlockhash: true,
+          replaceRecentBlockhash: false,
           sigVerify: false,
         });
         if (sim.value.err) {
@@ -1306,7 +1318,7 @@ function TokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
       };
       try {
         const sim = await connection.simulateTransaction(tx, {
-          replaceRecentBlockhash: true,
+          replaceRecentBlockhash: false,
           sigVerify: false,
         });
         if (sim.value.err) {
@@ -1455,7 +1467,7 @@ function TokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
     try {
       const sim = await tradeConnection.simulateTransaction(tx, {
         sigVerify: false,
-        replaceRecentBlockhash: true,
+        replaceRecentBlockhash: false,
         commitment: 'processed',
       });
       simLogs = sim?.value?.logs || null;
