@@ -1150,16 +1150,22 @@ async function stkResolveEmbedPool(mint) {
   if (stkEmbedPoolCache.has(mint)) return stkEmbedPoolCache.get(mint);
   const cached = stkLsGet(STK_EMBED_LS + mint, STK_POOL_TTL);
   if (cached !== undefined) { stkEmbedPoolCache.set(mint, cached); return cached; }
-  // 1) Server-side pool resolution (reliable, not browser-rate-limited).
+
+  // DexScreener ONLY. Match the contract: keep pairs whose BASE token is exactly
+  // this mint, then take the highest-liquidity one. Embed that pair address.
   let res = null;
-  const sAddr = await stkServerPool(mint);
-  if (sAddr) res = { provider: 'GECKOTERMINAL', addr: sAddr };
-  // 2) Direct GeckoTerminal (last resort).
-  if (!res) {
-    const gj = await stkFetchJson(`${STK_GT}/networks/solana/tokens/${encodeURIComponent(mint)}/pools`, 6000);
-    const gp = stkPickGeckoPool(gj?.data, mint);
-    if (gp?.attributes?.address) res = { provider: 'GECKOTERMINAL', addr: gp.attributes.address };
+  const dj = await stkFetchJson('https://api.dexscreener.com/latest/dex/tokens/' + encodeURIComponent(mint), 7000);
+  const pairs = Array.isArray(dj?.pairs) ? dj.pairs : [];
+  const matched = pairs.filter(p =>
+    p && p.chainId === 'solana' && p.pairAddress &&
+    p.baseToken && p.baseToken.address === mint
+  );
+  if (matched.length > 0) {
+    const best = matched.reduce((a, b) =>
+      (Number(b.liquidity?.usd || 0) > Number(a.liquidity?.usd || 0) ? b : a), matched[0]);
+    res = { provider: 'DEXSCREENER', addr: best.pairAddress };
   }
+
   stkEmbedPoolCache.set(mint, res);
   stkLsSet(STK_EMBED_LS + mint, res);
   return res;
@@ -1200,10 +1206,9 @@ function stkPoolFromTokenApi(d, mint) {
   return null;
 }
 function stkBuildEmbedSrc(pool, tfKey) {
-  if (!pool) return null;
-  const r = STK_EMBED_RES.find(x => x.key === tfKey) || STK_EMBED_RES[1];
-  if (pool.provider !== 'GECKOTERMINAL') return null;
-  return `https://www.geckoterminal.com/solana/pools/${pool.addr}?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&bg_color=ffffff&resolution=${r.gecko}`;
+  if (!pool || pool.provider !== 'DEXSCREENER' || !pool.addr) return null;
+  // DexScreener embed by pair address (dark, chart-only).
+  return `https://dexscreener.com/solana/${pool.addr}?embed=1&theme=dark&info=0&trades=0`;
 }
 
 function StockChart({ mint, price, symbol }) {
@@ -1231,18 +1236,7 @@ function StockChart({ mint, price, symbol }) {
       .catch(() => { if (id === reqRef.current) setStatus('fail'); });
   }, [mint]);
 
-  // Native OHLCV fallback: if no embed pool resolves, draw a REAL chart from the
-  // token's own candle closes (/api/dex/candles via stkFetchSeries) so a chart
-  // still shows. Also re-fetches when the timeframe changes in fallback mode.
-  useEffect(() => {
-    if (status !== 'none' && status !== 'fail') return;
-    let stop = false;
-    (async () => {
-      const s = await stkFetchSeries(mint, tf).catch(() => null);
-      if (!stop && s && s.length >= 2) setNativePts(s);
-    })();
-    return () => { stop = true; };
-  }, [status, mint, tf]);
+  // DexScreener embed only — no other chart source is linked on this page.
 
   const src = useMemo(() => stkBuildEmbedSrc(pool, tf), [pool, tf]);
   const nativeBuilt = (nativePts && nativePts.length >= 2) ? stkBuildPath(nativePts, 1000, 400, 6) : null;
@@ -1261,7 +1255,7 @@ function StockChart({ mint, price, symbol }) {
           <span className="val">{shortCa}</span>
           <button type="button" className="cp" onClick={copyCa}>{copied ? 'COPIED' : 'COPY'}</button>
         </div>
-        <span className="st-chart-prov">{status === 'ok' ? 'GECKOTERMINAL' : (nativeBuilt ? 'LIVE OHLCV' : 'CHART')}</span>
+        <span className="st-chart-prov">{status === 'ok' ? 'DEXSCREENER' : 'CHART'}</span>
       </div>
       {status === 'ok' && src ? (
         <div className="st-chart-embed">
@@ -1303,10 +1297,69 @@ function StockChart({ mint, price, symbol }) {
   );
 }
 
-// Fast sparkline. Draws an instant line from the live price + 24h change the
+// ─── DexScreener sparkline (contract-matched) ───────────────────────────────
+// DexScreener has no candle history, but it returns per-token price CHANGE over
+// m5/h1/h6/h24. Working back from the current price (=now), those reconstruct 5
+// real anchor points across the last 24h, giving each token a distinct shape
+// (dip-then-recover = valley, spike-then-fade = hump). DexScreener ONLY.
+const stkDexSparkCache = new Map();
+const STK_DEXSPARK_LS  = 'stk_dexspark_';
+async function stkDexSparkPoints(mint) {
+  if (stkDexSparkCache.has(mint)) return stkDexSparkCache.get(mint);
+  const cached = stkLsGet(STK_DEXSPARK_LS + mint, STK_SERIES_TTL);
+  if (cached !== undefined) { stkDexSparkCache.set(mint, cached); return cached; }
+
+  let out = null;
+  const dj = await stkFetchJson('https://api.dexscreener.com/latest/dex/tokens/' + encodeURIComponent(mint), 7000);
+  const pairs = Array.isArray(dj?.pairs) ? dj.pairs : [];
+  // Match the contract (base token = this mint), highest-liquidity pair.
+  const matched = pairs.filter(p =>
+    p && p.chainId === 'solana' && p.baseToken && p.baseToken.address === mint);
+  if (matched.length > 0) {
+    const best = matched.reduce((a, b) =>
+      (Number(b.liquidity?.usd || 0) > Number(a.liquidity?.usd || 0) ? b : a), matched[0]);
+    const pc = best.priceChange || {};
+    const now = 1;
+    // oldest → newest: 24h, 6h, 1h, 5m, now. Each = now / (1 + pct/100).
+    const back = (v) => now / (1 + (Number(v) || 0) / 100);
+    const vals = [back(pc.h24), back(pc.h6), back(pc.h1), back(pc.m5), now];
+    if (vals.every(v => Number.isFinite(v) && v > 0)) {
+      out = vals.map((c, i) => ({ t: i, c }));
+    }
+  }
+
+  stkDexSparkCache.set(mint, out);
+  stkLsSet(STK_DEXSPARK_LS + mint, out);
+  return out;
+}
+
+// Smooth (Catmull-Rom → bezier) sparkline path from a small set of points, so
+// the line reads as an organic curve rather than a straight diagonal.
+function stkSmoothSparkPath(pts, w, h, pad = 3) {
+  if (!Array.isArray(pts) || pts.length < 2) return null;
+  const vals = pts.map(p => Number(p.c)).filter(Number.isFinite);
+  if (vals.length < 2) return null;
+  const n = vals.length;
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const rng = (max - min) || 1e-9;
+  const X = i => pad + (i / (n - 1)) * (w - 2 * pad);
+  const Y = v => pad + (1 - (v - min) / rng) * (h - 2 * pad);
+  const P = vals.map((v, i) => ({ x: X(i), y: Y(v) }));
+  let d = `M ${P[0].x.toFixed(1)} ${P[0].y.toFixed(1)}`;
+  for (let i = 0; i < n - 1; i++) {
+    const p0 = P[i - 1] || P[i], p1 = P[i], p2 = P[i + 1], p3 = P[i + 2] || P[i + 1];
+    const c1x = p1.x + (p2.x - p0.x) / 6, c1y = p1.y + (p2.y - p0.y) / 6;
+    const c2x = p2.x - (p3.x - p1.x) / 6, c2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+  }
+  const area = d + ` L ${X(n - 1).toFixed(1)} ${h} L ${X(0).toFixed(1)} ${h} Z`;
+  return { line: d, area, lastX: P[n - 1].x, lastY: P[n - 1].y };
+}
+
+// Fast sparkline. Draws an instant curve from the live price + 24h change the
 // moment it mounts (stkEndpointSeries), so the board is never blank. When the
-// row scrolls near view it upgrades to real OHLCV in place (throttled, cached,
-// deduped). Never shows a skeleton or a flat blank.
+// row scrolls near view it upgrades to the DexScreener-shaped line in place
+// (contract-matched, throttled, cached). DexScreener is the only data source.
 function StockSparkline({ mint, price, change, w = 72, h = 34, sw = 1.6, color }) {
   const [pts, setPts] = useState(null);
   const ref = useRef(null);
@@ -1315,10 +1368,9 @@ function StockSparkline({ mint, price, change, w = 72, h = 34, sw = 1.6, color }
 
   useEffect(() => {
     if (!mint || !ref.current || typeof IntersectionObserver === 'undefined') {
-      // No IO support → just fetch once.
       if (mint && !doneRef.current) {
         doneRef.current = true;
-        stkThrottle(() => stkFetchSeries(mint, '1M')).then(s => { if (s && s.length >= 2) setPts(s); }).catch(() => {});
+        stkThrottle(() => stkDexSparkPoints(mint)).then(s => { if (s && s.length >= 2) setPts(s); }).catch(() => {});
       }
       return;
     }
@@ -1328,7 +1380,7 @@ function StockSparkline({ mint, price, change, w = 72, h = 34, sw = 1.6, color }
         if (e.isIntersecting && !doneRef.current) {
           doneRef.current = true;
           io.disconnect();
-          stkThrottle(() => stkFetchSeries(mint, '1M')).then(s => { if (s && s.length >= 2) setPts(s); }).catch(() => {});
+          stkThrottle(() => stkDexSparkPoints(mint)).then(s => { if (s && s.length >= 2) setPts(s); }).catch(() => {});
         }
       });
     }, { rootMargin: '220px' });
@@ -1336,11 +1388,11 @@ function StockSparkline({ mint, price, change, w = 72, h = 34, sw = 1.6, color }
     return () => io.disconnect();
   }, [mint]);
 
-  // Real OHLCV once loaded; otherwise the instant endpoint line from price+change.
+  // DexScreener-shaped points once loaded; otherwise the instant endpoint curve
+  // from price + 24h change (so it's never blank while the fetch is in flight).
   const series = (pts && pts.length >= 2) ? pts
                : (stkEndpointSeries(price, change) || null);
-  const built  = series ? stkBuildPath(series, w, h, 2) : null;
-  // Direction: prefer the real 24h change; fall back to the series' own slope.
+  const built  = series ? stkSmoothSparkPath(series, w, h, 3) : null;
   const up = Number.isFinite(change) ? change >= 0
            : (series ? series[series.length - 1].c >= series[0].c : true);
   const col = color || (up ? '#34d8a0' : '#ff6b6b');
