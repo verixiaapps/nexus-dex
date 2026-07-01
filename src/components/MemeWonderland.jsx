@@ -4293,6 +4293,15 @@ function LrDetailView({ token, onClose, onTrade }) {
    a separate instance in this scope so Discover is never affected.
    ════════════════════════════════════════════════════════════════════ */
 const LR_SLIPPAGE_BPS = 500;
+function formatUsd(n) {
+  if (!Number.isFinite(n) || n <= 0) return '$0.00';
+  if (n >= 1e9)  return '$' + (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6)  return '$' + (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  if (n >= 1)    return '$' + n.toFixed(2);
+  if (n >= 0.01) return '$' + n.toFixed(2);
+  return '<$0.01';
+}
 const lrDeserIx = (ix) => ({
   programId: new PublicKey(ix.programId),
   keys: ix.accounts.map(a => ({
@@ -4634,7 +4643,7 @@ function LrTradeSheet({
           <button type="button" className="mw-icon-btn" onClick={onClose} disabled={swapping}>×</button>
         </div>
 
-        <MwTokenChart mint={token.mint} symbol={token.sym} poolHint={token.pool} />
+        <LrTokenChart mint={token.mint} symbol={token.sym} poolHint={token.pool} />
 
         <div className={'mw-tab-switch' + (isSell ? ' mw-sell-mode' : '')}>
           <div className="mw-tab-indicator"></div>
