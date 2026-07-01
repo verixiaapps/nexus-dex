@@ -1098,7 +1098,8 @@ function useTradeEngine() {
   return { solPrice, balances, refreshSol, refreshOneToken, executeSwap, canSign: !!(wallet.publicKey && wallet.signTransaction) };
 }
 
-function TokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
+function PumpTokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
+  const wallet = useWallet();   // adapter wallet — publicKey + signTransaction (needed by executePumpSwap)
   const up = Number.isFinite(token.pct) ? token.pct >= 0 : true;
   const isImg = typeof token.ico === 'string' && /^https?:\/\//.test(token.ico);
 
@@ -1146,7 +1147,296 @@ function TokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
     }
     return { mode: 'sell', decimals, percentage: pct, tradeTokens: tradeTokens.toString(), tradeTokensUi, feeLamports };
   }, [amount, isBuy, token, tokenBalance, solPrice]);
+     PUMP.FUN PATH — LaunchRadar executeSwap moved in VERBATIM (body
+     character-for-character; only the wrapper name + local tradeConnection +
+     balance refresh differ). Mirrors the Jupiter handleSwap placement above.
+     ════════════════════════════════════════════════════════════════════ */
+  const executePumpSwap = useCallback(async ({ mode, swapParams, token }) => {
+    if (!wallet.publicKey || !wallet.signTransaction) {
+      throw new Error('Please connect a wallet (Phantom, Solflare, Backpack).');
+    }
+    if (!swapParams) throw new Error('Nothing to trade.');
 
+    const isBuy  = mode === 'buy';
+    const userPk = wallet.publicKey;
+    const tradeConnection = getTradeConn('confirmed');
+
+    // 1. PumpPortal builds the tx; we decompile it locally. ALT lookup runs
+    //    on the trade connection.
+    const route = await getPumpRoute({
+      action: isBuy ? 'buy' : 'sell',
+      mint:   token.mint,
+      user:   userPk,
+      amount: isBuy ? swapParams.tradeLamports : swapParams.tradeTokens,
+      decimals: isBuy ? undefined : swapParams.decimals,
+      connection: tradeConnection,
+    });
+
+    // 2. Build the 3% SOL fee transfer.
+    const feeLamports = BigInt(swapParams.feeLamports || '0');
+    if (feeLamports <= 0n) {
+      throw new Error(isBuy
+        ? 'Fee rounds to zero — amount too small.'
+        : 'Could not estimate sell fee — token or SOL price unavailable.');
+    }
+    const feeIx = SystemProgram.transfer({
+      fromPubkey: userPk,
+      toPubkey:   FEE_WALLET,
+      lamports:   Number(feeLamports),
+    });
+
+    // 3. Splice. PumpPortal's tx already includes its own ComputeBudget
+    //    instructions at the start — we insert AFTER them so they keep
+    //    setting the priority fee for the whole tx.
+    const CB_PROGRAM = 'ComputeBudget111111111111111111111111111111';
+    const ixs = route.instructions.slice();
+    if (isBuy) {
+      let insertAt = 0;
+      while (insertAt < ixs.length && ixs[insertAt].programId.toBase58() === CB_PROGRAM) insertAt++;
+      ixs.splice(insertAt, 0, feeIx);
+    } else {
+      ixs.push(feeIx);
+    }
+
+    // 4. Fresh blockhash, recompile with the SAME ALTs PumpPortal used.
+    const latest = await tradeConnection.getLatestBlockhash('confirmed');
+    const message = new TransactionMessage({
+      payerKey:        userPk,
+      recentBlockhash: latest.blockhash,
+      instructions:    ixs,
+    }).compileToV0Message(route.alts);
+    const tx = new VersionedTransaction(message);
+
+    // 5. Pre-sign simulation against fresh chain state. Catches stale
+    //    bonding-curve state, slippage failures, balance shortfalls —
+    //    without spending a Phantom popup.
+    let simLogs = null;
+    try {
+      const sim = await tradeConnection.simulateTransaction(tx, {
+        sigVerify: false,
+        replaceRecentBlockhash: false,
+        commitment: 'processed',
+      });
+      simLogs = sim?.value?.logs || null;
+      if (sim?.value?.err) {
+        console.error('[lr-sim] failed:', JSON.stringify(sim.value.err),
+          simLogs ? '\n' + simLogs.join('\n') : '');
+        throw new Error(describeSimLogs(simLogs, JSON.stringify(sim.value.err)));
+      }
+      try {
+        console.log('[lr-sim] ok | CU:', sim?.value?.unitsConsumed,
+          '| logs:', (simLogs || []).length);
+      } catch {}
+    } catch (simErr) {
+      if (simErr instanceof Error && /sim failed/i.test(simErr.message)) throw simErr;
+      console.warn('[lr-sim] could not run sim, proceeding:', simErr?.message);
+    }
+
+    // 6. User signs.
+    const signed = await wallet.signTransaction(tx);
+    const raw = signed.serialize();
+
+    // 7. Send.
+    let sig;
+    try {
+      sig = await tradeConnection.sendRawTransaction(raw, {
+        skipPreflight: true,
+        maxRetries:    5,
+      });
+    } catch (sendErr) {
+      let logs = sendErr?.logs || null;
+      if (!logs && typeof sendErr?.getLogs === 'function') {
+        try { logs = await sendErr.getLogs(tradeConnection); } catch {}
+      }
+      console.error('[lr-send] rejected:', sendErr?.message, logs ? '\n' + logs.join('\n') : '');
+      throw new Error(describeSimLogs(logs, sendErr?.message));
+    }
+
+    // 8. Rebroadcast same bytes until confirmed or blockhash expires.
+    let confirmed = false, onchainErr = null;
+    const startedAt = Date.now();
+    const HARD_CAP_MS = 60_000;
+    while (Date.now() - startedAt < HARD_CAP_MS) {
+      try {
+        const st = await tradeConnection.getSignatureStatus(sig, { searchTransactionHistory: true });
+        if (st?.value?.err) { onchainErr = st.value.err; break; }
+        const cs = st?.value?.confirmationStatus;
+        if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
+      } catch {}
+      try {
+        const h = await tradeConnection.getBlockHeight('confirmed');
+        if (h > latest.lastValidBlockHeight) break;
+      } catch {}
+      try { await tradeConnection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }); } catch {}
+      await new Promise(r => setTimeout(r, 2000));
+    }
+    if (onchainErr) {
+      console.warn('[lr-confirm] on-chain err:', JSON.stringify(onchainErr));
+      throw new Error('Trade failed on-chain — price likely moved past slippage.');
+    }
+
+    setTimeout(() => { refreshSol(); refreshOneToken(token.mint); }, 1500);
+    return { sig, confirmed, mode, token, route: route.route };
+  }, [wallet, refreshSol, refreshOneToken]);
+
+  // Every token reaching the sheet carries a source route tag:
+  //   /api/dex/launches   → route:'pump'    → bonding curve  → PumpPortal (LaunchRadar)
+  //   jupiter top-organic → route:'jupiter' → graduated SPL  → Jupiter   (MemeWonderland)
+  // Route off that tag, nothing else. The `…pump` mint suffix is NOT a routing
+  // signal — graduated pump tokens keep their pump mint forever, and matching on
+  // it forced every Jupiter-fed top-gainer into a dead PumpPortal route.
+  // Funds check: only enforce when we KNOW the balance.
+
+  const hasFunds = (() => {
+    if (!amount || Number(amount) <= 0) return false;
+    if (isBuy) return Number(amount) <= availSol;
+    return ownedUiAmount > 0;
+  })();
+  const needsWallet = !canSign;
+  const confirmDisabled = confirming || !swapParams || (!needsWallet && !hasFunds) || !!error;
+
+
+  const handleConfirm = async () => {
+    if (!swapParams || confirming) return;
+    setConfirming(true); setError(null);
+    try {
+      const res = await executePumpSwap({ mode, swapParams, token });
+      setDone({ mode, sig: res.sig });
+      setAmount('');
+    } catch (e) { setError(tradeFriendlyError(e)); }
+    finally { setConfirming(false); }
+  };
+
+  const tabBtn = (m, label) => (
+    <button onClick={() => setMode(m)} style={{
+      flex: 1, padding: '10px 0', borderRadius: 12, border: 'none', cursor: 'pointer',
+      fontFamily: "'Space Grotesk', sans-serif", fontWeight: 800, fontSize: 14,
+      background: mode === m ? (m === 'buy' ? C.green : C.red) : 'transparent',
+      color: mode === m ? '#fff' : C.ink2,
+    }}>{label}</button>
+  );
+
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 600, background: 'rgba(26,27,78,0.45)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }} />
+      <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 601, background: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: '14px 18px 26px', maxWidth: 560, margin: '0 auto', boxShadow: '0 -12px 40px rgba(26,27,78,.18)', maxHeight: '92dvh', overflowY: 'auto' }}>
+        <div onClick={onClose} style={{ width: 40, height: 4, background: 'rgba(26,27,78,.18)', borderRadius: 99, margin: '0 auto 18px', cursor: 'pointer' }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ width: 44, height: 44, borderRadius: 13, display: 'grid', placeItems: 'center', color: '#fff', fontWeight: 800, fontSize: 17, background: token.grad, backgroundSize: 'cover', backgroundPosition: 'center', flex: '0 0 auto', ...(isImg ? { backgroundImage: `url(${token.ico})` } : {}) }}>{!isImg ? (token.ico || '?') : ''}</div>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ fontWeight: 800, fontSize: 18, color: C.ink, letterSpacing: '-0.01em' }}>{token.sym}</div>
+            <div style={{ fontSize: 12, color: C.ink3, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{token.name}</div>
+          </div>
+          <div style={{ textAlign: 'right', flex: '0 0 auto' }}>
+            <div style={{ fontFamily: MONO, fontSize: 17, fontWeight: 700, color: C.ink }}>{fmtUsd(token.price)}</div>
+            <div style={{ fontFamily: MONO, fontSize: 12, fontWeight: 700, marginTop: 1, color: up ? C.green : C.lav }}>{fmtPct(token.pct)}</div>
+          </div>
+        </div>
+
+        <SheetChart mint={token.mint} sym={token.sym} poolHint={token.pool} />
+
+        {token.stats && (
+          <div style={{ marginTop: 12, fontFamily: MONO, fontSize: 11, color: C.ink3, letterSpacing: '0.02em' }}>{token.stats}</div>
+        )}
+
+        {/* BUY / SELL */}
+        <div style={{ display: 'flex', gap: 6, marginTop: 16, background: '#f4f4f5', borderRadius: 14, padding: 4 }}>
+          {tabBtn('buy', 'Buy')}
+          {tabBtn('sell', 'Sell')}
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, fontFamily: MONO, fontSize: 11, fontWeight: 700, color: C.ink3 }}>
+          <span>{isBuy ? 'You pay (SOL)' : 'You sell (%)'}</span>
+          <span>{isBuy
+            ? <>Wallet: {tradeFmtSol(solBalance?.uiAmount || 0)} SOL{availSol > 0 && <button onClick={() => setAmount(String(Math.floor(Math.max(0, availSol - 0.002) * 10000) / 10000))} style={{ marginLeft: 8, background: C.ink, color: '#fff', border: 'none', borderRadius: 6, padding: '2px 7px', fontSize: 9, fontWeight: 800, cursor: 'pointer', fontFamily: MONO }}>MAX</button>}</>
+            : <>You own: {tradeFmtTokens(ownedUiAmount)} {token.sym}</>}</span>
+        </div>
+
+        <input
+          type="text" inputMode="decimal" placeholder={isBuy ? '0.00' : '0'} value={amount}
+          onChange={(e) => { const v = e.target.value.replace(/[^\d.]/g, ''); if (v.split('.').length > 2) return; if (!isBuy && Number(v) > 100) { setAmount('100'); return; } setAmount(v); }}
+          style={{ width: '100%', marginTop: 8, padding: '14px 16px', borderRadius: 14, border: `1px solid ${C.border}`, fontFamily: MONO, fontSize: 18, fontWeight: 700, color: C.ink, outline: 'none' }}
+        />
+
+        <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+          {presets.map(v => (
+            <button key={v} onClick={() => setAmount(String(v))} style={{
+              flex: 1, padding: '9px 0', borderRadius: 10, cursor: 'pointer',
+              border: `1px solid ${Number(amount) === v ? (isBuy ? C.green : C.red) : C.border}`,
+              background: Number(amount) === v ? (isBuy ? 'rgba(22,192,138,.10)' : 'rgba(240,66,90,.08)') : '#fff',
+              fontFamily: MONO, fontSize: 12, fontWeight: 700, color: C.ink,
+            }}>{isBuy ? v + ' SOL' : v + '%'}</button>
+          ))}
+        </div>
+
+        {error && <div style={{ marginTop: 12, padding: '10px 14px', borderRadius: 12, background: 'rgba(240,66,90,.10)', color: C.red, fontSize: 12, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif" }}>{error}</div>}
+        {done && <div style={{ marginTop: 12, padding: '10px 14px', borderRadius: 12, background: 'rgba(22,192,138,.10)', color: C.green, fontSize: 12, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif" }}>{done.mode === 'buy' ? 'Bought' : 'Sold'} {token.sym} ✓ <a href={`https://solscan.io/tx/${done.sig}`} target="_blank" rel="noopener noreferrer" style={{ color: C.green, textDecoration: 'underline' }}>view</a></div>}
+
+        <button onClick={handleConfirm} disabled={confirmDisabled} style={{
+          marginTop: 16, width: '100%', padding: 16, borderRadius: 16, border: 'none',
+          cursor: confirmDisabled ? 'not-allowed' : 'pointer',
+          background: isBuy ? C.green : C.red,
+          opacity: confirmDisabled ? 0.5 : 1,
+          color: '#fff', fontWeight: 800, fontSize: 15, fontFamily: "'Space Grotesk', sans-serif", letterSpacing: '0.01em',
+        }}>
+          {confirming ? (isBuy ? 'Buying…' : 'Selling…')
+            : !amount || Number(amount) <= 0 ? (isBuy ? 'Enter SOL amount' : 'Enter percentage')
+            : (!needsWallet && !hasFunds) ? (isBuy ? 'Insufficient SOL' : `No ${token.sym} to sell`)
+            : (isBuy ? `Buy ${amount} SOL of ${token.sym}` : `Sell ${Math.min(100, Number(amount))}% of ${token.sym}`)}
+        </button>
+      </div>
+    </>
+  );
+}
+
+function JupiterTokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
+  const up = Number.isFinite(token.pct) ? token.pct >= 0 : true;
+  const isImg = typeof token.ico === 'string' && /^https?:\/\//.test(token.ico);
+
+  const { solPrice, balances, refreshSol, refreshOneToken, executeSwap, canSign } = useTradeEngine();
+  const [mode, setMode]       = useState('buy');
+  const [amount, setAmount]   = useState('');
+  const [confirming, setConfirming] = useState(false);
+  const [error, setError]     = useState(null);
+  const [done, setDone]       = useState(null);
+
+  useEffect(() => { refreshSol(); refreshOneToken(token.mint); }, [token.mint, refreshSol, refreshOneToken]);
+  useEffect(() => { setAmount(''); setError(null); setDone(null); }, [mode]);
+  useEffect(() => { setError(null); }, [amount]);
+
+  const isBuy   = mode === 'buy';
+  const presets = isBuy ? TRADE_BUY_PRESETS : TRADE_SELL_PRESETS;
+  const solBalance   = balances[SOL_MINT];
+  const tokenBalance = balances[token.mint];
+  const ownedUiAmount = tokenBalance?.uiAmount || 0;
+  const availSol = Math.max(0, (solBalance?.uiAmount || 0)); // no reserve
+
+  const swapParams = useMemo(() => {
+    if (!amount) return null;
+    const n = Number(amount);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    if (isBuy) {
+      const totalLamports = BigInt(Math.floor(n * 1e9));
+      if (totalLamports <= 0n) return null;
+      const feeLamports   = (totalLamports * BigInt(FEE_BPS)) / 10000n;
+      const tradeLamports = ((totalLamports - feeLamports) * 100n) / 110n;
+      if (tradeLamports <= 0n || feeLamports <= 0n) return null;
+      return { mode: 'buy', solAmount: n, totalLamports: totalLamports.toString(), tradeLamports: tradeLamports.toString(), feeLamports: feeLamports.toString() };
+    }
+    if (!tokenBalance || !tokenBalance.amount || BigInt(tokenBalance.amount) <= 0n) return null;
+    const pct = Math.min(100, Math.max(0.01, n));
+    const tradeTokens = (BigInt(tokenBalance.amount) * BigInt(Math.floor(pct * 100))) / 10000n;
+    if (tradeTokens <= 0n) return null;
+    const decimals = tokenBalance.decimals || token.decimals || 6;
+    const tradeTokensUi = Number(tradeTokens) / Math.pow(10, decimals);
+    let feeLamports = '0';
+    if (token?.price > 0 && solPrice > 0) {
+      const grossSol = (tradeTokensUi * token.price) / solPrice;
+      const lam = Math.floor(grossSol * (FEE_BPS / 10000) * 1e9);
+      if (lam > 0) feeLamports = String(lam);
+    }
+    return { mode: 'sell', decimals, percentage: pct, tradeTokens: tradeTokens.toString(), tradeTokensUi, feeLamports };
+  }, [amount, isBuy, token, tokenBalance, solPrice]);
   /* ════════════════════════════════════════════════════════════════════
      JUPITER (graduated / non-pump) PATH — MemeWonderland TradeSheet machinery
      moved in VERBATIM below (prefetch effect + handleSwap, character-for-
@@ -1399,156 +1689,11 @@ function TokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
   const confirmDisabled = confirming || !swapParams || (!needsWallet && !hasFunds) || !!error;
 
 
-  /* ════════════════════════════════════════════════════════════════════
-     PUMP.FUN PATH — LaunchRadar executeSwap moved in VERBATIM (body
-     character-for-character; only the wrapper name + local tradeConnection +
-     balance refresh differ). Mirrors the Jupiter handleSwap placement above.
-     ════════════════════════════════════════════════════════════════════ */
-  const executePumpSwap = useCallback(async ({ mode, swapParams, token }) => {
-    if (!wallet.publicKey || !wallet.signTransaction) {
-      throw new Error('Please connect a wallet (Phantom, Solflare, Backpack).');
-    }
-    if (!swapParams) throw new Error('Nothing to trade.');
-
-    const isBuy  = mode === 'buy';
-    const userPk = wallet.publicKey;
-    const tradeConnection = getTradeConn('confirmed');
-
-    // 1. PumpPortal builds the tx; we decompile it locally. ALT lookup runs
-    //    on the trade connection.
-    const route = await getPumpRoute({
-      action: isBuy ? 'buy' : 'sell',
-      mint:   token.mint,
-      user:   userPk,
-      amount: isBuy ? swapParams.tradeLamports : swapParams.tradeTokens,
-      decimals: isBuy ? undefined : swapParams.decimals,
-      connection: tradeConnection,
-    });
-
-    // 2. Build the 3% SOL fee transfer.
-    const feeLamports = BigInt(swapParams.feeLamports || '0');
-    if (feeLamports <= 0n) {
-      throw new Error(isBuy
-        ? 'Fee rounds to zero — amount too small.'
-        : 'Could not estimate sell fee — token or SOL price unavailable.');
-    }
-    const feeIx = SystemProgram.transfer({
-      fromPubkey: userPk,
-      toPubkey:   FEE_WALLET,
-      lamports:   Number(feeLamports),
-    });
-
-    // 3. Splice. PumpPortal's tx already includes its own ComputeBudget
-    //    instructions at the start — we insert AFTER them so they keep
-    //    setting the priority fee for the whole tx.
-    const CB_PROGRAM = 'ComputeBudget111111111111111111111111111111';
-    const ixs = route.instructions.slice();
-    if (isBuy) {
-      let insertAt = 0;
-      while (insertAt < ixs.length && ixs[insertAt].programId.toBase58() === CB_PROGRAM) insertAt++;
-      ixs.splice(insertAt, 0, feeIx);
-    } else {
-      ixs.push(feeIx);
-    }
-
-    // 4. Fresh blockhash, recompile with the SAME ALTs PumpPortal used.
-    const latest = await tradeConnection.getLatestBlockhash('confirmed');
-    const message = new TransactionMessage({
-      payerKey:        userPk,
-      recentBlockhash: latest.blockhash,
-      instructions:    ixs,
-    }).compileToV0Message(route.alts);
-    const tx = new VersionedTransaction(message);
-
-    // 5. Pre-sign simulation against fresh chain state. Catches stale
-    //    bonding-curve state, slippage failures, balance shortfalls —
-    //    without spending a Phantom popup.
-    let simLogs = null;
-    try {
-      const sim = await tradeConnection.simulateTransaction(tx, {
-        sigVerify: false,
-        replaceRecentBlockhash: false,
-        commitment: 'processed',
-      });
-      simLogs = sim?.value?.logs || null;
-      if (sim?.value?.err) {
-        console.error('[lr-sim] failed:', JSON.stringify(sim.value.err),
-          simLogs ? '\n' + simLogs.join('\n') : '');
-        throw new Error(describeSimLogs(simLogs, JSON.stringify(sim.value.err)));
-      }
-      try {
-        console.log('[lr-sim] ok | CU:', sim?.value?.unitsConsumed,
-          '| logs:', (simLogs || []).length);
-      } catch {}
-    } catch (simErr) {
-      if (simErr instanceof Error && /sim failed/i.test(simErr.message)) throw simErr;
-      console.warn('[lr-sim] could not run sim, proceeding:', simErr?.message);
-    }
-
-    // 6. User signs.
-    const signed = await wallet.signTransaction(tx);
-    const raw = signed.serialize();
-
-    // 7. Send.
-    let sig;
-    try {
-      sig = await tradeConnection.sendRawTransaction(raw, {
-        skipPreflight: true,
-        maxRetries:    5,
-      });
-    } catch (sendErr) {
-      let logs = sendErr?.logs || null;
-      if (!logs && typeof sendErr?.getLogs === 'function') {
-        try { logs = await sendErr.getLogs(tradeConnection); } catch {}
-      }
-      console.error('[lr-send] rejected:', sendErr?.message, logs ? '\n' + logs.join('\n') : '');
-      throw new Error(describeSimLogs(logs, sendErr?.message));
-    }
-
-    // 8. Rebroadcast same bytes until confirmed or blockhash expires.
-    let confirmed = false, onchainErr = null;
-    const startedAt = Date.now();
-    const HARD_CAP_MS = 60_000;
-    while (Date.now() - startedAt < HARD_CAP_MS) {
-      try {
-        const st = await tradeConnection.getSignatureStatus(sig, { searchTransactionHistory: true });
-        if (st?.value?.err) { onchainErr = st.value.err; break; }
-        const cs = st?.value?.confirmationStatus;
-        if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
-      } catch {}
-      try {
-        const h = await tradeConnection.getBlockHeight('confirmed');
-        if (h > latest.lastValidBlockHeight) break;
-      } catch {}
-      try { await tradeConnection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }); } catch {}
-      await new Promise(r => setTimeout(r, 2000));
-    }
-    if (onchainErr) {
-      console.warn('[lr-confirm] on-chain err:', JSON.stringify(onchainErr));
-      throw new Error('Trade failed on-chain — price likely moved past slippage.');
-    }
-
-    setTimeout(() => { refreshSol(); refreshOneToken(token.mint); }, 1500);
-    return { sig, confirmed, mode, token, route: route.route };
-  }, [wallet, refreshSol, refreshOneToken]);
-
-  // Every token reaching the sheet carries a source route tag:
-  //   /api/dex/launches   → route:'pump'    → bonding curve  → PumpPortal (LaunchRadar)
-  //   jupiter top-organic → route:'jupiter' → graduated SPL  → Jupiter   (MemeWonderland)
-  // Route off that tag, nothing else. The `…pump` mint suffix is NOT a routing
-  // signal — graduated pump tokens keep their pump mint forever, and matching on
-  // it forced every Jupiter-fed top-gainer into a dead PumpPortal route.
-  const isPumpToken = token.route === 'pump';
   const handleConfirm = async () => {
     if (!swapParams || confirming) return;
-    if (!isPumpToken) { handleSwap(); return; } // Jupiter → verbatim MemeWonderland handleSwap (manages its own state)
-    setConfirming(true); setError(null);
-    try {
-      const res = await executePumpSwap({ mode, swapParams, token }); // pump → verbatim LaunchRadar executeSwap, in-sheet
-      setDone({ mode, sig: res.sig });
-      setAmount('');
-    } catch (e) { setError(tradeFriendlyError(e)); }
-    finally { setConfirming(false); }
+    // Jupiter path's handleSwap manages its own state (setConfirming/setError
+    // via setSwapping/setSwapError aliases in the block above).
+    handleSwap();
   };
 
   const tabBtn = (m, label) => (
@@ -1631,6 +1776,21 @@ function TokenSheet({ token, onClose, onOpenFull, onConnectWallet }) {
       </div>
     </>
   );
+}
+
+function TokenSheet(props) {
+  // Two truly separate drawers, one per trade path. Picked by the token's
+  // source route tag:
+  //   route: 'pump'    -> PumpTokenSheet     (pump.fun bonding-curve SDK)
+  //   route: 'jupiter' -> JupiterTokenSheet  (Jupiter Ultra)
+  // dexId is only a fallback for tokens without a route tag.
+  const t = props.token || {};
+  const isPump = t.route
+    ? t.route === 'pump'
+    : PUMP_DEX_IDS.has(String(t.dexId || '').toLowerCase());
+  return isPump
+    ? <PumpTokenSheet {...props} />
+    : <JupiterTokenSheet {...props} />;
 }
 
 // ── Launch Radar strip — same /api/dex/launches feed ──────────────────
