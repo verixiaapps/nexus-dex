@@ -576,7 +576,10 @@ async function fetchPortfolio(addressStr) {
 
  const filtered = enriched
    .filter(h => h.mint !== SOL_MINT)
-   .filter(h => h.value >= MIN_TOKEN_VALUE_USD);
+   // Always show known xStocks (brand tokens) — same rule as Holdings — so the
+   // wallet reflects what the user owns even if the price feed is momentarily
+   // down or the position is small. Other tokens still need ≥ $1 value.
+   .filter(h => BRAND_TOKENS[h.mint] || h.value >= MIN_TOKEN_VALUE_USD);
 
  filtered.sort((a, b) => {
    const rank = m => m.isStable ? 0 : m.isBrand ? 1 : 2;
