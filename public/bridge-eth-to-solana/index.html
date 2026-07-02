@@ -27,7 +27,7 @@
   "url": "https://swap.verixiaapps.com/bridge-eth-to-solana/",
   "name": "Bridge ETH → Solana — One Wallet, No Account | Verixia",
   "description": "Bridge from ETH to Solana with Verixia. Wallet-native, on-chain, no account. Once on Solana, the full DeFi stack opens up. No KYC. No limits. Non-custodial.",
-  "dateModified": "2026-06-30T18:10:03Z",
+  "dateModified": "2026-07-02T15:22:22Z",
   "isPartOf": { "@type": "WebSite", "url": "https://verixiaapps.com/", "name": "Verixia" },
   "publisher": { "@type": "Organization", "name": "Verixia", "url": "https://verixiaapps.com/" }
 }
@@ -265,23 +265,28 @@ a{color:inherit;text-decoration:none}
 /* ---- STICKY SWAP CTA ---- */
 .nx-sticky-cta{position:fixed;left:50%;bottom:14px;transform:translate(-50%,160%);
   z-index:60;width:calc(100% - 26px);max-width:454px;
-  display:flex;align-items:center;justify-content:space-between;gap:12px;
-  padding:13px 16px;border-radius:16px;
-  background:linear-gradient(135deg,rgba(25,210,122,.96),rgba(20,170,150,.96));
-  border:1px solid rgba(255,255,255,.28);
-  box-shadow:0 12px 34px rgba(0,0,0,.5),0 0 22px rgba(25,210,122,.34);
-  color:#03281a;font-weight:800;opacity:0;pointer-events:none;
-  transition:transform .32s cubic-bezier(.16,1,.3,1),opacity .32s ease}
+  display:flex;align-items:center;gap:11px;padding:9px 11px 9px 10px;border-radius:14px;
+  background:linear-gradient(180deg,rgba(46,36,82,.9),rgba(18,13,40,.92));
+  border:1px solid var(--line);border-top:1px solid rgba(255,255,255,.2);
+  backdrop-filter:blur(12px);box-shadow:0 16px 42px rgba(0,0,0,.55);
+  opacity:0;pointer-events:none;
+  transition:transform .32s cubic-bezier(.16,1,.3,1),opacity .32s ease,border-color .18s ease}
 .nx-sticky-cta.show{transform:translate(-50%,0);opacity:1;pointer-events:auto}
-.nx-sticky-l{display:inline-flex;align-items:center;gap:8px;font-size:13.5px}
-.nx-sticky-l b{color:#03281a}
-.nx-sticky-dot{width:8px;height:8px;border-radius:50%;background:#03281a;box-shadow:0 0 0 3px rgba(3,40,26,.25);animation:nxpulse 1.8s ease-in-out infinite}
-.nx-sticky-r{font-size:14px;white-space:nowrap}
+.nx-sticky-cta:hover{border-color:rgba(139,92,255,.55)}
+.nx-sticky-ic{width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,#8b5cff,#ff4d9e);box-shadow:0 0 14px rgba(139,92,255,.42)}
+.nx-sticky-ic svg{width:16px;height:16px;display:block}
+.nx-sticky-tx{display:flex;flex-direction:column;min-width:0;flex:1}
+.nx-sticky-tx b{font-size:13px;font-weight:700;color:#fff;line-height:1.2}
+.nx-sticky-tx span{font-size:10.5px;color:var(--dim);margin-top:2px;font-family:'JetBrains Mono',monospace;display:flex;align-items:center;gap:5px}
+.nx-sticky-tx span .d{width:5px;height:5px;border-radius:50%;background:var(--g);box-shadow:0 0 7px var(--g);animation:nxpulse 1.8s ease-in-out infinite}
+.nx-sticky-go{flex:none;display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:800;color:#03281a;
+  background:linear-gradient(135deg,#6df2a8,#19d27a);border-radius:20px;padding:6px 12px;box-shadow:0 0 12px rgba(25,210,122,.3)}
 @keyframes nxpulse{0%,100%{opacity:1}50%{opacity:.4}}
 @media (prefers-reduced-motion:reduce){
   .nx-sticky-cta{transition:opacity .2s ease}
   .nx-sticky-cta.show{transform:translate(-50%,0)}
-  .nx-sticky-dot{animation:none}
+  .nx-sticky-tx span .d{animation:none}
 }
 
 /* ===== SWAP WIDGET STYLES (ported from working template) ===== */
@@ -496,6 +501,20 @@ main{max-width:540px;margin:0 auto;background:#fff;
 .nx-connect{border:none;background:var(--blue);color:#fff;font-family:'Space Grotesk',sans-serif;
   font-weight:600;font-size:13px;padding:9px 16px;border-radius:9px;cursor:pointer}
 .nx-connect:hover{background:#2457d6}
+.nx-applink{display:flex;align-items:center;gap:11px;margin:2px 0 4px;padding:9px 11px 9px 10px;border-radius:13px;
+  background:linear-gradient(180deg,rgba(46,36,82,.72),rgba(18,13,40,.72));
+  border:1px solid var(--line);border-top:1px solid rgba(255,255,255,.20);
+  backdrop-filter:blur(10px);transition:border-color .18s ease,transform .18s ease}
+.nx-applink:hover{border-color:rgba(139,92,255,.55);transform:translateY(-1px)}
+.nx-applink-ic{width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,#8b5cff,#ff4d9e);box-shadow:0 0 14px rgba(139,92,255,.42)}
+.nx-applink-ic svg{width:16px;height:16px;display:block}
+.nx-applink-tx{display:flex;flex-direction:column;min-width:0;flex:1}
+.nx-applink-tx b{font-size:13px;font-weight:700;color:#fff;line-height:1.2}
+.nx-applink-tx span{font-size:10.5px;color:var(--dim);letter-spacing:.02em;margin-top:2px;font-family:'JetBrains Mono',monospace;display:flex;align-items:center;gap:5px}
+.nx-applink-tx span .d{width:5px;height:5px;border-radius:50%;background:var(--g);box-shadow:0 0 7px var(--g)}
+.nx-applink-go{flex:none;display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:800;color:#03281a;
+  background:linear-gradient(135deg,#6df2a8,#19d27a);border-radius:20px;padding:6px 12px;box-shadow:0 0 12px rgba(25,210,122,.3)}
 
 /* Hero text */
 .nx-hero{padding-top:18px}
@@ -703,26 +722,14 @@ main{max-width:540px;margin:0 auto;background:#fff;
     </div>
   </header>
 
-  <!-- HERO: keyword H1 (compact) -->
+  <!-- HERO: keyword H1 (compact) — stays first for SEO -->
   <section class="nx-hero">
     <div class="nx-eyebrow"><span class="dot"></span><span class="txt">SOLANA &middot; NON-CUSTODIAL &middot; NO KYC</span></div>
     <h1 class="nx-h1">ETH to Solana Bridge</h1>
     <p class="nx-lede">Bridge assets from ETH to Solana on Verixia. Wallet-native, on-chain, no account, no KYC. Once funds land, the full Solana stack is one tap away.</p>
   </section>
 
-  <!-- REFERRAL (highest-value CTA, moved to top above the swap) -->
-  <div class="nx-refer-stack">
-    <a class="nx-refer pump-tier" href="https://swap.verixiaapps.com">
-      <span class="nx-refer-l">
-        <span class="nx-refer-tag">REFERRAL</span>
-        <b>Earn <em>50%</em> of fees from everyone you refer</b>
-        <span>FOREVER &middot; PAID DAILY IN SOL</span>
-      </span>
-      <span class="nx-refer-r">Join &rarr;</span>
-    </a>
-  </div>
-
-  <!-- LIVE SWAP (hero conversion) -->
+  <!-- LIVE SWAP (hero conversion) — moved directly under the hero -->
   <div class="nx-swap-label">
     <div class="nx-swap-label-title">Live swap &mdash; <em>trade now</em></div>
     <div class="nx-live-pill"><span class="dot"></span>LIVE QUOTE</div>
@@ -746,6 +753,30 @@ main{max-width:540px;margin:0 auto;background:#fff;
       </div>
     </div>
   </section>
+
+  <!-- REFERRAL (moved below the swap) -->
+  <div class="nx-refer-stack">
+    <a class="nx-refer pump-tier" href="https://swap.verixiaapps.com">
+      <span class="nx-refer-l">
+        <span class="nx-refer-tag">REFERRAL</span>
+        <b>Earn <em>50%</em> of fees from everyone you refer</b>
+        <span>FOREVER &middot; PAID DAILY IN SOL</span>
+      </span>
+      <span class="nx-refer-r">Join &rarr;</span>
+    </a>
+  </div>
+
+  <!-- APP CTA (moved below the swap; on-message copy for keyword pages) -->
+  <a class="nx-applink" href="https://swap.verixiaapps.com">
+    <span class="nx-applink-ic">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M17 7H9M17 7v8"/></svg>
+    </span>
+    <span class="nx-applink-tx">
+      <b>More ways to trade on Verixia</b>
+      <span><span class="d"></span>swap.verixiaapps.com</span>
+    </span>
+    <span class="nx-applink-go">Open &rarr;</span>
+  </a>
 
   <!-- QUICK REASSURANCE (first-screen trust) -->
   <div class="nx-reassure">
@@ -827,10 +858,10 @@ main{max-width:540px;margin:0 auto;background:#fff;
     <div class="section-tag">OVERVIEW</div>
     <h2 class="section-title">Why Verixia</h2>
     <p class="section-lede">DeFi on Solana means the wallet is the account, the smart contract is the only intermediary, and the network does the rest in under a second.</p>
-    <div class="ai-article" data-ai-content><p>You want to bridge ETH to Solana? Expect about 3-5 minutes wait while the bridge confirms enough Ethereum blocks for safety. Gas on Ethereum can hit $2.40 or more to start the transaction, while the bridge fee itself is just pennies. Once the wrapped ETH (WETH) lands on Solana, you pay fractions of a cent per transaction — a massive drop from Ethereum’s usual $2-50 gas swings. The USDC route is popular too: bridge USDC from Ethereum to Solana in about 4 minutes, pay $2.40 gas on Ethereum, and just $0.001 on Solana, then your funds land in Phantom ready to roll.</p>
-<p>Here’s the tech flow: you lock ETH on Ethereum’s mainnet through an audited bridge protocol, like those Verixia routes you trust. The bridge holds your ETH until enough confirmations hit, then mints WETH on Solana’s side as an SPL token. No middlemen custody your coins — it’s all non-custodial from start to finish. Your locked ETH stays safe on Ethereum while its wrapped twin appears in your Solana wallet, ready to swap or move.</p>
-<p>Wallet-native means the bridge protocol signs transactions directly with your wallet. Verixia never takes custody of your bridged funds. You’re the only one holding keys to your WETH or USDC on Solana. Once the bridge completes, your tokens pop up in the same wallet you used to send ETH, no extra accounts, no KYC, no waiting. You’re instantly set up to swap on Solana or ape into Wonderland memes without missing a beat.</p>
-<p>Once your ETH hits Solana, the Verixia stack unlocks. Use Jupiter routing to swap any Solana token — turn your WETH into SOL, JUP, or your favorite brand tokens that price-track Apple or Tesla. Jump into live signals to catch fresh launches or dive into Wonderland memes for some fun vibes. All from one wallet, all lightning-fast, all cheap. Bridging ETH to Solana isn’t just moving coins — it’s opening the door to the fastest, cheapest DeFi playground on the planet.</p></div>
+    <div class="ai-article" data-ai-content><p>You want to bridge ETH to Solana? Expect about 3-5 minutes wait while the bridge protocol locks your ETH on Ethereum and confirms enough blocks for security. Gas fees on Ethereum vary—right now, around $2.40 for the transaction—while the bridge cost itself is just pennies. Once the wrapped ETH (WETH) lands on Solana, fees drop to fractions of a cent, making iterative trades way cheaper and faster.</p>
+<p>The mechanics are slick. Your ETH locks on Ethereum, and an audited bridge protocol mints an equivalent wrapped token on Solana. No middlemen holding your coins. This non-custodial flow means your original ETH stays safely locked on the source chain while your Solana wallet receives the WETH, ready to move. Verixia routes these transactions seamlessly, so you’re always connected to the fastest, most reliable bridges out there.</p>
+<p>Wallet-native bridging means the bridge protocol signs transactions directly from your wallet—no accounts, no KYC, no custody. Verixia never holds your funds. The moment the WETH hits your Solana wallet, it’s yours. You can immediately swap it on Solana using Jupiter’s routing to get SOL, JUP, or any other token in seconds, all without hopping between platforms or trusting third parties.</p>
+<p>Once bridged, the whole Verixia ecosystem opens up. Use your WETH or USDC to swap any Solana token, ape Wonderland memes, or dive into brand tokens that price-track Apple or Tesla. The same wallet that just landed your ETH bridge funds is your launchpad for all those live signals and fresh launches. Solana’s 400ms blocks and near-zero fees turn what was once slow and expensive into pure send-it vibes.</p></div>
   </section>
 
   <section class="section">
@@ -1239,18 +1270,43 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
         var r = await fetch(GT_API + '/search/pools?query=' + encodeURIComponent(q) + '&network=solana&page=1');
         var d = await r.json();
         var pools = (d && d.data) || [];
-        var best = null, bestLiq = -1;
+        var USDT_MINT = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
+        var QUOTE = {}; QUOTE[SOL_MINT] = 1; QUOTE[USDC_MINT] = 1; QUOTE[USDT_MINT] = 1;
+        var want = String(q || '').toLowerCase().replace(/^\$+/, '');
+        // Aggregate pool liquidity per candidate contract, across BOTH sides of
+        // every matching pool, then pick the highest-liquidity contract whose
+        // symbol matches the keyword. This lands on the canonical (routable)
+        // token instead of a thin same-symbol impostor with no swap route.
+        var agg = {};
+        function consider(id, symRaw, liq) {
+          if (!id) return;
+          var mint = String(id).replace(/^solana_/, '');
+          if (!mint || QUOTE[mint]) return;
+          var sym = String(symRaw || '').trim().toLowerCase().replace(/^\$+/, '').split(/\s+/)[0];
+          if (!agg[mint]) agg[mint] = { liq: 0, sym: sym };
+          agg[mint].liq += liq;
+          if (!agg[mint].sym && sym) agg[mint].sym = sym;
+        }
         for (var i = 0; i < pools.length; i++) {
           var a = pools[i].attributes || {};
           var rel = pools[i].relationships || {};
-          var bt = rel.base_token && rel.base_token.data && rel.base_token.data.id;
           var liq = Number(a.reserve_in_usd || 0);
-          if (bt && liq > bestLiq) { bestLiq = liq; best = bt; }
+          if (!(liq > 0)) continue;
+          var sides = String(a.name || '').split('/');
+          var baseId = rel.base_token && rel.base_token.data && rel.base_token.data.id;
+          var quoteId = rel.quote_token && rel.quote_token.data && rel.quote_token.data.id;
+          consider(baseId, sides[0], liq);
+          consider(quoteId, sides[1], liq);
         }
-        if (!best) return null;
-        var mint = String(best).replace(/^solana_/, '');
-        if (!mint || mint === SOL_MINT || mint === USDC_MINT) return null;
-        return { address: mint, symbol: '', name: '', logoURI: null };
+        var best = null, bestLiq = -1, exact = null, exactLiq = -1;
+        for (var mint in agg) {
+          var e = agg[mint];
+          if (e.liq > bestLiq) { bestLiq = e.liq; best = mint; }
+          if (want && e.sym === want && e.liq > exactLiq) { exactLiq = e.liq; exact = mint; }
+        }
+        var pick = exact || best;
+        if (!pick || QUOTE[pick]) return null;
+        return { address: pick, symbol: '', name: '', logoURI: null };
       } catch (e) { return null; }
     }
     async function resolveTermToMint(term) {
@@ -2329,9 +2385,10 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
 
 
 <!-- STICKY SWAP CTA (appears after hero scrolls away) -->
-<a href="#verixia-swap-root" class="nx-sticky-cta" id="nx-sticky-cta" aria-hidden="true">
-  <span class="nx-sticky-l"><span class="nx-sticky-dot"></span>Trade now &middot; <b>No KYC</b></span>
-  <span class="nx-sticky-r">Swap &rarr;</span>
+<a href="https://swap.verixiaapps.com" class="nx-sticky-cta" id="nx-sticky-cta" aria-hidden="true">
+  <span class="nx-sticky-ic"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M17 7H9M17 7v8"/></svg></span>
+  <span class="nx-sticky-tx"><b>Trade any Solana token &mdash; best route</b><span><span class="d"></span>swap.verixiaapps.com</span></span>
+  <span class="nx-sticky-go">Open &rarr;</span>
 </a>
 
 <script>
@@ -2392,7 +2449,7 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
 })();
 </script>
 
-<script id="page-meta">window.__pageMeta = {"title":"Bridge ETH → Solana — One Wallet, No Account | Verixia","description":"Bridge from ETH to Solana with Verixia. Wallet-native, on-chain, no account. Once on Solana, the full DeFi stack opens up. No KYC. No limits. Non-custodial.","h1":"ETH to Solana Bridge","intro":"Bridge assets from ETH to Solana on Verixia. Wallet-native, on-chain, no account, no KYC. Once funds land, the full Solana stack is one tap away.","contentHeading":"Bridging ETH to Solana","contentBridge":"Hub: Bridges to Solana","breadcrumb":"Bridge ETH TO Solana","intent":"bridge_chain","subIntent":"eth","framingName":"bridge_speed_lead","subject":"ETH","faq":[{"q":"Is bridging safe?","a":"Verixia routes through audited cross-chain bridge protocols. The bridge is non-custodial throughout — Verixia never holds bridged funds. The protocol locks on the source chain and releases the equivalent on Solana."},{"q":"What if the bridge fails?","a":"Bridge protocols are recoverable. If a transaction stalls, funds remain in your wallet on one side or the other — the protocol doesn't hold them in limbo."},{"q":"Do I need an account to bridge?","a":"No. Connect your wallet, pick the source chain, confirm. No email, no KYC, no platform account at any point."},{"q":"What's the cheapest way to bridge?","a":"Source-chain gas is usually the biggest cost. Bridging during off-peak hours on Ethereum can save $10+. Cheaper L2s and alt-L1s have far lower source-chain costs."}],"recognitionChips":[{"l":"Land on Solana","c":"Once funds arrive, the full Verixia stack opens up — swap, brands, memes, all from the same wallet."},{"l":"On-chain throughout","c":"Bridge confirmation is observable from your wallet. Verixia never custodies bridged funds."},{"l":"Cheap on the receive side","c":"Solana network fees on arrival are fractions of a cent."},{"l":"Wallet-native bridge","c":"Connect, pick chain, pick token, confirm. The bridge protocol handles the rest."}],"supplementaryHeading":"Why Verixia","supplementaryIntro":"DeFi on Solana means the wallet is the account, the smart contract is the only intermediary, and the network does the rest in under a second.","supplementaryCards":[{"i":"⚡","title":"All Solana","body":"400ms blocks, sub-cent fees, no congestion. A $20 swap and a $20K swap settle the same way."},{"i":"🔑","title":"Your keys, your coins","body":"Non-custodial. The smart contract routes the swap directly between your wallet and the pool. Verixia never holds your funds."},{"i":"🌍","title":"Global DeFi","body":"No KYC, no accounts, no limits. Connect a wallet and you're in. Same product everywhere."}],"pageSignals":{"aggregateRatingJson":"{}"},"jitter":{"blockTimeMs":406,"dexCount":58,"walletsToday":10043,"swapsToday":86010,"aggImprovement":0.09,"settlementMs":414},"observations":["Live ETH on Solana via Jupiter (verified, deepest pool): $1569.77, -3.42% 24h, $13.65M liquidity, $25.91M 24h volume, $77.58M market cap, 110,033 holders."]};</script>
+<script id="page-meta">window.__pageMeta = {"title":"Bridge ETH → Solana — One Wallet, No Account | Verixia","description":"Bridge from ETH to Solana with Verixia. Wallet-native, on-chain, no account. Once on Solana, the full DeFi stack opens up. No KYC. No limits. Non-custodial.","h1":"ETH to Solana Bridge","intro":"Bridge assets from ETH to Solana on Verixia. Wallet-native, on-chain, no account, no KYC. Once funds land, the full Solana stack is one tap away.","contentHeading":"Bridging ETH to Solana","contentBridge":"Hub: Bridges to Solana","breadcrumb":"Bridge ETH TO Solana","intent":"bridge_chain","subIntent":"eth","framingName":"bridge_speed_lead","subject":"ETH","faq":[{"q":"Is bridging safe?","a":"Verixia routes through audited cross-chain bridge protocols. The bridge is non-custodial throughout — Verixia never holds bridged funds. The protocol locks on the source chain and releases the equivalent on Solana."},{"q":"What if the bridge fails?","a":"Bridge protocols are recoverable. If a transaction stalls, funds remain in your wallet on one side or the other — the protocol doesn't hold them in limbo."},{"q":"Do I need an account to bridge?","a":"No. Connect your wallet, pick the source chain, confirm. No email, no KYC, no platform account at any point."},{"q":"What's the cheapest way to bridge?","a":"Source-chain gas is usually the biggest cost. Bridging during off-peak hours on Ethereum can save $10+. Cheaper L2s and alt-L1s have far lower source-chain costs."}],"recognitionChips":[{"l":"Land on Solana","c":"Once funds arrive, the full Verixia stack opens up — swap, brands, memes, all from the same wallet."},{"l":"On-chain throughout","c":"Bridge confirmation is observable from your wallet. Verixia never custodies bridged funds."},{"l":"Cheap on the receive side","c":"Solana network fees on arrival are fractions of a cent."},{"l":"Wallet-native bridge","c":"Connect, pick chain, pick token, confirm. The bridge protocol handles the rest."}],"supplementaryHeading":"Why Verixia","supplementaryIntro":"DeFi on Solana means the wallet is the account, the smart contract is the only intermediary, and the network does the rest in under a second.","supplementaryCards":[{"i":"⚡","title":"All Solana","body":"400ms blocks, sub-cent fees, no congestion. A $20 swap and a $20K swap settle the same way."},{"i":"🔑","title":"Your keys, your coins","body":"Non-custodial. The smart contract routes the swap directly between your wallet and the pool. Verixia never holds your funds."},{"i":"🌍","title":"Global DeFi","body":"No KYC, no accounts, no limits. Connect a wallet and you're in. Same product everywhere."}],"pageSignals":{"aggregateRatingJson":"{}"},"jitter":{"blockTimeMs":406,"dexCount":58,"walletsToday":10043,"swapsToday":86010,"aggImprovement":0.09,"settlementMs":414},"observations":["Live ETH on Solana via Jupiter (verified, deepest pool): $1697.05, +5.21% 24h, $14.41M liquidity, $24.63M 24h volume, $85.74M market cap, 110,084 holders."]};</script>
 </body>
 </html>
- 
+  
