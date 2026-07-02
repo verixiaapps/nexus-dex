@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, useReducer, useMemo } 
 import { BrowserRouter, useNavigate, useLocation } from 'react-router-dom';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { Buffer } from 'buffer';
-import {   
+import { 
   Connection, 
   PublicKey,
   VersionedTransaction,
@@ -153,7 +153,7 @@ function EcoStrip({ active, onGo }) {
   const items = [
     { ic: '⇅',  lbl: 'Swap',    tab: 'swap' },
     { ic: '⚡', lbl: 'Pump.fun', tab: 'ape' },
-    { ic: '📈', lbl: 'Stocks',  tab: 'markets' },
+    { ic: '📈', lbl: 'xStocks',  tab: 'markets' },
     { ic: '👜', lbl: 'Portfolio', tab: 'holdings' },
   ];
   return (
@@ -2397,7 +2397,7 @@ function HomeBelow({ onSwitchTab, walletAddress, onOpenToken }) {
 
   // Build the card list. Order: primary products first, then utility, then meta.
   const products = [
-    { tab: 'markets',     icon: '📈', accent: '#2f6bff', name: 'Stocks',      desc: 'Tesla, Apple, NVIDIA · 24/7',       live: '18 STOCKS', grad: 'linear-gradient(135deg,#2f6bff,#1e49c9)' },
+    { tab: 'markets',     icon: '📈', accent: '#2f6bff', name: 'xStocks',     desc: 'Tesla, Apple, NVIDIA · 24/7',       live: '18 XSTOCKS', grad: 'linear-gradient(135deg,#2f6bff,#1e49c9)' },
     { tab: 'ape',         icon: '⚡', accent: '#2f6bff', name: 'Pump.fun',    desc: 'New launches, one-tap trades',      live: 'EARLY',     grad: 'linear-gradient(135deg,#f5921b,#d4760a)' },
     { tab: 'holdings',    icon: '👜', accent: '#2f6bff', name: 'Portfolio',   desc: 'Every token you own, live value',   live: 'YOUR BAGS', grad: 'linear-gradient(135deg,#16c08a,#0f8f67)' },
     { tab: 'buysol',      icon: '💳', accent: '#2f6bff', name: 'Buy Solana',  desc: 'Card or bank → SOL',                live: 'FIAT',      grad: 'linear-gradient(135deg,#14f195,#0fa968)' },
@@ -3047,7 +3047,7 @@ const PRIMARY_NAV_TABS = [
   { id: 'discover',   label: 'Discover' },
   { id: 'swap',       label: 'Swap' },
   { id: 'ape',        label: 'Pump.fun' },
-  { id: 'markets',    label: 'Stocks' },
+  { id: 'markets',    label: 'xStocks' },
   { id: 'holdings',   label: 'Portfolio' },
   { id: 'admin',      label: 'Admin' },
 ];
@@ -3350,7 +3350,7 @@ function AppInner() {
               <button onClick={() => setMenuOpen(false)} aria-label="Close" style={{ width: 30, height: 30, borderRadius: 9, background: '#f4f4f5', border: 'none', fontSize: 16, color: '#0b0b0c', cursor: 'pointer' }}>×</button>
             </div>
             {[
-              { grp: 'Trade', accent: '#2f6bff', items: [['swap', 'Swap', 'Trade any Solana token'], ['ape', 'Pump.fun', 'New launches · one-tap trades'], ['markets', 'Stocks', 'Tesla, Apple, NVIDIA · 24/7'], ['holdings', 'Portfolio', 'Your tokens, live value'], ['buysol', 'Buy Solana', 'Card or bank → SOL']] },
+              { grp: 'Trade', accent: '#2f6bff', items: [['swap', 'Swap', 'Trade any Solana token'], ['ape', 'Pump.fun', 'New launches · one-tap trades'], ['markets', 'xStocks', 'Tesla, Apple, NVIDIA · 24/7'], ['holdings', 'Portfolio', 'Your tokens, live value'], ['buysol', 'Buy Solana', 'Card or bank → SOL']] },
               { grp: 'Tools', accent: '#7c5cff', items: [['bridge', 'Cross-Chain', 'Move tokens across 71 chains'], ['solbtc', 'SOL → BTC', 'Solana straight to Bitcoin'], ['flipsy', 'Flipsy', 'Predictions · beta']] },
               { grp: 'Earn & info', accent: '#13b87f', items: [['referrals', 'Referrals', 'Earn 50% of fees, forever'], ['why', 'Why Nexus', 'No email, no KYC, no limits'], ['getstarted', 'Get Started', 'New here? Start in 60s']] },
             ].map(section => (
