@@ -66,36 +66,6 @@ crypto bridge app
 crypto bridge without kyc
 decentralized trading app
 dex aggregator
-do i need to approve tokens solana swap
-do solana swaps work without sol in wallet
-doge swap
-dogecoin trading
-dogwifhat swap
-drift exchange
-drift swap
-drift trading
-early access solana token swap
-eth swap from solana
-ethereum bridge from solana
-ethereum dex
-ethereum to solana
-exchange solana for aave
-exchange solana for ai16z
-exchange solana for arb
-exchange solana for bitcoin
-exchange solana for bonk
-exchange solana for brett
-exchange solana for cardano
-exchange solana for chainlink
-exchange solana for dogecoin
-exchange solana for drift
-exchange solana for ethereum
-exchange solana for fartcoin
-exchange solana for floki
-exchange solana for grass
-exchange solana for helium
-exchange solana for hnt
-exchange solana for hype
 exchange solana for injective
 exchange solana for jito
 exchange solana for jupiter
