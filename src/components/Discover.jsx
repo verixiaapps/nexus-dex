@@ -138,12 +138,12 @@ function uniqMint(list){
   });
 }
 
-// Token / stock logos — inlined like App.js's appFetchBrandIcons (same
-// /api/jupiter/tokens/search endpoint). Returns { mint: logoURL }. Used to
-// backfill icons for feed tokens that ship without one (esp. fresh pump.fun
-// launches) and for xStocks. Kept local so Discover depends only on the
+// Token metadata backfill via /api/jupiter/tokens/search (same endpoint the app
+// uses for xStock icons). Returns { mint: { icon, mintDisabled, freezeDisabled,
+// topPct, organic, verified } } — the logo PLUS Jupiter's on-chain audit, which
+// is what the safety score runs on. Kept local so Discover depends only on the
 // Stocks.jsx exports App.js already imports.
-async function fetchIcons(mints){
+async function fetchMeta(mints){
   if(!mints||!mints.length) return {};
   try{
     const ctrl=new AbortController();
@@ -154,9 +154,50 @@ async function fetchIcons(mints){
     const data=await r.json();
     const arr=Array.isArray(data)?data:(data?.tokens||[]);
     const out={};
-    for(const tk of arr){ const id=tk?.id||tk?.address; if(!id) continue; const url=tk.icon||tk.logoURI||null; if(url) out[id]=url; }
+    for(const tk of arr){
+      const id=tk?.id||tk?.address; if(!id) continue;
+      const a=tk.audit||{};
+      out[id]={
+        icon: tk.icon||tk.logoURI||null,
+        mintDisabled:  a.mintAuthorityDisabled===true?true:(a.mintAuthorityDisabled===false?false:null),
+        freezeDisabled:a.freezeAuthorityDisabled===true?true:(a.freezeAuthorityDisabled===false?false:null),
+        topPct: Number(a.topHoldersPercentage),
+        organic: Number(tk.organicScore),
+        verified: !!tk.isVerified,
+      };
+    }
     return out;
   }catch{ return {}; }
+}
+
+// ── DexScreener sparkline points — STOCKS ONLY ────────────────────────
+// Mirrors Stocks.jsx stkDexSparkPoints: contract-matched (base = this mint),
+// highest-liquidity Solana pair; reconstructs 5 anchors from the pair's
+// m5/h1/h6/h24 price changes. Returns [{t,c}] | null. Used only for stock rows
+// so Discover's stock charts match the rest of the app (DexScreener). Pump /
+// Jupiter rows keep stkFetchSeries (GeckoTerminal) — untouched.
+const _dexSparkCache = new Map();
+async function dexSparkPoints(mint){
+  if(_dexSparkCache.has(mint)) return _dexSparkCache.get(mint);
+  let out=null;
+  try{
+    const ctrl=new AbortController(); const timer=setTimeout(()=>ctrl.abort(),7000);
+    const r=await fetch('https://api.dexscreener.com/latest/dex/tokens/'+encodeURIComponent(mint),{headers:{Accept:'application/json'},signal:ctrl.signal});
+    clearTimeout(timer);
+    if(r.ok){
+      const dj=await r.json();
+      const pairs=Array.isArray(dj?.pairs)?dj.pairs:[];
+      const matched=pairs.filter(p=>p&&p.chainId==='solana'&&p.baseToken&&p.baseToken.address===mint);
+      if(matched.length){
+        const best=matched.reduce((a,b)=>(Number(b.liquidity?.usd||0)>Number(a.liquidity?.usd||0)?b:a),matched[0]);
+        const pc=best.priceChange||{}; const now=1; const back=v=>now/(1+(Number(v)||0)/100);
+        const vals=[back(pc.h24),back(pc.h6),back(pc.h1),back(pc.m5),now];
+        if(vals.every(v=>Number.isFinite(v)&&v>0)) out=vals.map((c,i)=>({t:i,c}));
+      }
+    }
+  }catch{}
+  _dexSparkCache.set(mint,out);
+  return out;
 }
 
 // ── normalizers — same mapping + route tags App/TokenSheet expect ─────
@@ -189,25 +230,60 @@ function normalizeJup(t){
     volume24h:Number(t?.stats24h?.buyVolume??0)+Number(t?.stats24h?.sellVolume??0),
     holders:Number(t.holderCount||0), liquidity:Number(t.liquidity||0),
     decimals:Number(t.decimals??6),
+    audit:t.audit||null, organicScore:Number(t.organicScore), isVerified:!!t.isVerified,
     route:'jupiter', kind:ms<24*3600*1000?'new':'graduated',
   };
 }
 
 // =====================================================================
-// NEXUS SCORE — composite 0-100 from four honest signals derived from
-// real feed fields. Momentum 34 / Liquidity 26 / Holders 20 / Safety 20.
+// NEXUS SAFETY SCORE — safety-first, rug/honeypot-aware.
+// Composite = Safety 55 / Liquidity 20 / Traction 15 / Momentum 10, BUT
+// authority flags act as HARD CAPS: a live freeze authority (honeypot —
+// holders can be blocked from selling) or mint authority (dilution rug)
+// slams the score down no matter how hard it's pumping. Authorities we
+// can't verify also cap it — we don't hand out A's we can't back up.
+// Signals come from Jupiter's on-chain audit: mint/freeze authority,
+// top-holder %, organicScore, isVerified.
 // =====================================================================
-function signalsFor(t){
-  const mom = clamp(50 + clamp(t.change,-60,120)*0.42, 4, 99);
-  const liq = clamp((log10(t.liquidity)-3.5)/(6.7-3.5)*100, 3, 100);
-  const hold= t.holders>0 ? clamp((log10(t.holders)-2)/(4.6-2)*100, 3, 100)
-                          : clamp(liq*0.6, 3, 60);           // unknown holders → infer from depth
-  const ageH = Number.isFinite(t.ageMs) ? t.ageMs/3.6e6 : 0;
-  const ageScore = clamp((log10(ageH*60+1)-1)/(4.3-1)*100, 4, 100); // minutes → weeks
-  const safe = clamp(ageScore*0.6 + liq*0.4, 3, 99);
-  return { mom, liq, hold, safe };
+const numOr  = (...xs)=>{ for(const x of xs){ const n=Number(x); if(Number.isFinite(n)) return n; } return NaN; };
+const boolOr = (...xs)=>{ for(const x of xs){ if(x===true||x===false) return x; } return null; };
+
+function rateToken(t){
+  const a = t._aud || {};
+  const freezeDisabled = a.freezeDisabled;   // true safe · false honeypot risk · null unknown
+  const mintDisabled   = a.mintDisabled;
+  const topPct  = numOr(a.topPct);           // % supply in top holders
+  const organic = numOr(a.organic);          // Jupiter organic score 0..100
+  const verified= !!a.verified;
+  const flags=[];
+
+  // ── Safety (0-100): authorities + concentration + legitimacy ──
+  let safe=48;
+  if(freezeDisabled===true) safe+=22; else if(freezeDisabled===false){ safe-=42; flags.push('FREEZE'); }
+  if(mintDisabled===true)   safe+=15; else if(mintDisabled===false){ safe-=26; flags.push('MINT'); }
+  if(Number.isFinite(topPct)){
+    if(topPct<=20) safe+=12; else if(topPct<=40) safe+=4; else if(topPct<=60) safe-=8; else { safe-=22; flags.push('WHALE'); }
+  }
+  if(verified) safe+=8;
+  if(Number.isFinite(organic)) safe += clamp((organic-40)/60*10, -6, 10);
+  safe=clamp(safe,2,100);
+
+  const liq  = clamp((log10(t.liquidity)-3.5)/(6.7-3.5)*100, 3, 100);
+  const hold = t.holders>0 ? clamp((log10(t.holders)-2)/(4.6-2)*100, 3, 100)
+             : (Number.isFinite(organic) ? clamp(organic,3,90) : clamp(liq*0.5,3,45));
+  const mom  = clamp(50 + clamp(t.change,-60,120)*0.42, 4, 99);
+
+  let score = Math.round(safe*0.55 + liq*0.20 + hold*0.15 + mom*0.10);
+
+  // ── hard caps: honeypot / rug / concentration / thin liquidity ──
+  if(freezeDisabled===false) score=Math.min(score,18);   // honeypot — likely can't sell
+  if(mintDisabled===false)   score=Math.min(score,35);   // dilution rug
+  if(Number.isFinite(topPct) && topPct>=70) score=Math.min(score,40); // whale concentration
+  if(t.liquidity>0 && t.liquidity<3000)     score=Math.min(score,42); // razor-thin liquidity
+  if(freezeDisabled==null && mintDisabled==null){ score=Math.min(score,58); flags.push('UNVERIFIED'); }
+
+  return { score:clamp(score,2,100), sig:{mom,liq,hold,safe}, flags };
 }
-function scoreOf(sig){ return Math.round(sig.mom*0.34 + sig.liq*0.26 + sig.hold*0.20 + sig.safe*0.20); }
 function grade(s){
   if(s>=90) return {g:'A+',c:C.green};
   if(s>=82) return {g:'A', c:C.green};
@@ -215,14 +291,24 @@ function grade(s){
   if(s>=60) return {g:'C', c:C.peach};
   return {g:'D', c:C.down};
 }
-function verdictText(sig){
+// Risk flag → { label, color } for the row / spotlight chips.
+const FLAG_META = {
+  FREEZE:     { label:'FREEZE',       color:C.red },
+  MINT:       { label:'MINT AUTH',    color:C.red },
+  WHALE:      { label:'CONCENTRATED', color:C.peach },
+  UNVERIFIED: { label:'UNVERIFIED',   color:C.ink3 },
+};
+function verdictText(sig, flags){
+  flags=flags||[];
+  if(flags.includes('FREEZE')) return "Freeze authority is live — holders can be blocked from selling. Treat as a honeypot.";
+  if(flags.includes('MINT'))   return "Mint authority is live — supply can be inflated. High rug risk.";
+  if(flags.includes('WHALE'))  return "Supply is concentrated in a few wallets — coordinated-dump risk.";
+  if(flags.includes('UNVERIFIED')) return "Can't verify mint/freeze authority yet — unproven, trade with caution.";
   const parts=[];
-  if(sig.mom>=80) parts.push('strong momentum'); else if(sig.mom>=55) parts.push('steady momentum'); else parts.push('cooling momentum');
+  if(sig.safe>=82) parts.push('mint & freeze renounced'); else if(sig.safe>=60) parts.push('solid safety checks');
   if(sig.liq>=75) parts.push('deep liquidity'); else if(sig.liq<45) parts.push('thin liquidity');
-  if(sig.hold>=80) parts.push('a proven holder base'); else if(sig.hold<45) parts.push('an early holder base');
-  const sc=scoreOf(sig);
-  const lead = sc>=82?'Top-rated':sc>=72?'Solid':'Higher risk';
-  return lead+' — '+parts.slice(0,2).join(' and ')+'.';
+  if(sig.hold>=75) parts.push('a broad holder base');
+  return (parts.length ? parts.slice(0,2).join(' · ') : 'passes core safety checks') + '.';
 }
 
 // ── sparkline (Catmull-Rom, same as App.Spark) ────────────────────────
@@ -302,7 +388,7 @@ function TokenRow({ t, rank, last, onOpen }){
     <button onClick={onOpen} style={{display:'flex',alignItems:'center',gap:9,padding:'11px 12px',width:'100%',background:'transparent',border:'none',borderBottom:last?'none':`1px solid ${C.hairline}`,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
       <div style={{position:'relative',width:36,height:36,borderRadius:11,flex:'0 0 auto',display:'grid',placeItems:'center',color:'#fff',fontWeight:800,fontSize:14,overflow:'hidden',background:grad,backgroundSize:'cover',backgroundPosition:'center',...(img?{backgroundImage:`url(${img})`}:{})}}>
         {!img?(t.emoji||'?'):''}
-        {rank!=null && <div style={{position:'absolute',top:-5,left:-5,width:16,height:16,borderRadius:6,background:'#0b0b0c',color:'#fff',fontFamily:MONO,fontSize:8,fontWeight:700,display:'grid',placeItems:'center'}}>{rank}</div>}
+        {rank!=null && t.route!=='stock' && <div style={{position:'absolute',top:-5,left:-5,width:16,height:16,borderRadius:6,background:'#0b0b0c',color:'#fff',fontFamily:MONO,fontSize:8,fontWeight:700,display:'grid',placeItems:'center'}}>{rank}</div>}
       </div>
       <div style={{minWidth:0,flex:1}}>
         <div style={{fontWeight:700,fontSize:14,letterSpacing:'-0.01em',display:'flex',alignItems:'center',gap:6}}>
@@ -311,13 +397,22 @@ function TokenRow({ t, rank, last, onOpen }){
             color:t.kind==='new'?C.green:C.ink3, background:t.kind==='new'?'rgba(22,192,138,.12)':'#f4f4f5'}}>
             {t.kind==='new'?t.age:t.kind}
           </span>
+          {t.flags&&t.flags.length>0&&FLAG_META[t.flags[0]]&&(
+            <span style={{fontFamily:MONO,fontSize:8,fontWeight:700,padding:'1px 5px',borderRadius:4,letterSpacing:'0.04em',color:'#fff',background:FLAG_META[t.flags[0]].color}}>
+              {FLAG_META[t.flags[0]].label}
+            </span>
+          )}
         </div>
         <div style={{fontSize:10.5,color:C.ink3,fontWeight:500,marginTop:1,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
           {t.sub || `MC ${fmtUsd(t.mcap)} · Liq ${fmtUsd(t.liquidity)}${t.holders>0?` · ${t.holders.toLocaleString()} holders`:''}`}
         </div>
       </div>
       <Spark pts={t.pts} mint={t.mint} price={t.price} change={t.pct} />
-      <ScoreBadge score={t.score} />
+      {t.route==='stock'
+        ? <div style={{flex:'0 0 auto',width:38,height:38,borderRadius:11,display:'grid',placeItems:'center',background:'#f4f4f5'}}>
+            <span style={{fontFamily:MONO,fontSize:8.5,fontWeight:700,color:C.ink3,letterSpacing:'0.04em'}}>24/7</span>
+          </div>
+        : <ScoreBadge score={t.score} />}
       <div style={{textAlign:'right',flex:'0 0 auto',minWidth:60}}>
         <div style={{fontFamily:MONO,fontSize:13,fontWeight:700,color:C.ink}}>{fmtUsd(t.price)}</div>
         <div style={{fontFamily:MONO,fontSize:11,fontWeight:700,marginTop:1,color:up?C.green:C.down}}>{fmtPct(t.pct)}</div>
@@ -337,21 +432,20 @@ function DiscoverInner({ onSwitchTab, onOpenToken, onConnectWallet }){
   const [whales,setWhales]=useState([]);
   const [filter,setFilter]=useState('all');
   const [sort,setSort]=useState('score');
-  const [feedIcons,setFeedIcons]=useState({});   // backfilled logos, keyed by mint
+  const [meta,setMeta]=useState({});   // backfilled { mint: { icon, mint/freeze authority, topPct, organic, verified } }
   const fetched=useRef({});
-  const iconFetched=useRef({});
+  const metaFetched=useRef({});
 
-  // sparkline loader (throttled — only for rendered rows). No pool hint passed:
-  // matches LiveTokenFeeds (the home feed), so the series can't be pulled from an
-  // unverified pool — and can't poison stkResolvePool's pool cache (stkFetchSeries
-  // caches any poolHint you hand it, in memory AND localStorage). If no series
-  // comes back, Spark falls back to the token's own price + real 24h change.
-  // tf mirrors the app: '1D' for tokens (LiveTokenFeeds), '1M' for stocks (XStocksStrip).
-  const loadSeries=(list,tf='1D')=>{
+  // sparkline loader (throttled — only for rendered rows). Stocks pull from
+  // DexScreener (dexSparkPoints) to match the rest of the app; pump / Jupiter
+  // tokens keep stkFetchSeries (GeckoTerminal) — no pool hint, so nothing can
+  // poison stkResolvePool's cache. If no series comes back, Spark falls back to
+  // the token's own price + real 24h change.
+  const loadSeries=(list,tf='1D',dex=false)=>{
     list.forEach(t=>{
       if(!t||fetched.current[t.mint]) return;
       fetched.current[t.mint]=true;
-      stkThrottle(()=>stkFetchSeries(t.mint,tf))
+      stkThrottle(()=> dex ? dexSparkPoints(t.mint) : stkFetchSeries(t.mint,tf))
         .then(s=>{ if(s&&s.length>=2) setSeries(prev=>({...prev,[t.mint]:s})); })
         .catch(()=>{ fetched.current[t.mint]=false; });
     });
@@ -382,20 +476,22 @@ function DiscoverInner({ onSwitchTab, onOpenToken, onConnectWallet }){
     return ()=>{ dead=true; clearInterval(id); };
   },[]);
 
-  // Backfill logos for feed tokens that ship without one (fresh pump.fun
-  // launches especially). Batch the missing mints through /api/jupiter/tokens/search
-  // (same source the app uses for xStock icons). Runs once per mint.
+  // Backfill metadata (logo + Jupiter on-chain audit) for tokens that don't
+  // already carry it — i.e. pump.fun launches (the Jupiter feed already ships
+  // audit for its own tokens). Batched through /api/jupiter/tokens/search, once
+  // per mint. The safety score reads mint/freeze authority, top-holder %,
+  // organicScore and isVerified from here.
   useEffect(()=>{
     const need=[...pumpToks,...jupToks]
-      .filter(t=>t&&t.mint&&!(typeof t.icon==='string'&&/^https?:\/\//.test(t.icon))&&!iconFetched.current[t.mint])
+      .filter(t=>t&&t.mint&&!t.audit&&!metaFetched.current[t.mint])
       .map(t=>t.mint);
     if(!need.length) return;
     let dead=false;
-    need.forEach(m=>{ iconFetched.current[m]=true; });
+    need.forEach(m=>{ metaFetched.current[m]=true; });
     (async()=>{
       for(let i=0;i<need.length && !dead;i+=50){
-        const got=await fetchIcons(need.slice(i,i+50)).catch(()=>({}));
-        if(!dead && got && Object.keys(got).length) setFeedIcons(prev=>({...prev,...got}));
+        const got=await fetchMeta(need.slice(i,i+50)).catch(()=>({}));
+        if(!dead && got && Object.keys(got).length) setMeta(prev=>({...prev,...got}));
       }
     })();
     return ()=>{ dead=true; };
@@ -411,7 +507,7 @@ function DiscoverInner({ onSwitchTab, onOpenToken, onConnectWallet }){
     let dead=false;
     const picks=BRANDS.slice(0,12);
     const mints=picks.map(b=>b.mint);
-    fetchIcons(mints).then(ic=>{ if(!dead) setStockIcons(ic||{}); }).catch(()=>{});
+    fetchMeta(mints).then(m=>{ if(dead||!m) return; const ic={}; for(const k in m){ if(m[k]&&m[k].icon) ic[k]=m[k].icon; } setStockIcons(ic); }).catch(()=>{});
     const load=async()=>{
       const prices=await fetchBrandPrices(mints).catch(()=>({}));
       if(dead) return;
@@ -423,7 +519,7 @@ function DiscoverInner({ onSwitchTab, onOpenToken, onConnectWallet }){
           sub:`${b.name} · Tokenized equity · 24/7`, route:'stock', kind:'stock' };
       }).filter(x=>x.price>0);
       setStockToks(list);
-      loadSeries(list,'1M');
+      loadSeries(list,'1M',true);   // stocks → DexScreener
     };
     load(); const id=setInterval(load,30000);
     return ()=>{ dead=true; clearInterval(id); };
@@ -443,23 +539,32 @@ function DiscoverInner({ onSwitchTab, onOpenToken, onConnectWallet }){
     return ()=>{ dead=true; clearInterval(id); };
   },[]);
 
-  // merge → score → decorate. Icon priority: feed-provided URL → backfilled
-  // (fetchIcons) → stock icons. Stocks score high on safety, momentum from the
-  // '1M' series direction.
+  // merge → resolve audit → rate. Icon: feed URL → backfilled → stock icon.
+  // Audit resolves from the token's own Jupiter audit first, then the backfilled
+  // meta map (pump tokens). Stocks are NOT rated (score 0, no flags) — the row
+  // hides their badge; they only carry an icon + price.
   const all=useMemo(()=>{
     const merged=uniqMint([...pumpToks,...jupToks,...stockToks]);
     return merged.map(t=>{
       const cs=pctFromSeries(series[t.mint]);
       const pct=Number.isFinite(cs)?cs:(Number.isFinite(t.change)?t.change:0);
+      const m=meta[t.mint];
       const feedUrl=(typeof t.icon==='string'&&/^https?:\/\//.test(t.icon))?t.icon:null;
-      const icon=feedUrl || feedIcons[t.mint] || (t.route==='stock'?stockIcons[t.mint]:null) || null;
+      const icon=feedUrl || (m&&m.icon) || (t.route==='stock'?stockIcons[t.mint]:null) || null;
       const withPct={...t,icon,pct};
-      const sig=t.kind==='stock'
-        ? {mom:clamp(50+clamp(pct,-15,15)*1.2,20,90),liq:92,hold:80,safe:95}
-        : signalsFor(withPct);
-      return {...withPct, sig, score:scoreOf(sig), pts:series[t.mint]};
+      if(t.route==='stock') return {...withPct, sig:null, score:0, flags:[], pts:series[t.mint]};
+      const own=t.audit||{};
+      const _aud={
+        freezeDisabled: boolOr(own.freezeAuthorityDisabled, m&&m.freezeDisabled),
+        mintDisabled:   boolOr(own.mintAuthorityDisabled,   m&&m.mintDisabled),
+        topPct:  numOr(own.topHoldersPercentage, m&&m.topPct),
+        organic: numOr(t.organicScore, m&&m.organic),
+        verified: !!(t.isVerified || (m&&m.verified)),
+      };
+      const r=rateToken({...withPct, _aud});
+      return {...withPct, sig:r.sig, score:r.score, flags:r.flags, pts:series[t.mint]};
     });
-  },[pumpToks,jupToks,stockToks,stockIcons,feedIcons,series]);
+  },[pumpToks,jupToks,stockToks,stockIcons,meta,series]);
 
   // filter + sort
   const view=useMemo(()=>{
@@ -535,9 +640,10 @@ function DiscoverInner({ onSwitchTab, onOpenToken, onConnectWallet }){
 
   const totalVol=useMemo(()=>all.reduce((s,t)=>s+(t.volume24h||0),0),[all]);
   const newCount=counts.new;
-  const avgScore=all.length?Math.round(all.reduce((s,t)=>s+t.score,0)/all.length):0;
+  const rated=useMemo(()=>all.filter(t=>t.route!=='stock'),[all]);
+  const avgScore=rated.length?Math.round(rated.reduce((s,t)=>s+t.score,0)/rated.length):0;
 
-  const CHIPS=[['all','All'],['trending','Trending'],['new','New'],['gainers','Gainers'],['graduated','Graduated'],['stock','Stocks']];
+  const CHIPS=[['all','All'],['trending','Trending'],['new','New'],['gainers','Gainers'],['graduated','Graduated'],['stock','xStocks']];
   const SORTS=[['score','Score'],['vol','Volume'],['chg','Movers'],['age','Newest']];
 
   if(!all.length){
@@ -598,7 +704,7 @@ function DiscoverInner({ onSwitchTab, onOpenToken, onConnectWallet }){
               <div style={{position:'relative',fontFamily:MONO,fontWeight:700,fontSize:9,letterSpacing:'0.1em',marginTop:2,color:C.ink3}}>{sp.score}/100</div>
             </div>
             <div style={{flex:1,display:'flex',flexDirection:'column',gap:7}}>
-              {[['Momentum',sp.sig.mom],['Liquidity',sp.sig.liq],['Holders',sp.sig.hold],['Safety',sp.sig.safe]].map(([l,v])=>{
+              {[['Safety',sp.sig.safe],['Liquidity',sp.sig.liq],['Holders',sp.sig.hold],['Momentum',sp.sig.mom]].map(([l,v])=>{
                 const gc=grade(v).c;
                 return (
                   <div key={l} style={{display:'flex',alignItems:'center',gap:8}}>
@@ -610,7 +716,8 @@ function DiscoverInner({ onSwitchTab, onOpenToken, onConnectWallet }){
               })}
             </div>
           </div>
-          <button onClick={()=>open(sp)} style={{marginTop:14,width:'100%',padding:14,borderRadius:15,border:'none',background:C.green,color:'#fff',fontWeight:800,fontSize:15,letterSpacing:'0.01em',cursor:'pointer'}}>Buy {sp.sym} · rated {spG.g}</button>
+          <div style={{marginTop:12,fontSize:12,fontWeight:500,lineHeight:1.4,color:C.ink2}}>{verdictText(sp.sig, sp.flags)}</div>
+          <button onClick={()=>open(sp)} style={{marginTop:12,width:'100%',padding:14,borderRadius:15,border:'none',background:C.green,color:'#fff',fontWeight:800,fontSize:15,letterSpacing:'0.01em',cursor:'pointer'}}>Buy {sp.sym} · rated {spG.g}</button>
         </div>
       </>}
 
