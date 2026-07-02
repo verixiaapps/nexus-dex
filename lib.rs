@@ -7,8 +7,10 @@
 //   2. Round now holds FOUR pools (up_small/up_big/down_small/down_big); Round::LEN
 //      grows 91 -> 107. Bet.side -> Bet.bracket (LEN unchanged, 59).
 //   3. end_round() computes the % move from lock/close price, picks the winning
-//      bracket, and that bracket splits the WHOLE pot. If nobody bet the winning
-//      bracket -> AllLost (pot to house). Exact flat -> Tie (full refund, no fee).
+//      bracket, and that bracket splits the WHOLE pot. If the exact winning
+//      bracket is EMPTY, the pot pays the same-direction sibling bracket instead
+//      (getting the direction right is a win). Only if BOTH brackets on the
+//      winning side are empty -> AllLost (pot to house). Exact flat -> Tie.
 //   4. compute_payout(): winner's share = stake * total_pot / winning_pool, minus
 //      fee. FEE IS NOW STRICTLY ON PROFIT — the old "fee on principal" cases
 //      (thin pool / tie) are gone. Set feeBps = 500 (5%) at initialize.
@@ -320,38 +322,37 @@ pub mod flipsy {
             .ok_or(FlipsyError::MathOverflow)?;
         let big = mag_bps >= BRACKET_THRESHOLD_BPS as i128;
 
-        // Direction is decided by the raw price comparison (not the rounded bps),
-        // so a tiny move is still classified up/down correctly.
-        let winning: Option<Bracket> = if close_price == round.lock_price {
-            None // exact flat -> Tie (everyone refunded, no fee)
-        } else if close_price > round.lock_price {
-            Some(if big { Bracket::UpBig } else { Bracket::UpSmall })
-        } else {
-            Some(if big { Bracket::DownBig } else { Bracket::DownSmall })
-        };
+        // Snapshot the four pools so we can pick a winner without re-borrowing.
+        let up_small = round.up_small_pool;
+        let up_big = round.up_big_pool;
+        let down_small = round.down_small_pool;
+        let down_big = round.down_big_pool;
 
-        round.outcome = match winning {
-            None => Outcome::Tie,
-            Some(b) => {
-                let winning_pool = match b {
-                    Bracket::UpSmall => round.up_small_pool,
-                    Bracket::UpBig => round.up_big_pool,
-                    Bracket::DownSmall => round.down_small_pool,
-                    Bracket::DownBig => round.down_big_pool,
-                };
-                if winning_pool > 0 {
-                    match b {
-                        Bracket::UpSmall => Outcome::UpSmall,
-                        Bracket::UpBig => Outcome::UpBig,
-                        Bracket::DownSmall => Outcome::DownSmall,
-                        Bracket::DownBig => Outcome::DownBig,
-                    }
-                } else {
-                    // Nobody bet the winning bracket — the whole pot goes to the house.
-                    Outcome::AllLost
-                }
-            }
+        // Pick the winning bracket. Direction is decided by the raw price
+        // comparison (not the rounded bps). If the EXACT size bracket has no bets,
+        // fall back to the OTHER bracket on the same (correct) direction — getting
+        // the direction right is a win. Only if BOTH brackets on the winning side
+        // are empty does the pot go to the house (AllLost). Exact flat -> Tie.
+        let outcome = if close_price == round.lock_price {
+            Outcome::Tie
+        } else if close_price > round.lock_price {
+            // UP: exact size first, then the same-direction sibling.
+            let (exact, exact_pool, sib, sib_pool) = if big {
+                (Outcome::UpBig, up_big, Outcome::UpSmall, up_small)
+            } else {
+                (Outcome::UpSmall, up_small, Outcome::UpBig, up_big)
+            };
+            if exact_pool > 0 { exact } else if sib_pool > 0 { sib } else { Outcome::AllLost }
+        } else {
+            // DOWN: exact size first, then the same-direction sibling.
+            let (exact, exact_pool, sib, sib_pool) = if big {
+                (Outcome::DownBig, down_big, Outcome::DownSmall, down_small)
+            } else {
+                (Outcome::DownSmall, down_small, Outcome::DownBig, down_big)
+            };
+            if exact_pool > 0 { exact } else if sib_pool > 0 { sib } else { Outcome::AllLost }
         };
+        round.outcome = outcome;
 
         if round.outcome == Outcome::AllLost {
             let total = round
