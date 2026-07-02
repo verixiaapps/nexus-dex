@@ -239,6 +239,7 @@ jobs:
             echo "[rebuild] detected stale PENDING_BACKUP from previous workflow version"
             mv "$PENDING_BACKUP" "$KEYWORDS_FILE"
             git add -A
+            git reset -q -- .github || true
             if ! git diff --cached --quiet; then
               git commit -m "Nexus DEX: auto-recover stale rebuild backup"
               git push --force-with-lease origin HEAD:main
@@ -287,9 +288,6 @@ jobs:
 
           REBUILD_RC=0
           if [ -s "$KEYWORDS_FILE" ]; then
-            # --kill-after gives the build script's SIGTERM handler time to
-            # finish the current page and push a final checkpoint before the
-            # hard SIGKILL. Keep it comfortably under the job's spare minutes.
             timeout --signal=TERM --kill-after=180s "$REBUILD_STEP_TIMEOUT" \
               python scripts/build_nexus_dex_seo_incremental.py || REBUILD_RC=$?
           fi
@@ -386,6 +384,7 @@ jobs:
         run: |
           set -euo pipefail
           git add -A
+          git reset -q -- .github || true
           if git diff --cached --quiet; then
             echo "No changes to commit"
             exit 0
