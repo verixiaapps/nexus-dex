@@ -81,4 +81,3 @@ jobs:
           fi
           echo "::error::Crank exited with code $code"
           exit "$code"
-
