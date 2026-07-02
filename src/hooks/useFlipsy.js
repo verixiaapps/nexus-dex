@@ -1,39 +1,30 @@
 /* ============================================================================
- * useFlipsy.js — REVIEW NOTES (read me) — no logic changed
+ * useFlipsy.js — BRACKETS REWORK (read me)
  * ----------------------------------------------------------------------------
- * - Reviewed against the UI (Flipsy.jsx): return shape and mapRound fields
- *   (epoch, headsPool, tailsPool, lockPrice, closeTime, lockTime, outcome,
- *   resolvedAt) and bet shape ({side, amount(USD), claimed, betIndex}) all match
- *   what the UI binds to. Pools/bets/balance are USD. Looks correct.
- * - PROGRAM_ID reads from process.env.REACT_APP_FLIPSY_PROGRAM_ID (defaults to a
- *   system-program placeholder). Set it to your DEPLOYED program ID at build time
- *   (must equal declare_id! in lib.rs and FLIPSY_PROGRAM_ID in the crank).
- * - @coral-xyz/anchor here must match the on-chain Anchor major used to build the
- *   program (0.30+), so the IDL parses.
- * - Live price = Coinbase SOL-USD spot, the SAME source the crank uses for
- *   lock/close, so the on-screen delta tracks the resolved outcome.
+ * Matches the bracket version of lib.rs:
+ *  - Rounds expose FOUR pools (upSmall, upBig, downSmall, downBig) instead of
+ *    heads/tails. mapRound() now returns { pools, poolsSol, totalPool, ... }.
+ *  - Bets carry a `bracket` ('upSmall'|'upBig'|'downSmall'|'downBig'), not a side.
+ *  - placeBet(epoch, bracket, usdAmount).
+ *  - outcome can be 'upSmall'|'upBig'|'downSmall'|'downBig'|'tie'|'allLost'|'unresolved'.
+ *  - Betting locks 60s before close on a LIVE round (contract enforces it via
+ *    lock_time). The hook surfaces lockTime/closeTime; the UI decides bettability.
+ *  - Live price = Coinbase SOL-USD spot, the SAME source the crank uses for
+ *    lock/close, so the on-screen delta tracks the resolved bracket.
+ *  - PROGRAM_ID from process.env.REACT_APP_FLIPSY_PROGRAM_ID (system-program
+ *    placeholder). Set it to your deployed program ID at build time.
+ *  - NOTE: Flipsy.jsx still needs its UI updated to consume brackets (this hook's
+ *    return shape changed). That's the UI pass.
  * ==========================================================================*/
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import * as anchor from '@coral-xyz/anchor';
 import { Connection, PublicKey, SystemProgram } from '@solana/web3.js';
-  
-// Flipsy program ID. Reads from env at build time. Falls back to the System
-// Program (all 1s — valid base58) so the import doesn't throw if the env var
-// is missing — the hook will then surface "No IDL on chain" through its
-// normal error path instead of taking down the whole app.
-//
-// TODO: set REACT_APP_FLIPSY_PROGRAM_ID in your Railway/build env to the
-// deployed Flipsy program ID before shipping the Flipsy page.
+
 const PROGRAM_ID = new PublicKey(
   process.env.REACT_APP_FLIPSY_PROGRAM_ID || '11111111111111111111111111111111',
 );
 
 // RPC — public Solana devnet endpoint (Flipsy is deployed on devnet).
-// Hardcoded for now: the rest of the app runs on mainnet through
-// /api/solana-rpc, so Flipsy can't share that proxy. Public devnet has no key
-// to leak. No Ankr fallback — Ankr is the mainnet buy/sell fallback only.
-// TODO: when ready, swap to a dedicated /api/devnet-rpc route that forwards to
-// DEVNET_RPC_URL server-side (avoids public-endpoint rate limits).
 const FLIPSY_RPC = 'https://api.devnet.solana.com';
 
 const PRICE_URL = 'https://api.coinbase.com/v2/prices/SOL-USD/spot';
@@ -41,10 +32,15 @@ const POLL_PRICE_MS = 2_500;
 const POLL_CHAIN_MS = 5_000;
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const PRICE_SCALE = 1e8;
-const DEFAULT_BETTING_DURATION = 900;
+const DEFAULT_BETTING_DURATION = 300;   // 5 min (fallback only; real value on-chain)
 const DEFAULT_GAP_DURATION = 30;
 const DEFAULT_CLAIM_FORFEIT_DELAY = 21_600;
+// Matches BET_LOCK_LEAD in lib.rs — betting on a live round stops this many
+// seconds before close. Program constant, not stored in Config.
+const BET_LOCK_LEAD = 60;
 const RECENT_ROUNDS_COUNT = 10;
+
+const BRACKETS = ['upSmall', 'upBig', 'downSmall', 'downBig'];
 
 const u64Buf = (n) => new anchor.BN(n).toArrayLike(Buffer, 'le', 8);
 const findConfigPda = () =>
@@ -79,19 +75,40 @@ function toPubkey(x) {
   return null;
 }
 
+// Anchor serializes enum variants as an object with a single camelCase key.
 function outcomeStr(outcome) {
   if (!outcome) return 'unresolved';
-  if ('heads' in outcome) return 'heads';
-  if ('tails' in outcome) return 'tails';
+  if ('upSmall' in outcome) return 'upSmall';
+  if ('upBig' in outcome) return 'upBig';
+  if ('downSmall' in outcome) return 'downSmall';
+  if ('downBig' in outcome) return 'downBig';
   if ('tie' in outcome) return 'tie';
   if ('allLost' in outcome) return 'allLost';
   return 'unresolved';
 }
-const sideToVariant = (s) => s === 'heads' ? { heads: {} } : { tails: {} };
+function bracketStr(bracket) {
+  if (!bracket) return 'upSmall';
+  if ('upSmall' in bracket) return 'upSmall';
+  if ('upBig' in bracket) return 'upBig';
+  if ('downSmall' in bracket) return 'downSmall';
+  if ('downBig' in bracket) return 'downBig';
+  return 'upSmall';
+}
+const bracketToVariant = (b) => ({
+  upSmall: { upSmall: {} },
+  upBig: { upBig: {} },
+  downSmall: { downSmall: {} },
+  downBig: { downBig: {} },
+}[b] || { upSmall: {} });
 
 function mapRound(r, livePrice) {
-  const headsSol = lamportsToSol(r.headsPool);
-  const tailsSol = lamportsToSol(r.tailsPool);
+  const sol = {
+    upSmall: lamportsToSol(r.upSmallPool),
+    upBig: lamportsToSol(r.upBigPool),
+    downSmall: lamportsToSol(r.downSmallPool),
+    downBig: lamportsToSol(r.downBigPool),
+  };
+  const totalSol = sol.upSmall + sol.upBig + sol.downSmall + sol.downBig;
   return {
     epoch: bnToNumber(r.epoch),
     lockPrice: chainPriceToUsd(r.lockPrice),
@@ -100,10 +117,15 @@ function mapRound(r, livePrice) {
     lockTime: bnToNumber(r.lockTime),
     closeTime: bnToNumber(r.closeTime),
     nextStartTime: bnToNumber(r.nextStartTime),
-    headsPool: solToUsd(headsSol, livePrice),
-    tailsPool: solToUsd(tailsSol, livePrice),
-    headsPoolSol: headsSol,
-    tailsPoolSol: tailsSol,
+    pools: {
+      upSmall: solToUsd(sol.upSmall, livePrice),
+      upBig: solToUsd(sol.upBig, livePrice),
+      downSmall: solToUsd(sol.downSmall, livePrice),
+      downBig: solToUsd(sol.downBig, livePrice),
+    },
+    poolsSol: sol,
+    totalPool: solToUsd(totalSol, livePrice),
+    totalPoolSol: totalSol,
     betCount: bnToNumber(r.betCount),
     outcome: outcomeStr(r.outcome),
     resolvedAt: bnToNumber(r.resolvedAt),
@@ -111,14 +133,17 @@ function mapRound(r, livePrice) {
   };
 }
 
-function stubRound(epoch, expectedStartTime, bettingDuration, gapDuration) {
+function stubRound(epoch, expectedStartTime, bettingDuration, gapDuration, lockLead) {
+  const close = expectedStartTime + bettingDuration;
   return {
     epoch, lockPrice: 0, closePrice: 0,
     startTime: expectedStartTime,
-    lockTime: expectedStartTime + bettingDuration,
-    closeTime: expectedStartTime + bettingDuration,
-    nextStartTime: expectedStartTime + bettingDuration + gapDuration,
-    headsPool: 0, tailsPool: 0, headsPoolSol: 0, tailsPoolSol: 0,
+    lockTime: Math.max(expectedStartTime, close - lockLead),
+    closeTime: close,
+    nextStartTime: close + gapDuration,
+    pools: { upSmall: 0, upBig: 0, downSmall: 0, downBig: 0 },
+    poolsSol: { upSmall: 0, upBig: 0, downSmall: 0, downBig: 0 },
+    totalPool: 0, totalPoolSol: 0,
     betCount: 0, outcome: 'unresolved', resolvedAt: 0, swept: false,
   };
 }
@@ -280,7 +305,7 @@ export function useFlipsy(wallet) {
               return m.outcome !== 'unresolved' ? null : m;
             } catch (_) {
               const start = baseStart + idx * (bettingDuration + gapDuration);
-              return stubRound(e, start, bettingDuration, gapDuration);
+              return stubRound(e, start, bettingDuration, gapDuration, BET_LOCK_LEAD);
             }
           }),
         );
@@ -313,7 +338,7 @@ export function useFlipsy(wallet) {
               const epoch = bnToNumber(b.account.epoch);
               const sol = lamportsToSol(b.account.amount);
               const betObj = {
-                side: 'heads' in b.account.side ? 'heads' : 'tails',
+                bracket: bracketStr(b.account.bracket),
                 amount: solToUsd(sol, price),
                 amountSol: sol,
                 claimed: b.account.claimed,
@@ -351,6 +376,7 @@ export function useFlipsy(wallet) {
           maxBet: bnToNumber(config.maxBet),
           feeBps: bnToNumber(config.feeBps),
           bettingDuration, gapDuration,
+          betLockLead: BET_LOCK_LEAD,
           maxFutureRounds: bnToNumber(config.maxFutureRounds),
           claimForfeitDelay,
           paused: config.paused,
@@ -369,8 +395,10 @@ export function useFlipsy(wallet) {
     return () => { cancelled = true; clearInterval(i); };
   }, [readProgram, walletPkStr, connection, wallet]);
 
-  const placeBet = useCallback(async (epoch, side, usdAmount) => {
+  // placeBet(epoch, bracket, usdAmount) — bracket is one of BRACKETS.
+  const placeBet = useCallback(async (epoch, bracket, usdAmount) => {
     if (!writeProgram) throw new Error('Connect your wallet first');
+    if (!BRACKETS.includes(bracket)) throw new Error('Invalid bracket');
     const walletPk = toPubkey(wallet?.publicKey);
     if (!walletPk) throw new Error('Wallet public key unavailable');
     const price = livePriceRef.current;
@@ -384,7 +412,7 @@ export function useFlipsy(wallet) {
 
     try {
       return await writeProgram.methods
-        .placeBet(new anchor.BN(epoch), new anchor.BN(betIndex), new anchor.BN(lamports), sideToVariant(side))
+        .placeBet(new anchor.BN(epoch), new anchor.BN(betIndex), new anchor.BN(lamports), bracketToVariant(bracket))
         .accounts({
           config: findConfigPda(),
           round: findRoundPda(epoch),
@@ -456,6 +484,6 @@ export function useFlipsy(wallet) {
     livePrice, liveRound, upcomingRounds, recentRounds, userBets, balance,
     balanceStatus,
     placeBet, claim, loading, programConfig, chainError,
+    BRACKETS,
   };
 }
- 
