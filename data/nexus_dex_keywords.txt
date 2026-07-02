@@ -66,50 +66,20 @@ crypto bridge app
 crypto bridge without kyc
 decentralized trading app
 dex aggregator
-exchange solana for zro
-fartcoin exchange
-fartcoin swap
-fartcoin trading
 fast crypto bridge
 fast stablecoin bridge
-fast token swap
 fastest ada swap
-fastest ai16z swap
-fastest bonk swap
-fastest bridge to solana for swapping
 fastest btc swap
-fastest drift swap
 fastest eth swap
-fastest fartcoin swap
-fastest jito swap
-fastest jupiter swap
 fastest kaspa swap
 fastest link swap
 fastest near swap
-fastest popcat swap
-fastest pyth swap
-fastest render swap
-fastest solana dex swap
 fastest ton swap
 fastest usdc swap
 fastest usdt swap
-fastest wif swap
 fastest xrp swap
-find best price solana swap aggregator
-find low cap solana gems dex
-first time using a solana dex what to know
-fix solana swap unexpected error
-fwog solana dex swap
-giga solana dex swap
-gigachad solana dex swap
-global blockchain exchange
-global cross chain bridge
-global crypto exchange
-global crypto liquidity
-global crypto markets
 global crypto swap
 global defi exchange
-global defi platform
 global meme coin exchange
 global token exchange
 global token swap
