@@ -89,6 +89,22 @@ DAILY_LIMIT         = int(os.getenv("DAILY_LIMIT", "100"))
 COMMIT_EVERY        = int(os.getenv("COMMIT_EVERY", "30"))
 RESUME              = os.getenv("RESUME", "true").lower() == "true"
 RESET_ENGINE        = os.getenv("RESET_ENGINE", "false").lower() == "true"
+
+# ---- Cross-domain linking to the token-risk pages ----
+# Each swap page links to REAL token-risk pages. We read the token-risk repo's
+# live sitemap once per run, extract real slugs, and match ones sharing keyword
+# tokens with the current page. Real pages only -> no 404s. Falls back to risk
+# hub slugs when there's no match. Set CROSS_SITEMAP_URL="" to use hubs only.
+CROSS_SITEMAP_URL    = os.getenv(
+    "CROSS_SITEMAP_URL", "https://verixiaapps.com/token-risk-sitemap.xml"
+)
+CROSS_LINKS_PER_PAGE = int(os.getenv("CROSS_LINKS_PER_PAGE", "6"))
+CROSS_RISK_HUBS      = [
+    ("solana-token-risk",  "Solana token risk checker"),
+    ("token-safety-check", "Token safety check"),
+    ("meme-token-risk",    "Meme coin risk checker"),
+    ("token-risk-hub",     "All token risk guides"),
+]
 # Only full rebuilds set this. When on, we install the SIGTERM/SIGINT handlers
 # above so a timeout flushes a final checkpoint instead of losing the batch.
 REBUILD_MODE        = os.getenv("REBUILD_MODE", "false").lower() == "true"
@@ -912,33 +928,115 @@ def build_canonical(slug):
     return f"{SWAP_SITE}/{slug}/"
 
 
-def build_token_risk_link_html(slug):
-    """
-    Build several cross-links to related token risk pages on the main domain.
-    The primary link uses the page's own slug. Additional links use common
-    risk-check variants that are likely to exist as generated token-risk pages.
-    Returns an HTML string of <li> items ready for .related-links <ul>.
-    """
-    base = "https://verixiaapps.com/token-risk"
+# -----------------------------
+# CROSS-DOMAIN LINKING (real pages from the token-risk sitemap)
+# -----------------------------
+_CROSS_SLUGS_CACHE = None
 
-    # Primary: exact slug match (e.g. aave-swap -> aave-token-risk or just aave)
-    # Strip common swap suffixes to get the base token slug
-    token_slug = re.sub(r"-(swap|exchange|trading|buy|sell|price|chart)$", "", slug)
+_CROSS_STOPWORDS = {
+    "token", "tokens", "crypto", "coin", "coins", "solana", "sol", "the", "a",
+    "to", "for", "swap", "risk", "check", "checker", "best", "no", "safe",
+    "scam", "how", "is", "buy", "sell", "trade", "trading", "dex", "exchange",
+    "defi", "on", "of", "and", "with", "your", "app", "online", "instant",
+}
 
-    links = [
-        (f"{base}/{token_slug}/",          f"Check {humanize_slug(token_slug)} token risk"),
-        (f"{base}/{token_slug}-risk/",     f"{humanize_slug(token_slug)} risk analysis"),
-        (f"{base}/is-{token_slug}-safe/",  f"Is {humanize_slug(token_slug)} safe to buy?"),
-        (f"{base}/{token_slug}-honeypot/", f"{humanize_slug(token_slug)} honeypot check"),
-        (f"{base}/{token_slug}-rug-pull/", f"{humanize_slug(token_slug)} rug pull risk"),
-        (f"{base}/solana-token-risk/",     "Solana token risk checker"),
-    ]
 
-    items = []
-    for href, label in links:
-        items.append(
-            f'<li><a href="{escape_html(href)}">{escape_html(label)}</a></li>'
+def _cross_slug_tokens(slug):
+    return {t for t in slug.split("-") if t and t not in _CROSS_STOPWORDS}
+
+
+def load_cross_slugs():
+    """Fetch the token-risk sitemap once; return [(slug, token_set), ...].
+    Returns [] on failure/disabled so callers fall back to hubs."""
+    global _CROSS_SLUGS_CACHE
+    if _CROSS_SLUGS_CACHE is not None:
+        return _CROSS_SLUGS_CACHE
+    if not CROSS_SITEMAP_URL:
+        _CROSS_SLUGS_CACHE = []
+        return _CROSS_SLUGS_CACHE
+
+    result = []
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            CROSS_SITEMAP_URL, headers={"User-Agent": "verixia-seo-crosslink"}
         )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            xml = resp.read().decode("utf-8", "replace")
+        for loc in re.findall(r"<loc>\s*(.*?)\s*</loc>", xml, flags=re.IGNORECASE):
+            m = re.search(r"verixiaapps\.com/token-risk/([a-z0-9-]+)/?", loc.strip())
+            if not m:
+                continue
+            s = slugify(m.group(1))
+            if s:
+                result.append((s, _cross_slug_tokens(s)))
+        seen = set()
+        deduped = []
+        for s, toks in result:
+            if s in seen:
+                continue
+            seen.add(s)
+            deduped.append((s, toks))
+        _CROSS_SLUGS_CACHE = deduped
+        print(f"[crosslink] loaded {len(deduped)} token-risk slugs from sitemap")
+    except Exception as e:
+        print(f"[crosslink] sitemap fetch failed ({e}); using hub fallback")
+        _CROSS_SLUGS_CACHE = []
+    return _CROSS_SLUGS_CACHE
+
+
+def match_cross_slugs(keyword, slug, limit):
+    """Pick `limit` real token-risk slugs from the live sitemap for this page.
+    No keyword matching -- varied per-page selection, seeded by slug so it's
+    stable per page but different across pages."""
+    pool = load_cross_slugs()
+    if not pool:
+        return []
+    import random
+    rng = random.Random(slug)
+    all_slugs = [s for s, _toks in pool]
+    if len(all_slugs) <= limit:
+        picks = all_slugs[:]
+    else:
+        picks = rng.sample(all_slugs, limit)
+    return [(s, humanize_slug(s)) for s in picks]
+
+
+def build_token_risk_link_html(slug, keyword):
+    """Cross-links to REAL token-risk pages (matched from the live sitemap),
+    plus a risk hub as a guaranteed anchor. Never invents a URL."""
+    base = "https://verixiaapps.com/token-risk"
+    items = []
+    seen = set()
+
+    for cand_slug, label in match_cross_slugs(keyword, slug, CROSS_LINKS_PER_PAGE):
+        if cand_slug in seen:
+            continue
+        seen.add(cand_slug)
+        items.append(
+            f'<li><a href="{base}/{escape_html(cand_slug)}/">'
+            f'{escape_html(label)}</a></li>'
+        )
+
+    for hub_slug, hub_label in CROSS_RISK_HUBS:
+        if hub_slug in seen:
+            continue
+        items.append(
+            f'<li><a href="{base}/{hub_slug}/">{escape_html(hub_label)}</a></li>'
+        )
+        break
+
+    if len(items) <= 1:
+        for hub_slug, hub_label in CROSS_RISK_HUBS:
+            if hub_slug in seen:
+                continue
+            seen.add(hub_slug)
+            items.append(
+                f'<li><a href="{base}/{hub_slug}/">{escape_html(hub_label)}</a></li>'
+            )
+            if len(items) >= 4:
+                break
+
     return "\n".join(items)
 
 
@@ -1159,7 +1257,7 @@ def render_full_page(template, keyword, keyword_display, payload, slug,
         "{{RELATED_LINKS}}":         related_links_html,
         "{{MORE_LINKS}}":            more_links_html,
         "{{PAGE_META_SCRIPT}}":      meta_script,
-        "{{TOKEN_RISK_LINK}}":       build_token_risk_link_html(slug),
+        "{{TOKEN_RISK_LINK}}":       build_token_risk_link_html(slug, keyword),
     }
 
     html = template
