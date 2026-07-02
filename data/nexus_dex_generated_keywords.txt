@@ -488,6 +488,7 @@ convert solana to near
 convert solana to op
 convert solana to orca
 convert solana to pengu
+convert solana to pepe
 copy whale trades
 cross border defi
 cross chain analytics
