@@ -1151,15 +1151,19 @@ async function stkResolveEmbedPool(mint) {
   const cached = stkLsGet(STK_EMBED_LS + mint, STK_POOL_TTL);
   if (cached !== undefined) { stkEmbedPoolCache.set(mint, cached); return cached; }
 
-  // DexScreener ONLY. Match the contract: keep pairs whose BASE token is exactly
-  // this mint, then take the highest-liquidity one. Embed that pair address.
+  // DexScreener ONLY. Keep pairs that actually contain THIS exact mint — base OR
+  // quote side. Some xStock pools list the xStock as the QUOTE token (base =
+  // USDC/SOL); a base-only filter finds nothing for those (e.g. AAPLx, MSFTx) and
+  // the chart reads "unavailable". Prefer base-side pairs; fall back to quote-side.
+  // The endpoint is queried BY the mint, so every returned pair is contract-matched.
+  // Then take the highest-liquidity pair and embed it.
   let res = null;
   const dj = await stkFetchJson('https://api.dexscreener.com/latest/dex/tokens/' + encodeURIComponent(mint), 7000);
   const pairs = Array.isArray(dj?.pairs) ? dj.pairs : [];
-  const matched = pairs.filter(p =>
-    p && p.chainId === 'solana' && p.pairAddress &&
-    p.baseToken && p.baseToken.address === mint
-  );
+  const onSol = pairs.filter(p => p && p.chainId === 'solana' && p.pairAddress);
+  const base  = onSol.filter(p => p.baseToken  && p.baseToken.address  === mint);
+  const quote = onSol.filter(p => p.quoteToken && p.quoteToken.address === mint);
+  const matched = base.length ? base : quote;
   if (matched.length > 0) {
     const best = matched.reduce((a, b) =>
       (Number(b.liquidity?.usd || 0) > Number(a.liquidity?.usd || 0) ? b : a), matched[0]);
@@ -2069,4 +2073,3 @@ export default function Stocks({ onConnectWallet, walletAddress }) {
 
   return <BrandsInner onConnectWallet={onConnectWallet}/>;
 }
- 
