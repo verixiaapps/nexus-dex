@@ -36,6 +36,7 @@ import ReferralsPage       from './components/ReferralsPage.jsx';
 import WhyNexus            from './components/WhyNexus.jsx';
 import AdminPage           from './components/AdminPage.jsx';
 import BuySolana          from './components/BuySolana.jsx';
+import Discover           from './components/Discover.jsx';
  
 // =====================================================================
 // Wonderland-light design tokens
@@ -2634,7 +2635,7 @@ async function screenAddress(address) {
 // ROUTING TABLES
 // =====================================================================
 const PATH_TO_TAB = {
-  '/': 'swap', '/swap': 'swap', '/bridge': 'bridge',
+  '/': 'swap', '/swap': 'swap', '/discover': 'discover', '/discovery': 'discover', '/bridge': 'bridge',
   '/sol-btc': 'solbtc', '/btc': 'solbtc', '/bitcoin': 'solbtc',
   '/wonderland': 'wonderland', '/memes': 'wonderland',
   '/ape': 'ape', '/radar': 'launchradar', '/launch-radar': 'launchradar', '/launches': 'launchradar',
@@ -2649,7 +2650,7 @@ const PATH_TO_TAB = {
   '/stack': 'swap', '/vip': 'swap', '/perps': 'swap', '/call': 'swap',
 };
 const TAB_TO_PATH = {
-  swap: '/swap', bridge: '/bridge', solbtc: '/sol-btc',
+  discover: '/discover', swap: '/swap', bridge: '/bridge', solbtc: '/sol-btc',
   wonderland: '/wonderland', launchradar: '/radar', ape: '/ape', markets: '/markets', flipsy: '/flipsy',
   getstarted: '/get-started', holdings: '/holdings', buysol: '/buy-sol',
   referrals: '/referrals', why: '/why', admin: '/admin',
@@ -3017,11 +3018,14 @@ function IconMarkets()    { return <svg width="18" height="18" viewBox="0 0 24 2
 function IconHoldings()   { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7h18l-2 13H5L3 7z"/><path d="M8 7V5a4 4 0 0 1 8 0v2"/><circle cx="12" cy="13" r="1.5" fill="currentColor" stroke="none"/></svg>; }
 function IconAdmin()      { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a8 8 0 0 1 16 0v1"/></svg>; }
 
-const NAV_ICONS = { swap: IconSwap, ape: IconApe, wonderland: IconWonderland, markets: IconMarkets, holdings: IconHoldings, admin: IconAdmin };
+function IconDiscover()   { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>; }
+
+const NAV_ICONS = { discover: IconDiscover, swap: IconSwap, ape: IconApe, wonderland: IconWonderland, markets: IconMarkets, holdings: IconHoldings, admin: IconAdmin };
 
 // Primary nav: five tabs by default, plus Admin which is only visible
 // to wallets in ADMIN_WALLETS. The filter in AppInner handles the gating.
 const NX_ICON_PATHS = {
+  discover: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4" stroke-linecap="round"/>',
   swap: '<path d="M7 7h11l-3-3M17 17H6l3 3" stroke-linecap="round" stroke-linejoin="round"/>',
   ape: '<path d="M12 3c3 2 4.5 5 4.5 8a4.5 4.5 0 1 1-9 0c0-1.6.6-3 1.5-4 .2 1.2 1 2 2 2-1-2 0-4.5 1-6Z" stroke-linejoin="round"/>',
   wonderland: '<circle cx="12" cy="12" r="8.5"/><path d="M8.5 14c1 1.4 2.2 2 3.5 2s2.5-.6 3.5-2M9 9.5h.01M15 9.5h.01" stroke-linecap="round"/>',
@@ -3045,6 +3049,7 @@ function NxIcon({ id, size = 19, color = 'currentColor' }) {
 }
 
 const PRIMARY_NAV_TABS = [
+  { id: 'discover',   label: 'Discover' },
   { id: 'swap',       label: 'Swap' },
   { id: 'ape',        label: 'Pump.fun' },
   { id: 'wonderland', label: 'Memes' },
@@ -3263,15 +3268,22 @@ function AppInner() {
         margin: '0 auto', width: '100%',
         padding: isFullBleed ? '0 0 100px' : '0 16px 100px',
       }}>
+        {tab === 'discover' && (
+          <Discover
+            onSwitchTab={switchTab}
+            onOpenToken={openToken}
+            onConnectWallet={openWallet}
+          />
+        )}
         {tab === 'swap' && (
           <>
             <SwapHero />
-            <LiveTokenFeeds onSwitchTab={switchTab} onOpenToken={openToken} onConnectWallet={openWallet} />
             <SwapLabel />
             <div ref={swapWidgetRef}>
               <SwapWidget key={swapOutputMint || 'default'} defaultOutputMint={swapOutputMint || undefined} {...sharedProps} />
             </div>
             <HomeReferralBanner onSwitchTab={switchTab} />
+            <LiveTokenFeeds onSwitchTab={switchTab} onOpenToken={openToken} onConnectWallet={openWallet} />
             <HomeBelow onSwitchTab={switchTab} walletAddress={wallet.walletAddress} onOpenToken={openToken} />
           </>
         )}
