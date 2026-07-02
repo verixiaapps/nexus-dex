@@ -958,3 +958,53 @@ swap kmno to pyth
 swap kmno to ray
 swap kmno to render
 swap kmno to sol
+swap kmno to sol solana
+swap kmno to tnsr
+swap kmno to usdc solana
+swap kmno to usdt solana
+swap kmno to w
+swap kmno to wen
+swap kmno to wif
+swap melania to sol
+swap meme coin to sol
+swap meme coins
+swap meme coins cross chain
+swap meme coins instantly
+swap meme tokens
+swap mew for act solana
+swap mew for ai16z solana
+swap mew for bonk solana
+swap mew for cloud solana
+swap mew for drift solana
+swap mew for fartcoin solana
+swap mew for goat solana
+swap mew for grass solana
+swap mew for hnt solana
+swap mew for io solana
+swap mew for jitosol solana
+swap mew for jto solana
+swap mew for jup solana
+swap mew for kmno solana
+swap mew for mnde solana
+swap mew for msol solana
+swap mew for pengu solana
+swap mew for pnut solana
+swap mew for popcat solana
+swap mew for pyth solana
+swap mew for ray solana
+swap mew for render solana
+swap mew for sol solana
+swap mew for tnsr solana
+swap mew for w solana
+swap mew for wen solana
+swap mew for wif solana
+swap mew on solana
+swap mew to act
+swap mew to ai16z
+swap mew to bonk
+swap mew to cloud
+swap mew to drift
+swap mew to fartcoin
+swap mew to goat
+swap mew to grass
+swap mew to hnt
