@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { BRANDS, fetchBrandPrices, stkFetchSeries, stkThrottle } from './Stocks.jsx';
- 
+  
 // =====================================================================
 // Discover — the main discovery page. Self-contained by design (mirrors
 // the anti-coupling pattern used across the app): its own fetch,
