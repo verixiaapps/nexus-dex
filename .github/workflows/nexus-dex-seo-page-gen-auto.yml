@@ -33,6 +33,11 @@ name: Nexus DEX SEO Page Generator Auto
         required: false
         default: "50"
         type: string
+      resume_attempt:
+        description: "Internal: auto-resume counter after a timeout (do not set manually)"
+        required: false
+        default: "0"
+        type: string
 
 permissions:
   contents: write
@@ -56,6 +61,7 @@ jobs:
       REBUILD_KEYWORDS_SOURCE_FILE: "data/rebuild_keywords_source_nexusdex.txt"
       REBUILD_SLUGS_SOURCE_FILE: "data/rebuild_slugs_source_nexusdex.txt"
       REBUILD_PROGRESS_FILE: "data/rebuild_progress_nexusdex.txt"
+      MAX_RESUME_ATTEMPTS: "50"
 
     steps:
       - name: Checkout repo
@@ -180,6 +186,7 @@ jobs:
         run: python scripts/build_nexus_dex_seo_incremental.py
 
       - name: Full rebuild of /public pages
+        id: rebuild
         if: steps.limits.outputs.full_rebuild == 'true'
         shell: bash
         env:
@@ -187,11 +194,13 @@ jobs:
           COMMIT_EVERY: ${{ steps.limits.outputs.rebuild_batch_size }}
           RESUME: "false"
           RESET_ENGINE: "true"
+          REBUILD_MODE: "true"
           RESUME_REBUILD: ${{ steps.limits.outputs.resume_rebuild }}
           ABORT_REBUILD: ${{ steps.limits.outputs.abort_rebuild }}
           PENDING_BACKUP: "data/.nexus_dex_pending_backup.txt"
           GENERATED_KEYWORDS_BACKUP: "data/.nexus_dex_generated_keywords_backup.txt"
           GENERATED_SLUGS_BACKUP: "data/.nexus_dex_generated_slugs_backup.txt"
+          REBUILD_STEP_TIMEOUT: "315m"
         run: |
           set -euo pipefail
 
@@ -199,8 +208,6 @@ jobs:
             export DAILY_LIMIT=1000000
           fi
 
-          # ABORT MODE: restore everything from backups and exit. Used to
-          # cleanly cancel a partial / test rebuild without manual git work.
           if [ "$ABORT_REBUILD" = "true" ]; then
             echo "[rebuild] ABORT requested -- restoring state from backups"
             RESTORED_ANY="false"
@@ -225,10 +232,6 @@ jobs:
             exit 0
           fi
 
-          # AUTO-RECOVERY: if only PENDING_BACKUP exists (no tracking backups),
-          # it's leftover from the old buggy workflow version. Restore the
-          # queue and remove the stale backup so the fresh-rebuild guard
-          # below doesn't trip on it.
           if [ "$RESUME_REBUILD" != "true" ] \
              && [ -f "$PENDING_BACKUP" ] \
              && [ ! -f "$GENERATED_KEYWORDS_BACKUP" ] \
@@ -255,10 +258,6 @@ jobs:
               echo "[rebuild] RESUME: $(wc -l < "$KEYWORDS_FILE") pages left to rebuild"
             fi
           else
-            # Fresh rebuild. Refuse to start if backup files from a previous
-            # rebuild are still on remote -- they indicate a rebuild in flight
-            # whose state we must not clobber. Use resume_rebuild=true to
-            # continue or abort_rebuild=true to reset.
             if [ -f "$PENDING_BACKUP" ] || [ -f "$GENERATED_KEYWORDS_BACKUP" ] || [ -f "$GENERATED_SLUGS_BACKUP" ]; then
               echo "[rebuild] ERROR: backup files from a previous rebuild are still on remote:"
               [ -f "$PENDING_BACKUP" ]            && echo "  - $PENDING_BACKUP"
@@ -288,11 +287,23 @@ jobs:
 
           REBUILD_RC=0
           if [ -s "$KEYWORDS_FILE" ]; then
-            python scripts/build_nexus_dex_seo_incremental.py || REBUILD_RC=$?
+            # --kill-after gives the build script's SIGTERM handler time to
+            # finish the current page and push a final checkpoint before the
+            # hard SIGKILL. Keep it comfortably under the job's spare minutes.
+            timeout --signal=TERM --kill-after=180s "$REBUILD_STEP_TIMEOUT" \
+              python scripts/build_nexus_dex_seo_incremental.py || REBUILD_RC=$?
           fi
 
-          # Auto-restore + cleanup only if the rebuild completed cleanly AND
-          # the queue is now empty (every rebuild keyword processed).
+          if [ "$REBUILD_RC" = "124" ] || [ "$REBUILD_RC" = "137" ]; then
+            if [ -s "$KEYWORDS_FILE" ]; then
+              echo "[rebuild] TIMED OUT with $(wc -l < "$KEYWORDS_FILE") pages still queued -- will auto-resume"
+              echo "rebuild_timed_out=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "[rebuild] timed out but queue is already empty -- treating as complete"
+            REBUILD_RC=0
+          fi
+
           if [ "$REBUILD_RC" = "0" ] && [ ! -s "$KEYWORDS_FILE" ]; then
             if [ -f "$PENDING_BACKUP" ]; then
               mv "$PENDING_BACKUP" "$KEYWORDS_FILE"
@@ -303,13 +314,42 @@ jobs:
 
           exit "$REBUILD_RC"
 
+      - name: Auto-resume rebuild after timeout
+        if: steps.rebuild.outputs.rebuild_timed_out == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESUME_ATTEMPT: ${{ github.event.inputs.resume_attempt }}
+          REBUILD_BATCH_SIZE: ${{ steps.limits.outputs.rebuild_batch_size }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          ATTEMPT="${RESUME_ATTEMPT:-0}"
+          case "$ATTEMPT" in ''|*[!0-9]*) ATTEMPT=0 ;; esac
+          NEXT=$((ATTEMPT + 1))
+          MAX="${MAX_RESUME_ATTEMPTS:-50}"
+          if [ "$NEXT" -gt "$MAX" ]; then
+            echo "::error::Auto-resume cap ($MAX) reached after repeated timeouts."
+            echo "::error::Re-run manually with full_rebuild=true and resume_rebuild=true to continue."
+            exit 1
+          fi
+          WF_FILE="$(basename "${WORKFLOW_REF%@*}")"
+          echo "[auto-resume] dispatching resume run (attempt $NEXT of $MAX) for $WF_FILE"
+          gh workflow run "$WF_FILE" \
+            --ref main \
+            -f full_rebuild=true \
+            -f resume_rebuild=true \
+            -f rebuild_batch_size="$REBUILD_BATCH_SIZE" \
+            -f resume_attempt="$NEXT"
+          echo "[auto-resume] resume run queued (will start after this run releases the concurrency group)"
+
       - name: Build hub pages
-        if: success() && steps.limits.outputs.abort_rebuild != 'true'
+        if: success() && steps.limits.outputs.abort_rebuild != 'true' && steps.rebuild.outputs.rebuild_timed_out != 'true'
         shell: bash
         run: python scripts/build_nexus_dex_hubs.py
 
       - name: Build sitemap
-        if: success() && steps.limits.outputs.abort_rebuild != 'true'
+        if: success() && steps.limits.outputs.abort_rebuild != 'true' && steps.rebuild.outputs.rebuild_timed_out != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -341,7 +381,7 @@ jobs:
           echo "[sitemap] $(grep -c '<url>' "$OUTPUT_DIR/nexus-sitemap.xml") URLs written to $OUTPUT_DIR/nexus-sitemap.xml"
 
       - name: Commit and push
-        if: success()
+        if: success() && steps.rebuild.outputs.rebuild_timed_out != 'true'
         shell: bash
         run: |
           set -euo pipefail
