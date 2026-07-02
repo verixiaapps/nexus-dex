@@ -674,3 +674,4 @@ export default function Flipsy({ onConnectWallet }) {
     </div>
   );
 }
+ 
