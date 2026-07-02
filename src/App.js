@@ -26,8 +26,6 @@ import * as StocksNS from './components/Stocks.jsx';
 const StockTradeModal = StocksNS.TradeModal;
 import CrossChainSwap      from './components/CrossChainSwap.jsx';
 import SolToBtcChainflip   from './components/SolToBtcChainflip.jsx';
-import MemeWonderland      from './components/MemeWonderland.jsx';
-import LaunchRadar from './components/LaunchRadar.jsx';
 import Ape                 from './components/Ape.jsx';
 import Flipsy              from './components/Flipsy.jsx';
 import GetStarted          from './components/GetStarted.jsx';
@@ -155,7 +153,6 @@ function EcoStrip({ active, onGo }) {
   const items = [
     { ic: '⇅',  lbl: 'Swap',    tab: 'swap' },
     { ic: '⚡', lbl: 'Pump.fun', tab: 'ape' },
-    { ic: '✨', lbl: 'Memes',   tab: 'wonderland' },
     { ic: '📈', lbl: 'Stocks',  tab: 'markets' },
     { ic: '👜', lbl: 'Portfolio', tab: 'holdings' },
   ];
@@ -2002,7 +1999,7 @@ export function LaunchRadarStrip({ onSwitchTab, onOpenToken }) {
 
   return (
     <>
-      <SectionHead title="Launch" italic="Radar" meta="LIVE" onAll={() => onSwitchTab('launchradar')} />
+      <SectionHead title="Launch" italic="Radar" meta="LIVE" onAll={() => onSwitchTab('discover')} />
       <ListShell>
         {toks.map((t, i) => {
           const _cs = pctFromSeries(series[t.mint]); const pct = Number.isFinite(_cs) ? _cs : (Number.isFinite(t.change) ? t.change : null);
@@ -2015,7 +2012,7 @@ export function LaunchRadarStrip({ onSwitchTab, onOpenToken }) {
                 ico: t.icon || t.emoji,
                 grad: 'linear-gradient(135deg,#f5921b,#d4760a)',
                 price: t.price, pct, tf: '1D',
-                stats: `MC ${fmtUsd(t.mcap)} · Liq ${fmtUsd(t.liquidity)}`, tab: 'launchradar',
+                stats: `MC ${fmtUsd(t.mcap)} · Liq ${fmtUsd(t.liquidity)}`, tab: 'discover',
               })}
               ico={t.icon || t.emoji}
               grad="linear-gradient(135deg,#f5921b,#d4760a)"
@@ -2138,7 +2135,7 @@ function LiveTokenFeeds({ onSwitchTab, onOpenToken, onConnectWallet }) {
   const newCount = toks.filter(t => /^\d+(s|m)$/.test(t.age || '')).length;
   const gainCount = trendToks.filter(t => Number.isFinite(t.change) && t.change > 0).length;
 
-  const mkRow = (t, i, n, sub, tab = 'launchradar') => {
+  const mkRow = (t, i, n, sub, tab = 'discover') => {
     const _cs = pctFromSeries(series[t.mint]); const pct = Number.isFinite(_cs) ? _cs : (Number.isFinite(t.change) ? t.change : null);
     return (
       <Row
@@ -2182,20 +2179,20 @@ function LiveTokenFeeds({ onSwitchTab, onOpenToken, onConnectWallet }) {
       </div>
 
       {radar.length > 0 && <>
-        <SectionHead title="Launch" italic="Radar" meta="LIVE" onAll={() => onSwitchTab('launchradar')} />
-        <ListShell>{radar.map((t, i) => mkRow(t, i, radar.length, x => `MC ${fmtUsd(x.mcap)} · Liq ${fmtUsd(x.liquidity)}`, 'launchradar'))}</ListShell>
+        <SectionHead title="Launch" italic="Radar" meta="LIVE" onAll={() => onSwitchTab('discover')} />
+        <ListShell>{radar.map((t, i) => mkRow(t, i, radar.length, x => `MC ${fmtUsd(x.mcap)} · Liq ${fmtUsd(x.liquidity)}`, 'discover'))}</ListShell>
       </>}
 
       <WhaleFeed onOpenToken={onOpenToken} />
 
       {trending.length > 0 && <>
-        <SectionHead title="Trending" italic="now" meta="LIVE" onAll={() => onSwitchTab('wonderland')} />
-        <ListShell>{trending.map((t, i) => mkRow(t, i, trending.length, x => `Vol ${fmtUsd(x.volume24h)} · MC ${fmtUsd(x.mcap)}`, 'wonderland'))}</ListShell>
+        <SectionHead title="Trending" italic="now" meta="LIVE" onAll={() => onSwitchTab('discover')} />
+        <ListShell>{trending.map((t, i) => mkRow(t, i, trending.length, x => `Vol ${fmtUsd(x.volume24h)} · MC ${fmtUsd(x.mcap)}`, 'discover'))}</ListShell>
       </>}
 
       {gainers.length > 0 && <>
-        <SectionHead title="Top" italic="gainers" meta="LIVE" onAll={() => onSwitchTab('wonderland')} />
-        <ListShell>{gainers.map((t, i) => mkRow(t, i, gainers.length, x => `MC ${fmtUsd(x.mcap)} · Liq ${fmtUsd(x.liquidity)}`, 'wonderland'))}</ListShell>
+        <SectionHead title="Top" italic="gainers" meta="LIVE" onAll={() => onSwitchTab('discover')} />
+        <ListShell>{gainers.map((t, i) => mkRow(t, i, gainers.length, x => `MC ${fmtUsd(x.mcap)} · Liq ${fmtUsd(x.liquidity)}`, 'discover'))}</ListShell>
       </>}
     </>
   );
@@ -2400,14 +2397,12 @@ function HomeBelow({ onSwitchTab, walletAddress, onOpenToken }) {
 
   // Build the card list. Order: primary products first, then utility, then meta.
   const products = [
-    { tab: 'wonderland',  icon: '✨', accent: '#7c5cff', name: 'Meme Coins',  desc: 'Discover trending memes',          live: 'TRENDING',  grad: 'linear-gradient(135deg,#7c5cff,#5a3ed1)' },
     { tab: 'markets',     icon: '📈', accent: '#2f6bff', name: 'Stocks',      desc: 'Tesla, Apple, NVIDIA · 24/7',       live: '18 STOCKS', grad: 'linear-gradient(135deg,#2f6bff,#1e49c9)' },
     { tab: 'ape',         icon: '⚡', accent: '#2f6bff', name: 'Pump.fun',    desc: 'New launches, one-tap trades',      live: 'EARLY',     grad: 'linear-gradient(135deg,#f5921b,#d4760a)' },
     { tab: 'holdings',    icon: '👜', accent: '#2f6bff', name: 'Portfolio',   desc: 'Every token you own, live value',   live: 'YOUR BAGS', grad: 'linear-gradient(135deg,#16c08a,#0f8f67)' },
     { tab: 'buysol',      icon: '💳', accent: '#2f6bff', name: 'Buy Solana',  desc: 'Card or bank → SOL',                live: 'FIAT',      grad: 'linear-gradient(135deg,#14f195,#0fa968)' },
     { tab: 'bridge',      icon: '🌉', accent: '#7c5cff', name: 'Cross-Chain', desc: 'Move tokens across 71 chains',       live: '71 CHAINS', grad: 'linear-gradient(135deg,#2f6bff,#7c5cff)' },
     { tab: 'solbtc',      icon: '₿',  accent: '#7c5cff', name: 'SOL → BTC',   desc: 'Solana straight to Bitcoin',         live: 'NATIVE',    grad: 'linear-gradient(135deg,#f5921b,#a67200)' },
-    { tab: 'launchradar', icon: '🚀', accent: '#7c5cff', name: 'New Tokens',  desc: 'Every Solana launch, live',          live: 'FRESH',     grad: 'linear-gradient(135deg,#f5921b,#a67200)' },
     { tab: 'referrals',   icon: '§',  accent: '#13b87f', name: 'Referrals',   desc: '50% of fees, same block, forever',   live: '50% RATE',  grad: 'linear-gradient(135deg,#16c08a,#2f6bff)' },
     { tab: 'why',         icon: '◌',  accent: '#13b87f', name: 'Why Nexus',   desc: 'No email, no KYC, no limits',        live: 'READ',      grad: 'linear-gradient(135deg,#7c5cff,#2f6bff)' },
   ];
@@ -2637,8 +2632,8 @@ async function screenAddress(address) {
 const PATH_TO_TAB = {
   '/': 'swap', '/swap': 'swap', '/discover': 'discover', '/discovery': 'discover', '/bridge': 'bridge',
   '/sol-btc': 'solbtc', '/btc': 'solbtc', '/bitcoin': 'solbtc',
-  '/wonderland': 'wonderland', '/memes': 'wonderland',
-  '/ape': 'ape', '/radar': 'launchradar', '/launch-radar': 'launchradar', '/launches': 'launchradar',
+  '/wonderland': 'discover', '/memes': 'discover',
+  '/ape': 'ape', '/radar': 'discover', '/launch-radar': 'discover', '/launches': 'discover',
   '/markets': 'markets', '/tokenized': 'markets',
   '/flipsy': 'flipsy', '/predict': 'flipsy',
   '/get-started': 'getstarted', '/wallet': 'getstarted',
@@ -2651,7 +2646,7 @@ const PATH_TO_TAB = {
 };
 const TAB_TO_PATH = {
   discover: '/discover', swap: '/swap', bridge: '/bridge', solbtc: '/sol-btc',
-  wonderland: '/wonderland', launchradar: '/radar', ape: '/ape', markets: '/markets', flipsy: '/flipsy',
+  ape: '/ape', markets: '/markets', flipsy: '/flipsy',
   getstarted: '/get-started', holdings: '/holdings', buysol: '/buy-sol',
   referrals: '/referrals', why: '/why', admin: '/admin',
 };
@@ -3052,7 +3047,6 @@ const PRIMARY_NAV_TABS = [
   { id: 'discover',   label: 'Discover' },
   { id: 'swap',       label: 'Swap' },
   { id: 'ape',        label: 'Pump.fun' },
-  { id: 'wonderland', label: 'Memes' },
   { id: 'markets',    label: 'Stocks' },
   { id: 'holdings',   label: 'Portfolio' },
   { id: 'admin',      label: 'Admin' },
@@ -3177,7 +3171,7 @@ function AppInner() {
     : null;
 
   // Gates
-  const canApe    = wallet.walletAddress === APE_ACCESS_WALLET;
+  const canApe    = true;   // open to everyone
   const canFlipsy = wallet.walletAddress === FLIPSY_ACCESS_WALLET;
   const isAdmin   = ADMIN_WALLETS.has(wallet.walletAddress);
   // Primary nav: filter Ape out if non-authorized; filter Admin out unless admin wallet.
@@ -3287,14 +3281,12 @@ function AppInner() {
             <HomeBelow onSwitchTab={switchTab} walletAddress={wallet.walletAddress} onOpenToken={openToken} />
           </>
         )}
-        {tab === 'launchradar' && <LaunchRadar onConnectWallet={openWallet} />}
         {tab === 'ape' && (canApe
           ? <Ape onConnectWallet={openWallet} mainWalletPubkey={wallet.walletAddress} onSwitchTab={switchTab} />
           : <ApeLocked connected={wallet.isConnected} onConnectWallet={openWallet} />
         )}
         {tab === 'bridge'      && <CrossChainSwap onConnectWallet={openWallet} />}
         {tab === 'solbtc'      && <SolToBtcChainflip onConnectWallet={openWallet} />}
-        {tab === 'wonderland'  && <MemeWonderland onConnectWallet={openWallet} />}
         {tab === 'markets'     && <Stocks {...sharedProps} />}
         {tab === 'flipsy'      && (canFlipsy
           ? <Flipsy onConnectWallet={openWallet} />
@@ -3358,8 +3350,8 @@ function AppInner() {
               <button onClick={() => setMenuOpen(false)} aria-label="Close" style={{ width: 30, height: 30, borderRadius: 9, background: '#f4f4f5', border: 'none', fontSize: 16, color: '#0b0b0c', cursor: 'pointer' }}>×</button>
             </div>
             {[
-              { grp: 'Trade', accent: '#2f6bff', items: [['swap', 'Swap', 'Trade any Solana token'], ['ape', 'Pump.fun', 'New launches · one-tap trades'], ['wonderland', 'Meme Coins', 'Discover trending memes'], ['markets', 'Stocks', 'Tesla, Apple, NVIDIA · 24/7'], ['holdings', 'Portfolio', 'Your tokens, live value'], ['buysol', 'Buy Solana', 'Card or bank → SOL']] },
-              { grp: 'Tools', accent: '#7c5cff', items: [['bridge', 'Cross-Chain', 'Move tokens across 71 chains'], ['solbtc', 'SOL → BTC', 'Solana straight to Bitcoin'], ['launchradar', 'New Tokens', 'Every Solana launch, live'], ['flipsy', 'Flipsy', 'Predictions · beta']] },
+              { grp: 'Trade', accent: '#2f6bff', items: [['swap', 'Swap', 'Trade any Solana token'], ['ape', 'Pump.fun', 'New launches · one-tap trades'], ['markets', 'Stocks', 'Tesla, Apple, NVIDIA · 24/7'], ['holdings', 'Portfolio', 'Your tokens, live value'], ['buysol', 'Buy Solana', 'Card or bank → SOL']] },
+              { grp: 'Tools', accent: '#7c5cff', items: [['bridge', 'Cross-Chain', 'Move tokens across 71 chains'], ['solbtc', 'SOL → BTC', 'Solana straight to Bitcoin'], ['flipsy', 'Flipsy', 'Predictions · beta']] },
               { grp: 'Earn & info', accent: '#13b87f', items: [['referrals', 'Referrals', 'Earn 50% of fees, forever'], ['why', 'Why Nexus', 'No email, no KYC, no limits'], ['getstarted', 'Get Started', 'New here? Start in 60s']] },
             ].map(section => (
               <div key={section.grp}>
