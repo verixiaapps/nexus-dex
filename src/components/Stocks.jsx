@@ -2073,3 +2073,4 @@ export default function Stocks({ onConnectWallet, walletAddress }) {
 
   return <BrandsInner onConnectWallet={onConnectWallet}/>;
 }
+ 
