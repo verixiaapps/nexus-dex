@@ -27,7 +27,7 @@
   "url": "https://swap.verixiaapps.com/mkr-exchange/",
   "name": "Mkr Exchange — Solana-Native DeFi | Verixia",
   "description": "Mkr Exchange on Verixia. No KYC. No accounts. No limits. Non-custodial. Global DeFi on Solana.",
-  "dateModified": "2026-06-30T21:17:48Z",
+  "dateModified": "2026-07-02T19:42:26Z",
   "isPartOf": { "@type": "WebSite", "url": "https://verixiaapps.com/", "name": "Verixia" },
   "publisher": { "@type": "Organization", "name": "Verixia", "url": "https://verixiaapps.com/" }
 }
@@ -265,23 +265,28 @@ a{color:inherit;text-decoration:none}
 /* ---- STICKY SWAP CTA ---- */
 .nx-sticky-cta{position:fixed;left:50%;bottom:14px;transform:translate(-50%,160%);
   z-index:60;width:calc(100% - 26px);max-width:454px;
-  display:flex;align-items:center;justify-content:space-between;gap:12px;
-  padding:13px 16px;border-radius:16px;
-  background:linear-gradient(135deg,rgba(25,210,122,.96),rgba(20,170,150,.96));
-  border:1px solid rgba(255,255,255,.28);
-  box-shadow:0 12px 34px rgba(0,0,0,.5),0 0 22px rgba(25,210,122,.34);
-  color:#03281a;font-weight:800;opacity:0;pointer-events:none;
-  transition:transform .32s cubic-bezier(.16,1,.3,1),opacity .32s ease}
+  display:flex;align-items:center;gap:11px;padding:9px 11px 9px 10px;border-radius:14px;
+  background:linear-gradient(180deg,rgba(46,36,82,.9),rgba(18,13,40,.92));
+  border:1px solid var(--line);border-top:1px solid rgba(255,255,255,.2);
+  backdrop-filter:blur(12px);box-shadow:0 16px 42px rgba(0,0,0,.55);
+  opacity:0;pointer-events:none;
+  transition:transform .32s cubic-bezier(.16,1,.3,1),opacity .32s ease,border-color .18s ease}
 .nx-sticky-cta.show{transform:translate(-50%,0);opacity:1;pointer-events:auto}
-.nx-sticky-l{display:inline-flex;align-items:center;gap:8px;font-size:13.5px}
-.nx-sticky-l b{color:#03281a}
-.nx-sticky-dot{width:8px;height:8px;border-radius:50%;background:#03281a;box-shadow:0 0 0 3px rgba(3,40,26,.25);animation:nxpulse 1.8s ease-in-out infinite}
-.nx-sticky-r{font-size:14px;white-space:nowrap}
+.nx-sticky-cta:hover{border-color:rgba(139,92,255,.55)}
+.nx-sticky-ic{width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,#8b5cff,#ff4d9e);box-shadow:0 0 14px rgba(139,92,255,.42)}
+.nx-sticky-ic svg{width:16px;height:16px;display:block}
+.nx-sticky-tx{display:flex;flex-direction:column;min-width:0;flex:1}
+.nx-sticky-tx b{font-size:13px;font-weight:700;color:#fff;line-height:1.2}
+.nx-sticky-tx span{font-size:10.5px;color:var(--dim);margin-top:2px;font-family:'JetBrains Mono',monospace;display:flex;align-items:center;gap:5px}
+.nx-sticky-tx span .d{width:5px;height:5px;border-radius:50%;background:var(--g);box-shadow:0 0 7px var(--g);animation:nxpulse 1.8s ease-in-out infinite}
+.nx-sticky-go{flex:none;display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:800;color:#03281a;
+  background:linear-gradient(135deg,#6df2a8,#19d27a);border-radius:20px;padding:6px 12px;box-shadow:0 0 12px rgba(25,210,122,.3)}
 @keyframes nxpulse{0%,100%{opacity:1}50%{opacity:.4}}
 @media (prefers-reduced-motion:reduce){
   .nx-sticky-cta{transition:opacity .2s ease}
   .nx-sticky-cta.show{transform:translate(-50%,0)}
-  .nx-sticky-dot{animation:none}
+  .nx-sticky-tx span .d{animation:none}
 }
 
 /* ===== SWAP WIDGET STYLES (ported from working template) ===== */
@@ -496,6 +501,20 @@ main{max-width:540px;margin:0 auto;background:#fff;
 .nx-connect{border:none;background:var(--blue);color:#fff;font-family:'Space Grotesk',sans-serif;
   font-weight:600;font-size:13px;padding:9px 16px;border-radius:9px;cursor:pointer}
 .nx-connect:hover{background:#2457d6}
+.nx-applink{display:flex;align-items:center;gap:11px;margin:2px 0 4px;padding:9px 11px 9px 10px;border-radius:13px;
+  background:linear-gradient(180deg,rgba(46,36,82,.72),rgba(18,13,40,.72));
+  border:1px solid var(--line);border-top:1px solid rgba(255,255,255,.20);
+  backdrop-filter:blur(10px);transition:border-color .18s ease,transform .18s ease}
+.nx-applink:hover{border-color:rgba(139,92,255,.55);transform:translateY(-1px)}
+.nx-applink-ic{width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,#8b5cff,#ff4d9e);box-shadow:0 0 14px rgba(139,92,255,.42)}
+.nx-applink-ic svg{width:16px;height:16px;display:block}
+.nx-applink-tx{display:flex;flex-direction:column;min-width:0;flex:1}
+.nx-applink-tx b{font-size:13px;font-weight:700;color:#fff;line-height:1.2}
+.nx-applink-tx span{font-size:10.5px;color:var(--dim);letter-spacing:.02em;margin-top:2px;font-family:'JetBrains Mono',monospace;display:flex;align-items:center;gap:5px}
+.nx-applink-tx span .d{width:5px;height:5px;border-radius:50%;background:var(--g);box-shadow:0 0 7px var(--g)}
+.nx-applink-go{flex:none;display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:800;color:#03281a;
+  background:linear-gradient(135deg,#6df2a8,#19d27a);border-radius:20px;padding:6px 12px;box-shadow:0 0 12px rgba(25,210,122,.3)}
 
 /* Hero text */
 .nx-hero{padding-top:18px}
@@ -703,26 +722,14 @@ main{max-width:540px;margin:0 auto;background:#fff;
     </div>
   </header>
 
-  <!-- HERO: keyword H1 (compact) -->
+  <!-- HERO: keyword H1 (compact) — stays first for SEO -->
   <section class="nx-hero">
     <div class="nx-eyebrow"><span class="dot"></span><span class="txt">SOLANA &middot; NON-CUSTODIAL &middot; NO KYC</span></div>
     <h1 class="nx-h1">Mkr Exchange</h1>
     <p class="nx-lede">Mkr Exchange on Verixia — DeFi on Solana. No KYC. No accounts. No limits. Non-custodial.</p>
   </section>
 
-  <!-- REFERRAL (highest-value CTA, moved to top above the swap) -->
-  <div class="nx-refer-stack">
-    <a class="nx-refer pump-tier" href="https://swap.verixiaapps.com">
-      <span class="nx-refer-l">
-        <span class="nx-refer-tag">REFERRAL</span>
-        <b>Earn <em>50%</em> of fees from everyone you refer</b>
-        <span>FOREVER &middot; PAID DAILY IN SOL</span>
-      </span>
-      <span class="nx-refer-r">Join &rarr;</span>
-    </a>
-  </div>
-
-  <!-- LIVE SWAP (hero conversion) -->
+  <!-- LIVE SWAP (hero conversion) — moved directly under the hero -->
   <div class="nx-swap-label">
     <div class="nx-swap-label-title">Live swap &mdash; <em>trade now</em></div>
     <div class="nx-live-pill"><span class="dot"></span>LIVE QUOTE</div>
@@ -746,6 +753,30 @@ main{max-width:540px;margin:0 auto;background:#fff;
       </div>
     </div>
   </section>
+
+  <!-- REFERRAL (moved below the swap) -->
+  <div class="nx-refer-stack">
+    <a class="nx-refer pump-tier" href="https://swap.verixiaapps.com">
+      <span class="nx-refer-l">
+        <span class="nx-refer-tag">REFERRAL</span>
+        <b>Earn <em>50%</em> of fees from everyone you refer</b>
+        <span>FOREVER &middot; PAID DAILY IN SOL</span>
+      </span>
+      <span class="nx-refer-r">Join &rarr;</span>
+    </a>
+  </div>
+
+  <!-- APP CTA (moved below the swap; on-message copy for keyword pages) -->
+  <a class="nx-applink" href="https://swap.verixiaapps.com">
+    <span class="nx-applink-ic">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M17 7H9M17 7v8"/></svg>
+    </span>
+    <span class="nx-applink-tx">
+      <b>More ways to trade on Verixia</b>
+      <span><span class="d"></span>swap.verixiaapps.com</span>
+    </span>
+    <span class="nx-applink-go">Open &rarr;</span>
+  </a>
 
   <!-- QUICK REASSURANCE (first-screen trust) -->
   <div class="nx-reassure">
@@ -827,10 +858,10 @@ main{max-width:540px;margin:0 auto;background:#fff;
     <div class="section-tag">OVERVIEW</div>
     <h2 class="section-title">Why Verixia</h2>
     <p class="section-lede">DeFi on Solana means the wallet is the account, the smart contract is the only intermediary, and the network does the rest in under a second.</p>
-    <div class="ai-article" data-ai-content><p>Looking for a smooth mkr exchange experience? Verixia’s got you covered on Solana’s lightning-fast rails. No KYC, no accounts, just connect your wallet and you’re in. Phantom mobile users can ape in with a 9-second connection, then get quotes in 2 seconds and confirm swaps in just 1. That’s DeFi on Solana: instant, cheap, no congestion—exactly how swapping should feel.</p>
-<p>Your mkr exchange runs on a non-custodial smart contract, meaning your coins never leave your wallet except through the pool’s routing. No middlemen, no delays. Behind the scenes, Jupiter routes your swap on Solana through over 50 DEXes to nail the best price and minimal slippage. This beast-level routing means you don’t just swap mkr—you swap smart.</p>
-<p>Don’t forget, the same wallet powers your entire Verixia journey. Tap into the Wonderland tab for the hottest Solana memes while your mkr swap settles in under half a second. Fancy branching out? Bridge to Solana from 69 chains with zero hassle, then use your freshly bridged assets for more swaps or grab brand tokens tracking Apple and Tesla prices, all settled in USDC.</p>
-<p>Ready to send it? Verixia’s zero limits mean you can ape any size bag—small or whale-sized—with no max, no withdrawal caps, and no platform freezes. Dive into global DeFi with confidence. Your mkr exchange just got a serious upgrade—fast, cheap, and fully yours. Time to swap on Solana and own that DeFi vibe.</p></div>
+    <div class="ai-article" data-ai-content><p>MKR exchange on Solana? Say less. Verixia makes it simple: no KYC, no accounts, no sign-up. Just connect your Phantom wallet, and you’re live. Phantom mobile connects in 9 seconds, quotes lock in 2, and confirmations take just 1 second. That’s how fast DeFi should feel—no waiting, no hassle.</p>
+<p>Every MKR swap routes through Jupiter’s 50+ DEXes on Solana for the best price and smooth fills. Verixia’s non-custodial setup means your coins never leave your wallet until the smart contract settles the swap. Solana’s 400ms finality and tiny fees keep your bag moving without congestion or gas wars. It’s all about speed, cheap swaps, and trustless control.</p>
+<p>You can also tap into Verixia’s full suite with the same wallet. Want to bridge to Solana from another chain? Done. Curious about price-tracked brand tokens or hunting fresh signals? Easy. Even the Wonderland tab brings trending Solana memes to keep the vibes right while you ape into MKR or other tokens.</p>
+<p>Ready to send it? Swap on Solana with Verixia and get your MKR exchange done lightning fast. No limits, no freezes, just pure DeFi energy on Solana. Connect your wallet, pick your token, and watch your bag move. This is how you roll when you’re truly crypto-native.</p></div>
   </section>
 
   <section class="section">
@@ -844,16 +875,16 @@ main{max-width:540px;margin:0 auto;background:#fff;
   <section class="section">
     <div class="section-tag">RELATED</div>
     <h2 class="section-title"><a href="/crypto-markets/">Crypto Markets Hub</a></h2>
-    <ul class="pair-grid"><li><a href="/aave-trading/">Aave Trading on Verixia</a></li>
-<li><a href="/aggregated-liquidity/">Aggregated Liquidity on Verixia</a></li>
-<li><a href="/ai16z-trading/">ai16z Trading on Verixia</a></li>
-<li><a href="/amazon-token/">Amazon Token on Verixia</a></li>
-<li><a href="/amazon-token-chart/">Amazon Token Chart on Verixia</a></li>
-<li><a href="/amazon-token-price/">Amazon Token Price on Verixia</a></li>
-<li><a href="/apple-token/">Apple Token on Verixia</a></li>
-<li><a href="/apple-token-chart/">Apple Token Chart on Verixia</a></li>
-<li><a href="/apple-token-price/">Apple Token Price on Verixia</a></li>
-<li><a href="/arbitrum-dex/">Arbitrum DEX on Verixia</a></li>
+    <ul class="pair-grid"><li><a href="/apple-token/">Apple Token on Verixia</a></li>
+<li><a href="/convert-solana-to-hnt/">Convert Solana to Hnt on Verixia</a></li>
+<li><a href="/cheaper-alternative-to-birdeye/">Cheaper Alternative to Birdeye on Verixia</a></li>
+<li><a href="/bullx-vs-photon-for-beginners/">Bullx vs Photon for Beginners on Verixia</a></li>
+<li><a href="/best-multi-chain-dex/">Best Multi Chain DEX</a></li>
+<li><a href="/best-orca-alternative-low-fees/">Best Orca Alternative Low Fees</a></li>
+<li><a href="/best-photon-alternative-low-fees/">Best Photon Alternative Low Fees</a></li>
+<li><a href="/cheaper-alternative-to-bullx/">Cheaper Alternative to Bullx on Verixia</a></li>
+<li><a href="/birdeye-alternative/">Birdeye Alternative on Verixia</a></li>
+<li><a href="/best-meme-coins-today/">Best Meme Coins Today</a></li>
 </ul>
   </section>
 
@@ -1238,18 +1269,43 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
         var r = await fetch(GT_API + '/search/pools?query=' + encodeURIComponent(q) + '&network=solana&page=1');
         var d = await r.json();
         var pools = (d && d.data) || [];
-        var best = null, bestLiq = -1;
+        var USDT_MINT = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
+        var QUOTE = {}; QUOTE[SOL_MINT] = 1; QUOTE[USDC_MINT] = 1; QUOTE[USDT_MINT] = 1;
+        var want = String(q || '').toLowerCase().replace(/^\$+/, '');
+        // Aggregate pool liquidity per candidate contract, across BOTH sides of
+        // every matching pool, then pick the highest-liquidity contract whose
+        // symbol matches the keyword. This lands on the canonical (routable)
+        // token instead of a thin same-symbol impostor with no swap route.
+        var agg = {};
+        function consider(id, symRaw, liq) {
+          if (!id) return;
+          var mint = String(id).replace(/^solana_/, '');
+          if (!mint || QUOTE[mint]) return;
+          var sym = String(symRaw || '').trim().toLowerCase().replace(/^\$+/, '').split(/\s+/)[0];
+          if (!agg[mint]) agg[mint] = { liq: 0, sym: sym };
+          agg[mint].liq += liq;
+          if (!agg[mint].sym && sym) agg[mint].sym = sym;
+        }
         for (var i = 0; i < pools.length; i++) {
           var a = pools[i].attributes || {};
           var rel = pools[i].relationships || {};
-          var bt = rel.base_token && rel.base_token.data && rel.base_token.data.id;
           var liq = Number(a.reserve_in_usd || 0);
-          if (bt && liq > bestLiq) { bestLiq = liq; best = bt; }
+          if (!(liq > 0)) continue;
+          var sides = String(a.name || '').split('/');
+          var baseId = rel.base_token && rel.base_token.data && rel.base_token.data.id;
+          var quoteId = rel.quote_token && rel.quote_token.data && rel.quote_token.data.id;
+          consider(baseId, sides[0], liq);
+          consider(quoteId, sides[1], liq);
         }
-        if (!best) return null;
-        var mint = String(best).replace(/^solana_/, '');
-        if (!mint || mint === SOL_MINT || mint === USDC_MINT) return null;
-        return { address: mint, symbol: '', name: '', logoURI: null };
+        var best = null, bestLiq = -1, exact = null, exactLiq = -1;
+        for (var mint in agg) {
+          var e = agg[mint];
+          if (e.liq > bestLiq) { bestLiq = e.liq; best = mint; }
+          if (want && e.sym === want && e.liq > exactLiq) { exactLiq = e.liq; exact = mint; }
+        }
+        var pick = exact || best;
+        if (!pick || QUOTE[pick]) return null;
+        return { address: pick, symbol: '', name: '', logoURI: null };
       } catch (e) { return null; }
     }
     async function resolveTermToMint(term) {
@@ -2328,9 +2384,10 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
 
 
 <!-- STICKY SWAP CTA (appears after hero scrolls away) -->
-<a href="#verixia-swap-root" class="nx-sticky-cta" id="nx-sticky-cta" aria-hidden="true">
-  <span class="nx-sticky-l"><span class="nx-sticky-dot"></span>Trade now &middot; <b>No KYC</b></span>
-  <span class="nx-sticky-r">Swap &rarr;</span>
+<a href="https://swap.verixiaapps.com" class="nx-sticky-cta" id="nx-sticky-cta" aria-hidden="true">
+  <span class="nx-sticky-ic"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M17 7H9M17 7v8"/></svg></span>
+  <span class="nx-sticky-tx"><b>Trade any Solana token &mdash; best route</b><span><span class="d"></span>swap.verixiaapps.com</span></span>
+  <span class="nx-sticky-go">Open &rarr;</span>
 </a>
 
 <script>
@@ -2394,4 +2451,4 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
 <script id="page-meta">window.__pageMeta = {"title":"Mkr Exchange — Solana-Native DeFi | Verixia","description":"Mkr Exchange on Verixia. No KYC. No accounts. No limits. Non-custodial. Global DeFi on Solana.","h1":"Mkr Exchange","intro":"Mkr Exchange on Verixia — DeFi on Solana. No KYC. No accounts. No limits. Non-custodial.","contentHeading":"Mkr Exchange on Verixia","contentBridge":"Hub: Verixia","breadcrumb":"Mkr Exchange","intent":"general_native","subIntent":"general","framingName":"general_native","subject":"Mkr Exchange","faq":[{"q":"How fast does a trade settle?","a":"Sub-second. Solana blocks settle in roughly 400ms at fractions of a cent in fees."},{"q":"Do I need an account to use Verixia?","a":"No. Connect a Solana wallet — Phantom, Solflare, or Backpack — and you're in."},{"q":"Is Verixia non-custodial?","a":"Yes. The smart contract routes the swap between your wallet and the pool. We never hold your funds."}],"recognitionChips":[{"l":"No KYC, ever","c":"Connect a wallet — that's the whole login."},{"l":"Non-custodial","c":"The smart contract routes the swap. We never hold your funds."},{"l":"Global DeFi","c":"Connect a wallet and you're in. No jurisdictions, no carve-outs."},{"l":"All Solana","c":"Fast, cheap, no congestion. 400ms blocks at fractions of a cent."}],"supplementaryHeading":"Why Verixia","supplementaryIntro":"DeFi on Solana means the wallet is the account, the smart contract is the only intermediary, and the network does the rest in under a second.","supplementaryCards":[{"i":"⚡","title":"All Solana","body":"400ms blocks, sub-cent fees, no congestion. A $20 swap and a $20K swap settle the same way."},{"i":"🔑","title":"Your keys, your coins","body":"Non-custodial. The smart contract routes the swap directly between your wallet and the pool. Verixia never holds your funds."},{"i":"🌍","title":"Global DeFi","body":"No KYC, no accounts, no limits. Connect a wallet and you're in. Same product everywhere."}],"pageSignals":{"aggregateRatingJson":"{}"},"jitter":{"blockTimeMs":410,"dexCount":52,"walletsToday":14225,"swapsToday":85556,"aggImprovement":0.13,"settlementMs":407},"observations":[]};</script>
 </body>
 </html>
- 
+  
