@@ -139,6 +139,7 @@ REQUIRED_TEMPLATE_PLACEHOLDERS = {
     "{{SUPP_HEADING}}",
     "{{SUPP_INTRO}}",
     "{{PAGE_META_SCRIPT}}",
+    "{{TOKEN_RISK_LINK}}",
 }
 
 # Ranking-only signal sets (used for internal-link relatedness + ordering).
@@ -911,6 +912,36 @@ def build_canonical(slug):
     return f"{SWAP_SITE}/{slug}/"
 
 
+def build_token_risk_link_html(slug):
+    """
+    Build several cross-links to related token risk pages on the main domain.
+    The primary link uses the page's own slug. Additional links use common
+    risk-check variants that are likely to exist as generated token-risk pages.
+    Returns an HTML string of <li> items ready for .related-links <ul>.
+    """
+    base = "https://verixiaapps.com/token-risk"
+
+    # Primary: exact slug match (e.g. aave-swap -> aave-token-risk or just aave)
+    # Strip common swap suffixes to get the base token slug
+    token_slug = re.sub(r"-(swap|exchange|trading|buy|sell|price|chart)$", "", slug)
+
+    links = [
+        (f"{base}/{token_slug}/",          f"Check {humanize_slug(token_slug)} token risk"),
+        (f"{base}/{token_slug}-risk/",     f"{humanize_slug(token_slug)} risk analysis"),
+        (f"{base}/is-{token_slug}-safe/",  f"Is {humanize_slug(token_slug)} safe to buy?"),
+        (f"{base}/{token_slug}-honeypot/", f"{humanize_slug(token_slug)} honeypot check"),
+        (f"{base}/{token_slug}-rug-pull/", f"{humanize_slug(token_slug)} rug pull risk"),
+        (f"{base}/solana-token-risk/",     "Solana token risk checker"),
+    ]
+
+    items = []
+    for href, label in links:
+        items.append(
+            f'<li><a href="{escape_html(href)}">{escape_html(label)}</a></li>'
+        )
+    return "\n".join(items)
+
+
 # -----------------------------
 # LINKING HELPERS
 # -----------------------------
@@ -1128,6 +1159,7 @@ def render_full_page(template, keyword, keyword_display, payload, slug,
         "{{RELATED_LINKS}}":         related_links_html,
         "{{MORE_LINKS}}":            more_links_html,
         "{{PAGE_META_SCRIPT}}":      meta_script,
+        "{{TOKEN_RISK_LINK}}":       build_token_risk_link_html(slug),
     }
 
     html = template
