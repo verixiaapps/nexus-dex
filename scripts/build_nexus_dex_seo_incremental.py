@@ -1,26 +1,23 @@
 #!/usr/bin/env python3
 """
-build_nexus_dex_seo_incremental.py -- v4.4 (Verixia cleanup)
+build_nexus_dex_seo_incremental.py -- v4.5 (rebuild-safe timeout)
 
-WHAT CHANGED vs v4.3
+WHAT CHANGED vs v4.4
 --------------------
-  - Removed the hardcoded fake AggregateRating (4.8 / 2847). Self-assigned
-    review schema is structured-data spam and a manual-action risk. The
-    constant, the substitution, and the REQUIRED_TEMPLATE_PLACEHOLDERS entry
-    are all gone. The v4 template no longer renders an aggregateRating, so
-    REQUIRED_TEMPLATE_PLACEHOLDERS now matches the template exactly (no more
-    "missing placeholder" crash at load_template()).
-  - Hub routing (HUB_MATCH_RULES / HUB_TITLE_OVERRIDES / the hub entries in
-    PROTECTED_SLUGS) realigned to the 11 hubs that build_nexus_dex_hubs.py +
-    nexus_dex_clusters.py actually build. Dropped hyperliquid-frontend, the
-    perps market hubs, the six legacy stock hubs, solana-swap, and buy-token,
-    which were never built and produced 404 {{HUB_LINK}}s.
-  - Ranking signals (NEXUS_DEX_CLUSTER_TERMS / HIGH_INTENT_TERMS /
-    keyword_quality_score) de-perped: removed perps/leverage/hyperliquid/
-    insider/sniper/deployer/kol/stock-broker terms so internal-link ranking
-    reflects the cleaned product surface.
+  - Added an opt-in graceful shutdown for full rebuilds ONLY. When REBUILD_MODE
+    is set (the rebuild workflow step sets REBUILD_MODE=true), SIGTERM/SIGINT
+    now flip a stop flag instead of hard-killing the process. The generation
+    loop notices the flag, stops after the current page, and falls through to
+    the normal end-of-run git_checkpoint() -- so a workflow timeout commits and
+    pushes every completed page before the runner's SIGKILL. Without this, up to
+    COMMIT_EVERY-1 finished pages were re-generated on the resume run.
+  - The daily incremental run does NOT set REBUILD_MODE, so its behavior is
+    byte-for-byte identical to v4.4 (no handler installed).
 
-Unchanged from v4.3:
+Unchanged from v4.4:
+  - Removed fake AggregateRating; template placeholder set matches template.
+  - Hub routing aligned to the 11 built hubs.
+  - De-perped ranking signals.
   - Pages ship to public/<slug>/index.html
   - Canonical/og/JSON-LD URLs use swap.verixiaapps.com
   - Sitemap rebuilt to public/nexus-sitemap.xml on every COMMIT_EVERY checkpoint
@@ -32,6 +29,7 @@ import re
 import sys
 import json
 import subprocess
+import signal
 from datetime import datetime, timezone
 from html import escape
 
@@ -50,6 +48,21 @@ from generate_nexus_dex_content import (
     reset_build_registry,
     fetch_build_report,
 )
+
+# -----------------------------
+# GRACEFUL SHUTDOWN (rebuild only)
+# -----------------------------
+# Set by SIGTERM/SIGINT when REBUILD_MODE is on, so a workflow timeout can flush
+# a final checkpoint (commit + push of completed pages) before the runner sends
+# SIGKILL. Handlers are only installed during a full rebuild; the daily
+# incremental run never arms this and behaves exactly as before.
+_STOP_REQUESTED = False
+
+
+def _request_stop(signum, frame):
+    global _STOP_REQUESTED
+    _STOP_REQUESTED = True
+
 
 # -----------------------------
 # CONFIG
@@ -76,6 +89,9 @@ DAILY_LIMIT         = int(os.getenv("DAILY_LIMIT", "100"))
 COMMIT_EVERY        = int(os.getenv("COMMIT_EVERY", "30"))
 RESUME              = os.getenv("RESUME", "true").lower() == "true"
 RESET_ENGINE        = os.getenv("RESET_ENGINE", "false").lower() == "true"
+# Only full rebuilds set this. When on, we install the SIGTERM/SIGINT handlers
+# above so a timeout flushes a final checkpoint instead of losing the batch.
+REBUILD_MODE        = os.getenv("REBUILD_MODE", "false").lower() == "true"
 
 # Slugs we never overwrite: CRA-managed public/ files, reserved server.js
 # routes, and the 11 SEO hub slugs (built by build_nexus_dex_hubs.py). If a
@@ -1212,6 +1228,14 @@ def git_checkpoint(generated_count, new_generated_keywords, new_generated_slugs,
 # -----------------------------
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    # Rebuild only: catch the workflow's timeout SIGTERM so we can flush a final
+    # checkpoint before SIGKILL. Daily incremental runs don't set REBUILD_MODE,
+    # so this is a no-op there and their behavior is unchanged.
+    if REBUILD_MODE:
+        signal.signal(signal.SIGTERM, _request_stop)
+        signal.signal(signal.SIGINT, _request_stop)
+
     ensure_file(GENERATED_SLUGS_FILE)
     ensure_file(GENERATED_KEYWORDS_FILE)
     ensure_file(REJECTED_KEYWORDS_FILE)
@@ -1276,6 +1300,7 @@ def main():
     print(f"Commit every: {COMMIT_EVERY}")
     print(f"Resume mode: {RESUME}")
     print(f"Reset engine registries: {RESET_ENGINE}")
+    print(f"Rebuild mode (graceful timeout): {REBUILD_MODE}")
     print(f"Output dir: {OUTPUT_DIR}")
     print(f"Sitemap file: {SITEMAP_FILE}")
     print(f"Canonical base: {SWAP_SITE}")
@@ -1289,6 +1314,13 @@ def main():
     new_generated_keywords = set(generated_keywords)
 
     for page in queue_pages:
+        # Rebuild only: a timeout SIGTERM sets this. Stop after the current page
+        # so the end-of-run git_checkpoint() below commits + pushes everything
+        # built so far; the resume run picks up the untouched remainder.
+        if _STOP_REQUESTED:
+            print("[shutdown] SIGTERM received -- flushing final checkpoint and exiting")
+            break
+
         if generated_count >= DAILY_LIMIT:
             break
 
@@ -1389,4 +1421,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
- 
