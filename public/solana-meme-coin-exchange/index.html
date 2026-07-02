@@ -27,7 +27,7 @@
   "url": "https://swap.verixiaapps.com/solana-meme-coin-exchange/",
   "name": "Buy COINx on Solana — Wallet-Native, No KYC | Verixia",
   "description": "COINx on Solana via Verixia — SPL brand token, USDC settlement, 24/7 trading. Weekends, holidays, after-hours all open. Wallet-native, non-custodial.",
-  "dateModified": "2026-06-30T22:00:58Z",
+  "dateModified": "2026-07-02T20:11:59Z",
   "isPartOf": { "@type": "WebSite", "url": "https://verixiaapps.com/", "name": "Verixia" },
   "publisher": { "@type": "Organization", "name": "Verixia", "url": "https://verixiaapps.com/" }
 }
@@ -265,23 +265,28 @@ a{color:inherit;text-decoration:none}
 /* ---- STICKY SWAP CTA ---- */
 .nx-sticky-cta{position:fixed;left:50%;bottom:14px;transform:translate(-50%,160%);
   z-index:60;width:calc(100% - 26px);max-width:454px;
-  display:flex;align-items:center;justify-content:space-between;gap:12px;
-  padding:13px 16px;border-radius:16px;
-  background:linear-gradient(135deg,rgba(25,210,122,.96),rgba(20,170,150,.96));
-  border:1px solid rgba(255,255,255,.28);
-  box-shadow:0 12px 34px rgba(0,0,0,.5),0 0 22px rgba(25,210,122,.34);
-  color:#03281a;font-weight:800;opacity:0;pointer-events:none;
-  transition:transform .32s cubic-bezier(.16,1,.3,1),opacity .32s ease}
+  display:flex;align-items:center;gap:11px;padding:9px 11px 9px 10px;border-radius:14px;
+  background:linear-gradient(180deg,rgba(46,36,82,.9),rgba(18,13,40,.92));
+  border:1px solid var(--line);border-top:1px solid rgba(255,255,255,.2);
+  backdrop-filter:blur(12px);box-shadow:0 16px 42px rgba(0,0,0,.55);
+  opacity:0;pointer-events:none;
+  transition:transform .32s cubic-bezier(.16,1,.3,1),opacity .32s ease,border-color .18s ease}
 .nx-sticky-cta.show{transform:translate(-50%,0);opacity:1;pointer-events:auto}
-.nx-sticky-l{display:inline-flex;align-items:center;gap:8px;font-size:13.5px}
-.nx-sticky-l b{color:#03281a}
-.nx-sticky-dot{width:8px;height:8px;border-radius:50%;background:#03281a;box-shadow:0 0 0 3px rgba(3,40,26,.25);animation:nxpulse 1.8s ease-in-out infinite}
-.nx-sticky-r{font-size:14px;white-space:nowrap}
+.nx-sticky-cta:hover{border-color:rgba(139,92,255,.55)}
+.nx-sticky-ic{width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,#8b5cff,#ff4d9e);box-shadow:0 0 14px rgba(139,92,255,.42)}
+.nx-sticky-ic svg{width:16px;height:16px;display:block}
+.nx-sticky-tx{display:flex;flex-direction:column;min-width:0;flex:1}
+.nx-sticky-tx b{font-size:13px;font-weight:700;color:#fff;line-height:1.2}
+.nx-sticky-tx span{font-size:10.5px;color:var(--dim);margin-top:2px;font-family:'JetBrains Mono',monospace;display:flex;align-items:center;gap:5px}
+.nx-sticky-tx span .d{width:5px;height:5px;border-radius:50%;background:var(--g);box-shadow:0 0 7px var(--g);animation:nxpulse 1.8s ease-in-out infinite}
+.nx-sticky-go{flex:none;display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:800;color:#03281a;
+  background:linear-gradient(135deg,#6df2a8,#19d27a);border-radius:20px;padding:6px 12px;box-shadow:0 0 12px rgba(25,210,122,.3)}
 @keyframes nxpulse{0%,100%{opacity:1}50%{opacity:.4}}
 @media (prefers-reduced-motion:reduce){
   .nx-sticky-cta{transition:opacity .2s ease}
   .nx-sticky-cta.show{transform:translate(-50%,0)}
-  .nx-sticky-dot{animation:none}
+  .nx-sticky-tx span .d{animation:none}
 }
 
 /* ===== SWAP WIDGET STYLES (ported from working template) ===== */
@@ -496,6 +501,20 @@ main{max-width:540px;margin:0 auto;background:#fff;
 .nx-connect{border:none;background:var(--blue);color:#fff;font-family:'Space Grotesk',sans-serif;
   font-weight:600;font-size:13px;padding:9px 16px;border-radius:9px;cursor:pointer}
 .nx-connect:hover{background:#2457d6}
+.nx-applink{display:flex;align-items:center;gap:11px;margin:2px 0 4px;padding:9px 11px 9px 10px;border-radius:13px;
+  background:linear-gradient(180deg,rgba(46,36,82,.72),rgba(18,13,40,.72));
+  border:1px solid var(--line);border-top:1px solid rgba(255,255,255,.20);
+  backdrop-filter:blur(10px);transition:border-color .18s ease,transform .18s ease}
+.nx-applink:hover{border-color:rgba(139,92,255,.55);transform:translateY(-1px)}
+.nx-applink-ic{width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,#8b5cff,#ff4d9e);box-shadow:0 0 14px rgba(139,92,255,.42)}
+.nx-applink-ic svg{width:16px;height:16px;display:block}
+.nx-applink-tx{display:flex;flex-direction:column;min-width:0;flex:1}
+.nx-applink-tx b{font-size:13px;font-weight:700;color:#fff;line-height:1.2}
+.nx-applink-tx span{font-size:10.5px;color:var(--dim);letter-spacing:.02em;margin-top:2px;font-family:'JetBrains Mono',monospace;display:flex;align-items:center;gap:5px}
+.nx-applink-tx span .d{width:5px;height:5px;border-radius:50%;background:var(--g);box-shadow:0 0 7px var(--g)}
+.nx-applink-go{flex:none;display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:800;color:#03281a;
+  background:linear-gradient(135deg,#6df2a8,#19d27a);border-radius:20px;padding:6px 12px;box-shadow:0 0 12px rgba(25,210,122,.3)}
 
 /* Hero text */
 .nx-hero{padding-top:18px}
@@ -703,26 +722,14 @@ main{max-width:540px;margin:0 auto;background:#fff;
     </div>
   </header>
 
-  <!-- HERO: keyword H1 (compact) -->
+  <!-- HERO: keyword H1 (compact) — stays first for SEO -->
   <section class="nx-hero">
     <div class="nx-eyebrow"><span class="dot"></span><span class="txt">SOLANA &middot; NON-CUSTODIAL &middot; NO KYC</span></div>
     <h1 class="nx-h1">Trade COINx on Solana</h1>
     <p class="nx-lede">COINx on Solana is a brand token — an SPL token whose price tracks COINx, settled in USDC, tradable 24/7 on Verixia. No KYC. No accounts. No limits. Non-custodial.</p>
   </section>
 
-  <!-- REFERRAL (highest-value CTA, moved to top above the swap) -->
-  <div class="nx-refer-stack">
-    <a class="nx-refer pump-tier" href="https://swap.verixiaapps.com">
-      <span class="nx-refer-l">
-        <span class="nx-refer-tag">REFERRAL</span>
-        <b>Earn <em>50%</em> of fees from everyone you refer</b>
-        <span>FOREVER &middot; PAID DAILY IN SOL</span>
-      </span>
-      <span class="nx-refer-r">Join &rarr;</span>
-    </a>
-  </div>
-
-  <!-- LIVE SWAP (hero conversion) -->
+  <!-- LIVE SWAP (hero conversion) — moved directly under the hero -->
   <div class="nx-swap-label">
     <div class="nx-swap-label-title">Live swap &mdash; <em>trade now</em></div>
     <div class="nx-live-pill"><span class="dot"></span>LIVE QUOTE</div>
@@ -746,6 +753,30 @@ main{max-width:540px;margin:0 auto;background:#fff;
       </div>
     </div>
   </section>
+
+  <!-- REFERRAL (moved below the swap) -->
+  <div class="nx-refer-stack">
+    <a class="nx-refer pump-tier" href="https://swap.verixiaapps.com">
+      <span class="nx-refer-l">
+        <span class="nx-refer-tag">REFERRAL</span>
+        <b>Earn <em>50%</em> of fees from everyone you refer</b>
+        <span>FOREVER &middot; PAID DAILY IN SOL</span>
+      </span>
+      <span class="nx-refer-r">Join &rarr;</span>
+    </a>
+  </div>
+
+  <!-- APP CTA (moved below the swap; on-message copy for keyword pages) -->
+  <a class="nx-applink" href="https://swap.verixiaapps.com">
+    <span class="nx-applink-ic">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M17 7H9M17 7v8"/></svg>
+    </span>
+    <span class="nx-applink-tx">
+      <b>More ways to trade on Verixia</b>
+      <span><span class="d"></span>swap.verixiaapps.com</span>
+    </span>
+    <span class="nx-applink-go">Open &rarr;</span>
+  </a>
 
   <!-- QUICK REASSURANCE (first-screen trust) -->
   <div class="nx-reassure">
@@ -827,10 +858,10 @@ main{max-width:540px;margin:0 auto;background:#fff;
     <div class="section-tag">OVERVIEW</div>
     <h2 class="section-title">Why Verixia</h2>
     <p class="section-lede">DeFi on Solana means the wallet is the account, the smart contract is the only intermediary, and the network does the rest in under a second.</p>
-    <div class="ai-article" data-ai-content><p>Tired of the usual centralized exchanges with their KYC walls, slow withdrawals, and sky-high fees? That’s old news. Welcome to the Solana meme coin exchange vibe, where you skip the gatekeepers and ape straight in. COINx is a brand token on Solana that price-tracks the buzz around meme coins, settled in USDC for smooth on-chain moves. No accounts, no limits—just your wallet and the market, live 24/7.</p>
-<p>On Solana, trading COINx is a whole new flex. Verixia routes your swaps through Jupiter, snagging the best prices across Raydium, Orca, and Meteora. No broker, no KYC, no downtime. Want to swap to USDC or bridge USDC to Solana? It’s instant, cheap, and seamless. COINx trades like any other SPL token, but with the added juice of real-time price tracking, minus the usual exchange drama.</p>
-<p>Here’s the kicker: meme coin hype doesn’t sleep, and neither does COINx. When the market moves after hours or on weekends, the token price updates immediately. That’s your chance to ape in or rotate bags while traditional markets nap. For example, COINx is currently at $145.96, down 3.79% in 24 hours, settled in USDC and ready to move whenever you are. No waiting for the open bell.</p>
-<p>Ready to join the Solana DeFi party? Add liquidity on Raydium, swap COINx through Verixia’s Jupiter routing, or swap to USDC and pivot fast. If you’re coming from Ethereum, bridge USDC to Solana and dive right in. COINx isn’t just a token; it’s your ticket to fast, flexible, and fun meme coin exposure on Solana. Let’s send it.</p></div>
+    <div class="ai-article" data-ai-content><p>Forget the usual centralized exchanges with their KYC walls, slow hours, and jacked-up gas fees. The old way means waiting for markets to open, sweating your identity on endless forms, and paying for every move. If you’re hunting for a Solana meme coin exchange that keeps things fast, free, and frictionless, it’s time to rethink how you handle your COINx bags. No accounts, no limits, just pure on-chain action with zero middlemen in your way.</p>
+<p>On Solana, COINx is an SPL token that price-tracks the meme coin vibe, settled in USDC for clean, stable value. Thanks to Verixia’s routing through Jupiter, you tap into the best liquidity across Raydium, Orca, and Meteora. That means your COINx trades execute lightning-fast, 24/7, with no KYC or broker nonsense. Live right now, COINx is cruising at $165.18 (+4.94% 24h), ready to swap whenever you want, day or night.</p>
+<p>Mechanics? Easy. Connect your wallet, pick COINx, and swap to USDC or vice versa in seconds. Phantom wallet users see the magic: 9-second wallet handshake, 12 seconds for the swap, and a tiny $0.001 fee. The COINx lands right where your USDC was, no delays, no waiting for market hours. Need more USDC on Solana? Just bridge USDC to Solana and keep the action flowing without missing a beat.</p>
+<p>Ready to ape into the Solana meme coin exchange scene? Jump in, swap to USDC or COINx anytime, and ride the vibes 24/7. LP on Raydium, rotate your bags, or just hold and watch your exposure to meme coin moves settle instantly. Solana DeFi’s got your back—no gatekeepers, just pure crypto freedom.</p></div>
   </section>
 
   <section class="section">
@@ -845,16 +876,16 @@ main{max-width:540px;margin:0 auto;background:#fff;
   <section class="section">
     <div class="section-tag">RELATED</div>
     <h2 class="section-title"><a href="/wonderland-memes/">Wonderland Memes Hub</a></h2>
-    <ul class="pair-grid"><li><a href="/best-meme-coin-dex/">Best Meme Coin DEX</a></li>
-<li><a href="/best-meme-coin-exchange/">Best Meme Coin Exchange</a></li>
-<li><a href="/best-meme-coin-swap/">Best Meme Coin Swap</a></li>
-<li><a href="/best-route-ai16z-to-bonk/">Best Route ai16z to BONK</a></li>
-<li><a href="/best-route-bonk-to-wif/">Best Route BONK to WIF</a></li>
-<li><a href="/best-route-drift-to-bonk/">Best Route Drift to BONK</a></li>
-<li><a href="/best-route-fartcoin-to-bonk/">Best Route FARTCOIN to BONK</a></li>
-<li><a href="/best-route-jito-to-bonk/">Best Route Jito to BONK</a></li>
-<li><a href="/best-route-jupiter-to-bonk/">Best Route Jupiter to BONK</a></li>
+    <ul class="pair-grid"><li><a href="/best-solana-meme-coin-swap/">Best Solana Meme Coin Swap</a></li>
+<li><a href="/convert-solana-to-bonk/">Convert Solana to BONK on Verixia</a></li>
 <li><a href="/best-route-popcat-to-bonk/">Best Route POPCAT to BONK</a></li>
+<li><a href="/best-route-fartcoin-to-bonk/">Best Route FARTCOIN to BONK</a></li>
+<li><a href="/best-route-drift-to-bonk/">Best Route Drift to BONK</a></li>
+<li><a href="/best-route-ai16z-to-bonk/">Best Route ai16z to BONK</a></li>
+<li><a href="/convert-solana-to-pengu/">Convert Solana to PENGU on Verixia</a></li>
+<li><a href="/buy-pepe-with-solana/">Buy PEPE with Solana on Verixia</a></li>
+<li><a href="/buy-wif-with-solana/">Buy WIF with Solana on Verixia</a></li>
+<li><a href="/best-solana-meme-coin-trading/">Best Solana Meme Coin Trading</a></li>
 </ul>
   </section>
 
@@ -1239,18 +1270,43 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
         var r = await fetch(GT_API + '/search/pools?query=' + encodeURIComponent(q) + '&network=solana&page=1');
         var d = await r.json();
         var pools = (d && d.data) || [];
-        var best = null, bestLiq = -1;
+        var USDT_MINT = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
+        var QUOTE = {}; QUOTE[SOL_MINT] = 1; QUOTE[USDC_MINT] = 1; QUOTE[USDT_MINT] = 1;
+        var want = String(q || '').toLowerCase().replace(/^\$+/, '');
+        // Aggregate pool liquidity per candidate contract, across BOTH sides of
+        // every matching pool, then pick the highest-liquidity contract whose
+        // symbol matches the keyword. This lands on the canonical (routable)
+        // token instead of a thin same-symbol impostor with no swap route.
+        var agg = {};
+        function consider(id, symRaw, liq) {
+          if (!id) return;
+          var mint = String(id).replace(/^solana_/, '');
+          if (!mint || QUOTE[mint]) return;
+          var sym = String(symRaw || '').trim().toLowerCase().replace(/^\$+/, '').split(/\s+/)[0];
+          if (!agg[mint]) agg[mint] = { liq: 0, sym: sym };
+          agg[mint].liq += liq;
+          if (!agg[mint].sym && sym) agg[mint].sym = sym;
+        }
         for (var i = 0; i < pools.length; i++) {
           var a = pools[i].attributes || {};
           var rel = pools[i].relationships || {};
-          var bt = rel.base_token && rel.base_token.data && rel.base_token.data.id;
           var liq = Number(a.reserve_in_usd || 0);
-          if (bt && liq > bestLiq) { bestLiq = liq; best = bt; }
+          if (!(liq > 0)) continue;
+          var sides = String(a.name || '').split('/');
+          var baseId = rel.base_token && rel.base_token.data && rel.base_token.data.id;
+          var quoteId = rel.quote_token && rel.quote_token.data && rel.quote_token.data.id;
+          consider(baseId, sides[0], liq);
+          consider(quoteId, sides[1], liq);
         }
-        if (!best) return null;
-        var mint = String(best).replace(/^solana_/, '');
-        if (!mint || mint === SOL_MINT || mint === USDC_MINT) return null;
-        return { address: mint, symbol: '', name: '', logoURI: null };
+        var best = null, bestLiq = -1, exact = null, exactLiq = -1;
+        for (var mint in agg) {
+          var e = agg[mint];
+          if (e.liq > bestLiq) { bestLiq = e.liq; best = mint; }
+          if (want && e.sym === want && e.liq > exactLiq) { exactLiq = e.liq; exact = mint; }
+        }
+        var pick = exact || best;
+        if (!pick || QUOTE[pick]) return null;
+        return { address: pick, symbol: '', name: '', logoURI: null };
       } catch (e) { return null; }
     }
     async function resolveTermToMint(term) {
@@ -2329,9 +2385,10 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
 
 
 <!-- STICKY SWAP CTA (appears after hero scrolls away) -->
-<a href="#verixia-swap-root" class="nx-sticky-cta" id="nx-sticky-cta" aria-hidden="true">
-  <span class="nx-sticky-l"><span class="nx-sticky-dot"></span>Trade now &middot; <b>No KYC</b></span>
-  <span class="nx-sticky-r">Swap &rarr;</span>
+<a href="https://swap.verixiaapps.com" class="nx-sticky-cta" id="nx-sticky-cta" aria-hidden="true">
+  <span class="nx-sticky-ic"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M17 7H9M17 7v8"/></svg></span>
+  <span class="nx-sticky-tx"><b>Trade any Solana token &mdash; best route</b><span><span class="d"></span>swap.verixiaapps.com</span></span>
+  <span class="nx-sticky-go">Open &rarr;</span>
 </a>
 
 <script>
@@ -2392,7 +2449,7 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
 })();
 </script>
 
-<script id="page-meta">window.__pageMeta = {"title":"Buy COINx on Solana — Wallet-Native, No KYC | Verixia","description":"COINx on Solana via Verixia — SPL brand token, USDC settlement, 24/7 trading. Weekends, holidays, after-hours all open. Wallet-native, non-custodial.","h1":"Trade COINx on Solana","intro":"COINx on Solana is a brand token — an SPL token whose price tracks COINx, settled in USDC, tradable 24/7 on Verixia. No KYC. No accounts. No limits. Non-custodial.","contentHeading":"Trading COINx on Solana","contentBridge":"Hub: Brand Tokens","breadcrumb":"Solana MEME Coin Exchange","intent":"brand_token","subIntent":"COINx","framingName":"brand_what_is_lead","subject":"COINx","faq":[{"q":"Can I trade on weekends?","a":"Yes. Brand tokens trade 24/7 on Solana DEXes — Saturday morning, Sunday night, holidays, after-hours. The U.S. stock market closes, brand tokens don't."},{"q":"What hours can I trade?","a":"Always. 24/7 across all time zones, no market open, no market close. Earnings beat at 4:15pm ET? You're trading the move in real time."},{"q":"How is the price kept accurate?","a":"Arbitrageurs close the gap between brand token price and the underlying price during traditional market hours. Outside market hours, the token leads and the spread widens — that's where the 24/7 trading angle lives."},{"q":"Is COINx on Solana the real COINx share?","a":"No. It's a brand token — an SPL token on Solana whose price tracks COINx. You're not buying ownership; you're holding a price-tracked token settled in USDC."}],"recognitionChips":[{"l":"Fractional sizing","c":"Any amount works. A $7 position and a $1,200 position execute the same way."},{"l":"Price-tracked, not stocks","c":"An SPL token that tracks the price. Not a share, not ownership — DeFi exposure to the move."},{"l":"24/7 on Solana","c":"Trades while the U.S. market is closed. Earnings, guidance, weekend news — you're in the trade in real time."},{"l":"Settled in USDC","c":"Every brand token pair settles against USDC on Solana DEXes. Standard SPL routing, Jupiter-aggregated."}],"supplementaryHeading":"Why Verixia","supplementaryIntro":"DeFi on Solana means the wallet is the account, the smart contract is the only intermediary, and the network does the rest in under a second.","supplementaryCards":[{"i":"⚡","title":"All Solana","body":"400ms blocks, sub-cent fees, no congestion. A $20 swap and a $20K swap settle the same way."},{"i":"🔑","title":"Your keys, your coins","body":"Non-custodial. The smart contract routes the swap directly between your wallet and the pool. Verixia never holds your funds."},{"i":"🌍","title":"Global DeFi","body":"No KYC, no accounts, no limits. Connect a wallet and you're in. Same product everywhere."}],"pageSignals":{"aggregateRatingJson":"{}"},"jitter":{"blockTimeMs":409,"dexCount":54,"walletsToday":11321,"swapsToday":63830,"aggImprovement":0.11,"settlementMs":415},"observations":["Live COINx on Solana: $145.96 (-3.79% 24h), settled in USDC, tradable 24/7.","Live COINx on Solana via Jupiter (verified, deepest pool): $145.96, -3.79% 24h, $74.6K liquidity, $148.7K 24h volume, $19.88M market cap, 3,113 holders."]};</script>
+<script id="page-meta">window.__pageMeta = {"title":"Buy COINx on Solana — Wallet-Native, No KYC | Verixia","description":"COINx on Solana via Verixia — SPL brand token, USDC settlement, 24/7 trading. Weekends, holidays, after-hours all open. Wallet-native, non-custodial.","h1":"Trade COINx on Solana","intro":"COINx on Solana is a brand token — an SPL token whose price tracks COINx, settled in USDC, tradable 24/7 on Verixia. No KYC. No accounts. No limits. Non-custodial.","contentHeading":"Trading COINx on Solana","contentBridge":"Hub: Brand Tokens","breadcrumb":"Solana MEME Coin Exchange","intent":"brand_token","subIntent":"COINx","framingName":"brand_what_is_lead","subject":"COINx","faq":[{"q":"Can I trade on weekends?","a":"Yes. Brand tokens trade 24/7 on Solana DEXes — Saturday morning, Sunday night, holidays, after-hours. The U.S. stock market closes, brand tokens don't."},{"q":"What hours can I trade?","a":"Always. 24/7 across all time zones, no market open, no market close. Earnings beat at 4:15pm ET? You're trading the move in real time."},{"q":"How is the price kept accurate?","a":"Arbitrageurs close the gap between brand token price and the underlying price during traditional market hours. Outside market hours, the token leads and the spread widens — that's where the 24/7 trading angle lives."},{"q":"Is COINx on Solana the real COINx share?","a":"No. It's a brand token — an SPL token on Solana whose price tracks COINx. You're not buying ownership; you're holding a price-tracked token settled in USDC."}],"recognitionChips":[{"l":"Fractional sizing","c":"Any amount works. A $7 position and a $1,200 position execute the same way."},{"l":"Price-tracked, not stocks","c":"An SPL token that tracks the price. Not a share, not ownership — DeFi exposure to the move."},{"l":"24/7 on Solana","c":"Trades while the U.S. market is closed. Earnings, guidance, weekend news — you're in the trade in real time."},{"l":"Settled in USDC","c":"Every brand token pair settles against USDC on Solana DEXes. Standard SPL routing, Jupiter-aggregated."}],"supplementaryHeading":"Why Verixia","supplementaryIntro":"DeFi on Solana means the wallet is the account, the smart contract is the only intermediary, and the network does the rest in under a second.","supplementaryCards":[{"i":"⚡","title":"All Solana","body":"400ms blocks, sub-cent fees, no congestion. A $20 swap and a $20K swap settle the same way."},{"i":"🔑","title":"Your keys, your coins","body":"Non-custodial. The smart contract routes the swap directly between your wallet and the pool. Verixia never holds your funds."},{"i":"🌍","title":"Global DeFi","body":"No KYC, no accounts, no limits. Connect a wallet and you're in. Same product everywhere."}],"pageSignals":{"aggregateRatingJson":"{}"},"jitter":{"blockTimeMs":409,"dexCount":54,"walletsToday":11321,"swapsToday":63830,"aggImprovement":0.11,"settlementMs":415},"observations":["Live COINx on Solana: $165.18 (+4.94% 24h), settled in USDC, tradable 24/7.","Live COINx on Solana via Jupiter (verified, deepest pool): $165.18, +4.94% 24h, $390.0K liquidity, $636.9K 24h volume, $22.49M market cap, 3,112 holders."]};</script>
 </body>
 </html>
- 
+  
