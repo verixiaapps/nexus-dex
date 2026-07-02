@@ -589,6 +589,45 @@ function __flipsyAdmin() {
   }
 
   // ============================================================
+  // PHANTOM (direct injected provider) — primary connect path
+  // ============================================================
+  function getPhantom() {
+    if (window.phantom && window.phantom.solana && window.phantom.solana.isPhantom) return window.phantom.solana;
+    if (window.solana && window.solana.isPhantom) return window.solana;
+    return null;
+  }
+  function wrapPhantom(provider, pubkey) {
+    return {
+      publicKey: pubkey,
+      _raw: provider,
+      _isPhantom: true,
+      _supportsSignTx: typeof provider.signTransaction === 'function',
+      _supportsSignAndSend: typeof provider.signAndSendTransaction === 'function',
+      signTransaction: async function(tx) { return await provider.signTransaction(tx); },
+      signAndSendTransaction: async function(tx) {
+        var res = await provider.signAndSendTransaction(tx);
+        if (typeof res === 'string') return res;
+        return res && (res.signature || res.txid || null);
+      },
+    };
+  }
+  async function connectPhantom(eager) {
+    var ph = getPhantom();
+    if (!ph) { if (!eager) setFlash('error', 'Phantom not found — install the Phantom extension.'); return; }
+    try {
+      var resp = await ph.connect(eager ? { onlyIfTrusted: true } : undefined);
+      var pk = (resp && resp.publicKey) ? resp.publicKey : ph.publicKey;
+      S.publicKey = new PublicKey(pk.toString());
+      S.walletName = 'Phantom';
+      S.provider = wrapPhantom(ph, S.publicKey);
+      render();
+      loadConfig();
+    } catch (e) {
+      if (!eager) setFlash('error', 'Connect failed: ' + ((e && e.message) ? e.message : e));
+    }
+  }
+
+  // ============================================================
   // WALLET WIRING
   // ============================================================
   function appKitReady() { return window.VerixiaWallet && typeof window.VerixiaWallet.open === 'function'; }
@@ -606,12 +645,19 @@ function __flipsyAdmin() {
     });
   }
   async function openConnect() {
+    if (getPhantom()) { return connectPhantom(false); }
     var ready = await waitForAppKit();
-    if (!ready) { setFlash('error', 'Wallet bundle not loaded'); return; }
+    if (!ready) { setFlash('error', 'No wallet found. Install Phantom, or load the Verixia wallet.'); return; }
     try { window.VerixiaWallet.open(); } catch (e) { setFlash('error', 'Could not open wallet: ' + (e && e.message)); }
   }
   async function disconnect() {
-    try { if (window.VerixiaWallet && typeof window.VerixiaWallet.disconnect === 'function') await window.VerixiaWallet.disconnect(); } catch (e) {}
+    try {
+      if (S.provider && S.provider._isPhantom && S.provider._raw && typeof S.provider._raw.disconnect === 'function') {
+        await S.provider._raw.disconnect();
+      } else if (window.VerixiaWallet && typeof window.VerixiaWallet.disconnect === 'function') {
+        await window.VerixiaWallet.disconnect();
+      }
+    } catch (e) {}
     S.publicKey = null; S.provider = null; S.walletName = null; render();
   }
   async function onWalletStateChange(state) {
@@ -1024,10 +1070,24 @@ function __flipsyAdmin() {
     pollPrice();
     setInterval(pollPrice, 5000);
     render();
-    waitForAppKit().then(function(ok) {
-      if (!ok) { console.warn('[admin] Wallet bundle not loaded'); return; }
-      window.VerixiaWallet.subscribe(onWalletStateChange);
-    });
+    var ph = getPhantom();
+    if (ph) {
+      // React to Phantom account switches / disconnects.
+      try {
+        ph.on('accountChanged', function(pk) {
+          if (pk) { S.publicKey = new PublicKey(pk.toString()); S.provider = wrapPhantom(ph, S.publicKey); render(); loadConfig(); }
+          else { S.publicKey = null; S.provider = null; render(); }
+        });
+        ph.on('disconnect', function() { S.publicKey = null; S.provider = null; render(); });
+      } catch (e) {}
+      connectPhantom(true); // silent reconnect if previously approved
+    } else {
+      // No Phantom — fall back to the Verixia wallet bundle if present.
+      waitForAppKit().then(function(ok) {
+        if (!ok) { console.warn('[admin] No Phantom and no Verixia wallet bundle'); return; }
+        window.VerixiaWallet.subscribe(onWalletStateChange);
+      });
+    }
     setInterval(function() { if (S.publicKey) loadConfig(); }, 10000);
   }
 
