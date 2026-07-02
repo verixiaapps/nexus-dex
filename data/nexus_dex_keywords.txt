@@ -2,56 +2,6 @@ crypto exchange
 crypto liquidity
 decentralized exchange
 swap crypto
-swap kmno for ai16z solana
-swap kmno for bonk solana
-swap kmno for cloud solana
-swap kmno for drift solana
-swap kmno for fartcoin solana
-swap kmno for goat solana
-swap kmno for grass solana
-swap kmno for hnt solana
-swap kmno for io solana
-swap kmno for jitosol solana
-swap kmno for jto solana
-swap kmno for jup solana
-swap kmno for mew solana
-swap kmno for mnde solana
-swap kmno for msol solana
-swap kmno for pengu solana
-swap kmno for pnut solana
-swap kmno for popcat solana
-swap kmno for pyth solana
-swap kmno for ray solana
-swap kmno for render solana
-swap kmno for sol solana
-swap kmno for tnsr solana
-swap kmno for w solana
-swap kmno for wen solana
-swap kmno for wif solana
-swap kmno on solana
-swap kmno to act
-swap kmno to ai16z
-swap kmno to bonk
-swap kmno to cloud
-swap kmno to drift
-swap kmno to fartcoin
-swap kmno to goat
-swap kmno to grass
-swap kmno to hnt
-swap kmno to io
-swap kmno to jitosol
-swap kmno to jto
-swap kmno to jup
-swap kmno to mew
-swap kmno to mnde
-swap kmno to msol
-swap kmno to pengu
-swap kmno to pnut
-swap kmno to popcat
-swap kmno to pyth
-swap kmno to ray
-swap kmno to render
-swap kmno to sol
 swap kmno to sol solana
 swap kmno to tnsr
 swap kmno to usdc solana
