@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { BRANDS, fetchBrandPrices, stkFetchSeries, stkThrottle } from './Stocks.jsx';
-  
+
 // =====================================================================
 // Discover — the main discovery page. Self-contained by design (mirrors
 // the anti-coupling pattern used across the app): its own fetch,
@@ -138,11 +138,12 @@ function uniqMint(list){
   });
 }
 
-// xStock logos — inlined exactly like App.js's appFetchBrandIcons (same
-// /api/jupiter/tokens/search endpoint). Kept local so Discover depends only on
-// the Stocks.jsx exports App.js already imports (BRANDS, fetchBrandPrices,
-// stkFetchSeries, stkThrottle) — never a newer export the live bundle may lack.
-async function fetchStockIcons(mints){
+// Token / stock logos — inlined like App.js's appFetchBrandIcons (same
+// /api/jupiter/tokens/search endpoint). Returns { mint: logoURL }. Used to
+// backfill icons for feed tokens that ship without one (esp. fresh pump.fun
+// launches) and for xStocks. Kept local so Discover depends only on the
+// Stocks.jsx exports App.js already imports.
+async function fetchIcons(mints){
   if(!mints||!mints.length) return {};
   try{
     const ctrl=new AbortController();
@@ -165,7 +166,7 @@ function normalizePump(t){
   const ms=ageMsOf(t.pairCreatedAt);
   return {
     mint, sym:t.sym||'???', name:t.name||t.sym||'Unknown',
-    emoji:emojiFor(t.sym||''), icon:t.icon||null,
+    emoji:emojiFor(t.sym||''), icon:t.icon||t.image||t.imageUrl||t.logo||t.logoURI||t.image_uri||(t.info&&(t.info.imageUrl||t.info.image))||null,
     price:pickPrice(t), change:pickChange(t),
     age:ageStr(ms), ageMs:ms,
     mcap:Number(t.mcap||t.fdv||0), volume24h:Number(t.volume24h||0),
@@ -295,11 +296,12 @@ function ScoreBadge({ score }){
 // ── one row ─────────────────────────────────────────────────────────────
 function TokenRow({ t, rank, last, onOpen }){
   const up=Number.isFinite(t.pct)?t.pct>=0:true;
-  const isImg=typeof t.ico==='string'&&/^https?:\/\//.test(t.ico);
+  const img=typeof t.icon==='string'&&/^https?:\/\//.test(t.icon)?t.icon:null;
+  const grad=t.route==='stock'?'linear-gradient(135deg,#2f6bff,#1e49c9)':t.route==='jupiter'?'linear-gradient(135deg,#7c5cff,#5a3ed1)':'linear-gradient(135deg,#f5921b,#d4760a)';
   return (
     <button onClick={onOpen} style={{display:'flex',alignItems:'center',gap:9,padding:'11px 12px',width:'100%',background:'transparent',border:'none',borderBottom:last?'none':`1px solid ${C.hairline}`,cursor:'pointer',fontFamily:'inherit',textAlign:'left'}}>
-      <div style={{position:'relative',width:36,height:36,borderRadius:11,flex:'0 0 auto',display:'grid',placeItems:'center',color:'#fff',fontWeight:800,fontSize:14,background:t.grad,backgroundSize:'cover',backgroundPosition:'center',...(isImg?{backgroundImage:`url(${t.ico})`}:{})}}>
-        {!isImg?(t.ico||'?'):''}
+      <div style={{position:'relative',width:36,height:36,borderRadius:11,flex:'0 0 auto',display:'grid',placeItems:'center',color:'#fff',fontWeight:800,fontSize:14,overflow:'hidden',background:grad,backgroundSize:'cover',backgroundPosition:'center',...(img?{backgroundImage:`url(${img})`}:{})}}>
+        {!img?(t.emoji||'?'):''}
         {rank!=null && <div style={{position:'absolute',top:-5,left:-5,width:16,height:16,borderRadius:6,background:'#0b0b0c',color:'#fff',fontFamily:MONO,fontSize:8,fontWeight:700,display:'grid',placeItems:'center'}}>{rank}</div>}
       </div>
       <div style={{minWidth:0,flex:1}}>
@@ -335,7 +337,9 @@ function DiscoverInner({ onSwitchTab, onOpenToken, onConnectWallet }){
   const [whales,setWhales]=useState([]);
   const [filter,setFilter]=useState('all');
   const [sort,setSort]=useState('score');
+  const [feedIcons,setFeedIcons]=useState({});   // backfilled logos, keyed by mint
   const fetched=useRef({});
+  const iconFetched=useRef({});
 
   // sparkline loader (throttled — only for rendered rows). No pool hint passed:
   // matches LiveTokenFeeds (the home feed), so the series can't be pulled from an
@@ -378,6 +382,25 @@ function DiscoverInner({ onSwitchTab, onOpenToken, onConnectWallet }){
     return ()=>{ dead=true; clearInterval(id); };
   },[]);
 
+  // Backfill logos for feed tokens that ship without one (fresh pump.fun
+  // launches especially). Batch the missing mints through /api/jupiter/tokens/search
+  // (same source the app uses for xStock icons). Runs once per mint.
+  useEffect(()=>{
+    const need=[...pumpToks,...jupToks]
+      .filter(t=>t&&t.mint&&!(typeof t.icon==='string'&&/^https?:\/\//.test(t.icon))&&!iconFetched.current[t.mint])
+      .map(t=>t.mint);
+    if(!need.length) return;
+    let dead=false;
+    need.forEach(m=>{ iconFetched.current[m]=true; });
+    (async()=>{
+      for(let i=0;i<need.length && !dead;i+=50){
+        const got=await fetchIcons(need.slice(i,i+50)).catch(()=>({}));
+        if(!dead && got && Object.keys(got).length) setFeedIcons(prev=>({...prev,...got}));
+      }
+    })();
+    return ()=>{ dead=true; };
+  },[pumpToks,jupToks]);
+
   // xStocks — uses only the Stocks.jsx exports App.js already imports, so it
   // can't call an undefined function in the live bundle. Price from
   // fetchBrandPrices ({mint: price}); 24h direction comes from the '1M' series
@@ -388,7 +411,7 @@ function DiscoverInner({ onSwitchTab, onOpenToken, onConnectWallet }){
     let dead=false;
     const picks=BRANDS.slice(0,12);
     const mints=picks.map(b=>b.mint);
-    fetchStockIcons(mints).then(ic=>{ if(!dead) setStockIcons(ic||{}); }).catch(()=>{});
+    fetchIcons(mints).then(ic=>{ if(!dead) setStockIcons(ic||{}); }).catch(()=>{});
     const load=async()=>{
       const prices=await fetchBrandPrices(mints).catch(()=>({}));
       if(dead) return;
@@ -420,21 +443,23 @@ function DiscoverInner({ onSwitchTab, onOpenToken, onConnectWallet }){
     return ()=>{ dead=true; clearInterval(id); };
   },[]);
 
-  // merge → score → decorate. Stocks score high on safety, momentum from the
-  // '1M' series direction; their logos come from the inline icon fetch.
+  // merge → score → decorate. Icon priority: feed-provided URL → backfilled
+  // (fetchIcons) → stock icons. Stocks score high on safety, momentum from the
+  // '1M' series direction.
   const all=useMemo(()=>{
     const merged=uniqMint([...pumpToks,...jupToks,...stockToks]);
     return merged.map(t=>{
       const cs=pctFromSeries(series[t.mint]);
       const pct=Number.isFinite(cs)?cs:(Number.isFinite(t.change)?t.change:0);
-      const icon=t.route==='stock'?(stockIcons[t.mint]||t.icon):t.icon;
+      const feedUrl=(typeof t.icon==='string'&&/^https?:\/\//.test(t.icon))?t.icon:null;
+      const icon=feedUrl || feedIcons[t.mint] || (t.route==='stock'?stockIcons[t.mint]:null) || null;
       const withPct={...t,icon,pct};
       const sig=t.kind==='stock'
         ? {mom:clamp(50+clamp(pct,-15,15)*1.2,20,90),liq:92,hold:80,safe:95}
         : signalsFor(withPct);
       return {...withPct, sig, score:scoreOf(sig), pts:series[t.mint]};
     });
-  },[pumpToks,jupToks,stockToks,stockIcons,series]);
+  },[pumpToks,jupToks,stockToks,stockIcons,feedIcons,series]);
 
   // filter + sort
   const view=useMemo(()=>{
@@ -479,8 +504,24 @@ function DiscoverInner({ onSwitchTab, onOpenToken, onConnectWallet }){
       tab: clean.route==='stock' ? 'markets' : clean.route==='jupiter' ? 'wonderland' : 'launchradar',
     };
     if (payload.route==='pump') payload.pool = null;
+    if (typeof onOpenToken !== 'function') {
+      paintDebug(
+        'Discover: onOpenToken prop is missing',
+        'App.js is rendering <Discover/> without a valid onOpenToken.\n' +
+        'Fix the render line to:  <Discover onSwitchTab={switchTab} onOpenToken={openToken} onConnectWallet={openWallet} />\n\n' +
+        'Received onOpenToken = ' + typeof onOpenToken,
+        null, null,
+      );
+      return;
+    }
     try { return onOpenToken(payload); }
-    catch (e) { paintDebug('onOpenToken threw', e && (e.message||String(e)), e && e.stack, null); }
+    catch (e) {
+      paintDebug(
+        'openToken threw inside App (not Discover)',
+        (e && (e.message||String(e))) + '\n\nThis error is inside App.js openToken — check that openToken and setSheetToken/openStockTrade exist in AppInner.',
+        e && e.stack, null,
+      );
+    }
   };
 
   const counts=useMemo(()=>({
