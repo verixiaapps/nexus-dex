@@ -265,23 +265,28 @@ a{color:inherit;text-decoration:none}
 /* ---- STICKY SWAP CTA ---- */
 .nx-sticky-cta{position:fixed;left:50%;bottom:14px;transform:translate(-50%,160%);
   z-index:60;width:calc(100% - 26px);max-width:454px;
-  display:flex;align-items:center;justify-content:space-between;gap:12px;
-  padding:13px 16px;border-radius:16px;
-  background:linear-gradient(135deg,rgba(25,210,122,.96),rgba(20,170,150,.96));
-  border:1px solid rgba(255,255,255,.28);
-  box-shadow:0 12px 34px rgba(0,0,0,.5),0 0 22px rgba(25,210,122,.34);
-  color:#03281a;font-weight:800;opacity:0;pointer-events:none;
-  transition:transform .32s cubic-bezier(.16,1,.3,1),opacity .32s ease}
+  display:flex;align-items:center;gap:11px;padding:9px 11px 9px 10px;border-radius:14px;
+  background:linear-gradient(180deg,rgba(46,36,82,.9),rgba(18,13,40,.92));
+  border:1px solid var(--line);border-top:1px solid rgba(255,255,255,.2);
+  backdrop-filter:blur(12px);box-shadow:0 16px 42px rgba(0,0,0,.55);
+  opacity:0;pointer-events:none;
+  transition:transform .32s cubic-bezier(.16,1,.3,1),opacity .32s ease,border-color .18s ease}
 .nx-sticky-cta.show{transform:translate(-50%,0);opacity:1;pointer-events:auto}
-.nx-sticky-l{display:inline-flex;align-items:center;gap:8px;font-size:13.5px}
-.nx-sticky-l b{color:#03281a}
-.nx-sticky-dot{width:8px;height:8px;border-radius:50%;background:#03281a;box-shadow:0 0 0 3px rgba(3,40,26,.25);animation:nxpulse 1.8s ease-in-out infinite}
-.nx-sticky-r{font-size:14px;white-space:nowrap}
+.nx-sticky-cta:hover{border-color:rgba(139,92,255,.55)}
+.nx-sticky-ic{width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,#8b5cff,#ff4d9e);box-shadow:0 0 14px rgba(139,92,255,.42)}
+.nx-sticky-ic svg{width:16px;height:16px;display:block}
+.nx-sticky-tx{display:flex;flex-direction:column;min-width:0;flex:1}
+.nx-sticky-tx b{font-size:13px;font-weight:700;color:#fff;line-height:1.2}
+.nx-sticky-tx span{font-size:10.5px;color:var(--dim);margin-top:2px;font-family:'JetBrains Mono',monospace;display:flex;align-items:center;gap:5px}
+.nx-sticky-tx span .d{width:5px;height:5px;border-radius:50%;background:var(--g);box-shadow:0 0 7px var(--g);animation:nxpulse 1.8s ease-in-out infinite}
+.nx-sticky-go{flex:none;display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:800;color:#03281a;
+  background:linear-gradient(135deg,#6df2a8,#19d27a);border-radius:20px;padding:6px 12px;box-shadow:0 0 12px rgba(25,210,122,.3)}
 @keyframes nxpulse{0%,100%{opacity:1}50%{opacity:.4}}
 @media (prefers-reduced-motion:reduce){
   .nx-sticky-cta{transition:opacity .2s ease}
   .nx-sticky-cta.show{transform:translate(-50%,0)}
-  .nx-sticky-dot{animation:none}
+  .nx-sticky-tx span .d{animation:none}
 }
 
 /* ===== SWAP WIDGET STYLES (ported from working template) ===== */
@@ -496,6 +501,20 @@ main{max-width:540px;margin:0 auto;background:#fff;
 .nx-connect{border:none;background:var(--blue);color:#fff;font-family:'Space Grotesk',sans-serif;
   font-weight:600;font-size:13px;padding:9px 16px;border-radius:9px;cursor:pointer}
 .nx-connect:hover{background:#2457d6}
+.nx-applink{display:flex;align-items:center;gap:11px;margin:2px 0 4px;padding:9px 11px 9px 10px;border-radius:13px;
+  background:linear-gradient(180deg,rgba(46,36,82,.72),rgba(18,13,40,.72));
+  border:1px solid var(--line);border-top:1px solid rgba(255,255,255,.20);
+  backdrop-filter:blur(10px);transition:border-color .18s ease,transform .18s ease}
+.nx-applink:hover{border-color:rgba(139,92,255,.55);transform:translateY(-1px)}
+.nx-applink-ic{width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,#8b5cff,#ff4d9e);box-shadow:0 0 14px rgba(139,92,255,.42)}
+.nx-applink-ic svg{width:16px;height:16px;display:block}
+.nx-applink-tx{display:flex;flex-direction:column;min-width:0;flex:1}
+.nx-applink-tx b{font-size:13px;font-weight:700;color:#fff;line-height:1.2}
+.nx-applink-tx span{font-size:10.5px;color:var(--dim);letter-spacing:.02em;margin-top:2px;font-family:'JetBrains Mono',monospace;display:flex;align-items:center;gap:5px}
+.nx-applink-tx span .d{width:5px;height:5px;border-radius:50%;background:var(--g);box-shadow:0 0 7px var(--g)}
+.nx-applink-go{flex:none;display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:800;color:#03281a;
+  background:linear-gradient(135deg,#6df2a8,#19d27a);border-radius:20px;padding:6px 12px;box-shadow:0 0 12px rgba(25,210,122,.3)}
 
 /* Hero text */
 .nx-hero{padding-top:18px}
@@ -702,6 +721,18 @@ main{max-width:540px;margin:0 auto;background:#fff;
       <button class="nx-connect" id="verixia-header-connect" type="button">Connect</button>
     </div>
   </header>
+
+  <!-- APP CTA (native, drives traffic to the full swap app) -->
+  <a class="nx-applink" href="https://swap.verixiaapps.com">
+    <span class="nx-applink-ic">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M17 7H9M17 7v8"/></svg>
+    </span>
+    <span class="nx-applink-tx">
+      <b>Trade any Solana token &mdash; best route</b>
+      <span><span class="d"></span>swap.verixiaapps.com</span>
+    </span>
+    <span class="nx-applink-go">Open &rarr;</span>
+  </a>
 
   <!-- HERO: keyword H1 (compact) -->
   <section class="nx-hero">
@@ -2307,9 +2338,10 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
 
 
 <!-- STICKY SWAP CTA (appears after hero scrolls away) -->
-<a href="#verixia-swap-root" class="nx-sticky-cta" id="nx-sticky-cta" aria-hidden="true">
-  <span class="nx-sticky-l"><span class="nx-sticky-dot"></span>Trade now &middot; <b>No KYC</b></span>
-  <span class="nx-sticky-r">Swap &rarr;</span>
+<a href="https://swap.verixiaapps.com" class="nx-sticky-cta" id="nx-sticky-cta" aria-hidden="true">
+  <span class="nx-sticky-ic"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M17 7H9M17 7v8"/></svg></span>
+  <span class="nx-sticky-tx"><b>Trade any Solana token &mdash; best route</b><span><span class="d"></span>swap.verixiaapps.com</span></span>
+  <span class="nx-sticky-go">Open &rarr;</span>
 </a>
 
 <script>
