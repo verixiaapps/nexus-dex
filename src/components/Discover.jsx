@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { BRANDS, fetchBrandPrices, stkFetchSeries, stkThrottle } from './Stocks.jsx';
+import { BRANDS, fetchBrandPrices, fetchBrandQuotes, stkFetchSeries, stkThrottle } from './Stocks.jsx';
 
 // =====================================================================
 // Discover — the main discovery page. Self-contained by design (mirrors
@@ -497,10 +497,12 @@ function DiscoverInner({ onSwitchTab, onOpenToken, onConnectWallet }){
     return ()=>{ dead=true; };
   },[pumpToks,jupToks]);
 
-  // xStocks — uses only the Stocks.jsx exports App.js already imports, so it
-  // can't call an undefined function in the live bundle. Price from
-  // fetchBrandPrices ({mint: price}); 24h direction comes from the '1M' series
-  // (pctFromSeries, like XStocksStrip); logos via the inline search fetch.
+  // xStocks — prefer fetchBrandQuotes ({ mint: { price, change } }) so every stock
+  // carries a REAL 24h change. That matters for quote-side stocks (e.g. AAPLx,
+  // MSFTx): their DexScreener pair lists the xStock as the quote token, so the
+  // base-only dexSparkPoints returns nothing and Spark falls back to the endpoint
+  // curve — which is only correct-direction if `change` is real. Guarded: if the
+  // bundle lacks fetchBrandQuotes, fall back to fetchBrandPrices (never crashes).
   // Opening one routes to StockTradeModal through App.openToken (matched by mint).
   const [stockIcons,setStockIcons]=useState({});
   useEffect(()=>{
@@ -508,13 +510,16 @@ function DiscoverInner({ onSwitchTab, onOpenToken, onConnectWallet }){
     const picks=BRANDS.slice(0,12);
     const mints=picks.map(b=>b.mint);
     fetchMeta(mints).then(m=>{ if(dead||!m) return; const ic={}; for(const k in m){ if(m[k]&&m[k].icon) ic[k]=m[k].icon; } setStockIcons(ic); }).catch(()=>{});
+    const hasQuotes = typeof fetchBrandQuotes==='function';
     const load=async()=>{
-      const prices=await fetchBrandPrices(mints).catch(()=>({}));
+      const data=await (hasQuotes ? fetchBrandQuotes(mints) : fetchBrandPrices(mints)).catch(()=>({}));
       if(dead) return;
       const list=picks.map(b=>{
-        const price=Number(prices?.[b.mint])||0;
+        const info=data?.[b.mint];
+        const price=Number(hasQuotes ? info?.price : info)||0;
+        const change=hasQuotes && Number.isFinite(info?.change) ? info.change : 0;
         return { mint:b.mint, sym:b.ticker, name:b.name, icon:null, emoji:(b.ticker||'?').charAt(0),
-          price, change:0, mcap:0, liquidity:0, holders:0, volume24h:0,
+          price, change, mcap:0, liquidity:0, holders:0, volume24h:0,
           age:'24/7', ageMs:Infinity, decimals:b.decimals,
           sub:`${b.name} · Tokenized equity · 24/7`, route:'stock', kind:'stock' };
       }).filter(x=>x.price>0);
