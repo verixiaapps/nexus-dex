@@ -1,726 +1,190 @@
 /* ============================================================================
- * Flipsy.jsx — CHANGES MADE DURING REVIEW (read me)
+ * Flipsy.jsx — BRACKETS UI
  * ----------------------------------------------------------------------------
- * LOGIC / SAFETY
- *  - Geo gate now FAILS CLOSED: checkGeo() blocks when location can't be
- *    determined (was fail-open). BLOCKED_COUNTRIES expanded to a sanctioned
- *    baseline (US, IR, KP, SY, CU) — review for gambling jurisdictions with
- *    counsel before public launch. GEO_BYPASS_WALLETS still pass.
- *  - Bet chips clamped to the live min/max (BetModal); default amount clamped too.
- *  - priceDiff guarded with lockPrice > 0 (no full-price flash before lock).
- *  - Removed dead .fp-blob markup + unused keyframes.
- *
- * PAYOUTS (match on-chain compute_payout)
- *  - Payout multiplier now DERIVES from programConfig.feeBps via netMult
- *    (= 1 - feeBps/10000) instead of a hardcoded 25%. If you change feeBps in the
- *    program's initialize, the UI stays correct automatically.
- *  - Thin-pool display is honest: shows ~netMult x (e.g. 0.75x) when a winning side
- *    has no losers, and "—" for a side with no bets yet (see livePayout()).
- *
- * UI
- *  - Rewrote the page to the v7 layout (LiveHero floating panel between equal
- *    UP/DOWN buttons, forecast strip, sentiment bar, streak, results pips,
- *    upcoming grid). Old RoundCard/carousel replaced by LiveHero + UpcomingTile.
- *  - SOL_FORECASTS is PLACEHOLDER data — wire it to a live backend feed, or set
- *    it to [] to hide the forecast strip.
- *  - NOTE: verify on-device against the live useFlipsy hook (this was reviewed
- *    statically; React wasn't run here).
+ * Consumes the bracket version of useFlipsy:
+ *  - Live round is WATCH-ONLY (betting locks 60s before close). Shows your locked
+ *    pick, the live move, and each bracket's live payout.
+ *  - Upcoming rounds are bettable: four bracket buttons, each showing its LIVE
+ *    payout multiplier computed from that round's pools (updates every poll).
+ *  - Per-bracket payout = totalPot / bracketPool, minus 5% on profit. Shown as an
+ *    estimate ("~X×") because it moves as people bet, and "—" when a bracket is empty.
+ *  - Old binary (heads/tails) layout + dead fp-* CSS removed.
  * ==========================================================================*/
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useFlipsy } from '../hooks/useFlipsy';
-   
+
 // ============================================================
-// INLINE CSS — Wonderland with Solana-tinted accents · injected once
+// INLINE CSS
 // ============================================================
 const FLIPSY_CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap');
 
-.fp-page{
-  --ink:#2a2342; --ink-2:#6b6588; --ink-3:#a9a4c0;
-  --pink:#ff5d7e; --mint:#13c98c; --lav:#6d4aff; --peach:#ffb13d;
-  --sky:#6d4aff; --gold:#ffb13d;
-  --sol-mint:#13c98c; --sol-mag:#ff5d7e; --sol-cyan:#6d4aff; --sol-purple:#6d4aff;
-  --green:#13c98c; --red:#ff5d7e;
-  --up:#13c98c; --upd:#0fae78; --down:#ff5d7e; --downd:#f23d63; --vio:#6d4aff; --viod:#5a37e6;
-  --glass:#ffffff; --glass-strong:#faf9ff;
-  --border:#e7e3f5;
-  --hairline:#efecfa;
-
-  position:relative;min-height:100dvh;width:100%;
-  padding-bottom:calc(env(safe-area-inset-bottom) + 60px);overflow-x:hidden;
-  color:var(--ink);
-  font-family:'Space Grotesk',-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",system-ui,sans-serif;
+.fl-page{
+  --ink:#2a2342;--ink-2:#6b6588;--ink-3:#a9a4c0;
+  --vio:#6d4aff;--viod:#5a37e6;--up:#13c98c;--upd:#0fae78;--down:#ff5d7e;--downd:#f23d63;--gold:#ffb13d;
+  min-height:100dvh;color:var(--ink);
+  font-family:'Space Grotesk',-apple-system,system-ui,sans-serif;
   background:linear-gradient(170deg,#f1edfc 0%,#eaf4f1 52%,#f3eefb 100%);
-  border-radius:0;
+  padding-bottom:calc(env(safe-area-inset-bottom) + 40px);overflow-x:hidden;
 }
-.fp-page *{box-sizing:border-box}
+.fl-page *{box-sizing:border-box}
+.fl-inner{max-width:480px;margin:0 auto}
+.fl-mono{font-family:'JetBrains Mono',monospace}
+@keyframes fl-pl{50%{opacity:.4}}
 
-@keyframes fp-pulse{0%,100%{opacity:1}50%{opacity:0.4}}
-@keyframes fp-spin{to{transform:rotate(360deg)}}
-@keyframes fp-shimmer{0%{background-position:0% 50%}100%{background-position:200% 50%}}
-@keyframes fp-card-enter{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
-@keyframes fp-live-glow{0%,100%{opacity:0.45}50%{opacity:0.7}}
-@keyframes fp-price-tick{from{transform:translateY(2px);opacity:0}to{transform:translateY(0);opacity:1}}
-@keyframes fp-pop{0%{transform:scale(0.92);opacity:0}60%{transform:scale(1.04)}100%{transform:scale(1);opacity:1}}
-@keyframes fp-banner-slide{from{transform:translateY(-100%);opacity:0}to{transform:translateY(0);opacity:1}}
-@keyframes fp-modal-up{from{transform:translateX(-50%) translateY(100%);opacity:0}to{transform:translateX(-50%) translateY(0);opacity:1}}
-@keyframes fp-timer-urgent{0%,100%{transform:scale(1)}50%{transform:scale(1.04)}}
+/* header */
+.fl-hd{display:flex;align-items:center;justify-content:space-between;padding:16px 16px 8px}
+.fl-br{display:flex;align-items:center;gap:10px}
+.fl-mascot{width:40px;height:40px;border-radius:50%;background:radial-gradient(circle at 32% 28%,#8b6bff,#6d4aff 60%,#5a37e6);display:grid;place-items:center;font-weight:800;font-size:19px;color:#fff;box-shadow:0 5px 16px rgba(109,74,255,.42),inset 0 0 0 2px rgba(255,255,255,.25)}
+.fl-bt{font-size:22px;font-weight:800;letter-spacing:-.02em;line-height:1;color:#36284f}
+.fl-bs{font-family:'JetBrains Mono',monospace;font-size:8px;letter-spacing:.14em;text-transform:uppercase;color:#8a85a6;margin-top:3px}
+.fl-hr{display:flex;align-items:center;gap:8px}
+.fl-streak{display:flex;align-items:center;gap:4px;background:linear-gradient(135deg,#ffc861,#ff9d3c);border-radius:999px;padding:7px 11px;font-family:'JetBrains Mono',monospace;font-weight:700;font-size:13px;color:#5a3500}
+.fl-bal{display:flex;flex-direction:column;align-items:flex-end;background:#fff;border-radius:14px;padding:6px 12px;box-shadow:0 4px 12px rgba(80,60,160,.1)}
+.fl-bal.connect{cursor:pointer;background:linear-gradient(135deg,#6d4aff,#8b6bff)}
+.fl-bal.connect .fl-bal-v{color:#fff}
+.fl-bal.warn{box-shadow:0 0 0 1.5px var(--down) inset,0 4px 12px rgba(80,60,160,.1)}
+.fl-bal-l{font-family:'JetBrains Mono',monospace;font-size:7px;letter-spacing:.12em;color:var(--ink-3)}
+.fl-bal-v{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:var(--vio)}
+.fl-bal-v.fail{color:var(--down)}
 
+.fl-tag{margin:4px 16px 2px;font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.05em;color:#8a85a6;display:flex;align-items:center;gap:7px}
+.fl-tag .d{width:5px;height:5px;border-radius:50%;background:var(--up);box-shadow:0 0 7px var(--up)}
 
-/* CLAIM BANNER */
-.fp-claim-banner{
-  position:sticky;top:0;z-index:50;
-  padding:11px 16px;
-  display:flex;align-items:center;justify-content:center;gap:8px;
-  background:#0a0a0a;
-  color:#fff;
-  font-family:inherit;font-size:11px;font-weight:700;letter-spacing:.8px;
-  cursor:pointer;
-  box-shadow:none;
-  animation:fp-banner-slide .4s cubic-bezier(.16,1,.3,1);
-}
-.fp-claim-banner:active{opacity:.92}
-.fp-claim-banner-count{
-  background:rgba(255,255,255,.2);border-radius:999px;padding:2px 9px;font-size:10px;font-weight:800;
-}
+.fl-prow{display:flex;align-items:center;gap:9px;padding:8px 16px 4px}
+.fl-ppill{display:flex;align-items:center;gap:10px;background:#fff;border-radius:999px;padding:6px 16px 6px 6px;box-shadow:0 5px 16px rgba(80,60,160,.12)}
+.fl-ptok{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#6d4aff,#13c98c);display:grid;place-items:center;color:#fff;font-weight:700;font-size:13px}
+.fl-pv{font-family:'JetBrains Mono',monospace;font-size:17px;font-weight:700;line-height:1}
+.fl-pl{font-family:'JetBrains Mono',monospace;font-size:8px;letter-spacing:.1em;color:var(--ink-3);margin-top:2px}
+.fl-pips{display:flex;gap:3px;margin-left:auto;align-items:center}
+.fl-pip{width:9px;height:9px;border-radius:50%}
+.fl-pip.u{background:var(--up);box-shadow:0 2px 5px rgba(19,201,140,.5)}
+.fl-pip.d{background:var(--down);opacity:.55}
+.fl-pip.t{background:var(--ink-3);opacity:.5}
 
-/* TOP FLASH */
-.fp-flash-top{margin:8px 18px 0;position:relative;z-index:10}
-.fp-flash{
-  padding:10px 14px;border-radius:12px;
-  font-size:11px;font-weight:700;text-align:center;letter-spacing:0.3px;
-  font-family:inherit;
-  animation:fp-pop .35s cubic-bezier(.34,1.56,.64,1);
-}
-.fp-flash.error{background:rgba(224,54,79,.08);color:var(--red);border:1px solid rgba(224,54,79,.3)}
-.fp-flash.success{background:rgba(22,163,74,.1);color:var(--green);border:1px solid rgba(22,163,74,.35)}
+.fl-sec{display:flex;align-items:baseline;justify-content:space-between;padding:14px 18px 8px}
+.fl-sec h3{font-size:16px;font-weight:800;color:#36284f}
+.fl-sec em{font-style:normal;font-family:'JetBrains Mono',monospace;color:var(--vio)}
+.fl-sec .r{font-family:'JetBrains Mono',monospace;font-size:9px;color:#8a85a6}
 
-/* HEADER */
-.fp-page-inner{position:relative;z-index:5}
+/* LIVE round — watch only (dark) */
+.fl-hero{margin:0 15px;border-radius:26px;padding:14px;position:relative;overflow:hidden;background:radial-gradient(120% 90% at 50% -10%,#2c2150,#1a1330 70%);box-shadow:0 22px 50px rgba(40,25,90,.4),inset 0 0 0 1px rgba(255,255,255,.06);color:#e9e4ff}
+.fl-htop{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.fl-live{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:800;color:#c9bcff;letter-spacing:.04em}
+.fl-live .d{width:7px;height:7px;border-radius:50%;background:var(--up);box-shadow:0 0 9px var(--up);animation:fl-pl 1.3s infinite}
+.fl-live .ep{font-family:'JetBrains Mono',monospace;font-size:11px;color:#8579b8;margin-left:2px}
+.fl-ring{position:relative;width:54px;height:54px}
+.fl-ring svg{transform:rotate(-90deg)}
+.fl-ring .tt{position:absolute;inset:0;display:grid;place-items:center;font-family:'JetBrains Mono',monospace;font-weight:700;font-size:13px;color:#fff}
+.fl-ring .tl{font-size:6.5px;letter-spacing:.1em;color:#8579b8;margin-top:14px}
+.fl-locked{display:inline-flex;align-items:center;gap:5px;font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;color:#b7a9ee;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);border-radius:999px;padding:4px 9px;margin-bottom:10px}
+.fl-prow2{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:12px}
+.fl-price{font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;line-height:1}
+.fl-lockpx{font-family:'JetBrains Mono',monospace;font-size:9px;color:#8579b8;margin-top:4px}
+.fl-move{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;border-radius:999px;padding:6px 11px}
+/* bracket scale (used on live round) */
+.fl-scale{display:flex;gap:4px}
+.fl-seg{flex:1;text-align:center;padding:8px 4px;border-radius:11px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.07)}
+.fl-seg .sr{font-family:'JetBrains Mono',monospace;font-size:8.5px;color:#a99ee0;font-weight:700}
+.fl-seg .sx{font-family:'JetBrains Mono',monospace;font-size:11px;color:#fff;font-weight:700;margin-top:3px}
+.fl-seg .sp{font-family:'JetBrains Mono',monospace;font-size:7.5px;color:#7a6fae;margin-top:2px}
+.fl-seg.here{background:linear-gradient(135deg,rgba(19,201,140,.3),rgba(19,201,140,.12));border-color:rgba(95,240,184,.5)}
+.fl-seg.here .sr{color:#5ff0b8}
+.fl-seg.mine{outline:2px solid #8b6bff;outline-offset:1px}
+.fl-yours{font-family:'JetBrains Mono',monospace;font-size:9.5px;color:#c9bcff;text-align:center;margin-top:10px}
+.fl-yours b{color:#fff}
 
-.fp-header{
-  display:flex;align-items:center;justify-content:space-between;gap:10px;
-  padding:14px 18px 12px;max-width:520px;margin:0 auto;
-  border-bottom:1px solid var(--hairline);
-}
-.fp-brand{display:flex;align-items:center;gap:11px}
-.fp-mascot{
-  width:38px;height:38px;border-radius:10px;
-  background:#0a0a0a;
-  display:grid;place-items:center;
-  font-family:inherit;font-style:normal;font-size:19px;font-weight:800;color:#fff;
-  text-shadow:none;box-shadow:none;animation:none;
-  flex-shrink:0;
-}
-.fp-brand-text .fp-title{
-  font-family:inherit;font-style:normal;font-size:20px;font-weight:700;line-height:1;letter-spacing:-.02em;
-  background:none;-webkit-background-clip:initial;background-clip:initial;color:var(--ink);
-  animation:none;
-}
-.fp-brand-text .fp-subtitle{
-  margin-top:3px;font-family:inherit;font-size:9px;font-weight:700;
-  color:var(--ink-3);letter-spacing:1.1px;text-transform:uppercase;
-}
+/* upcoming feed */
+.fl-feed{padding:0 15px;display:flex;flex-direction:column;gap:11px}
+.fl-hint{font-family:'JetBrains Mono',monospace;font-size:9px;color:#8a85a6;text-align:center;padding:0 24px 4px;line-height:1.5}
+.fl-fc{background:#fff;border-radius:20px;padding:12px 13px;box-shadow:0 6px 16px rgba(80,55,160,.1);border-left:3px solid transparent}
+.fl-fc.next{border-left-color:var(--vio);box-shadow:0 8px 20px rgba(109,74,255,.16)}
+.fl-fctop{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.fl-fcl{display:flex;align-items:center;gap:8px}
+.fl-fcep{font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;color:var(--vio)}
+.fl-badge{font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:700;letter-spacing:.08em;color:#fff;background:linear-gradient(135deg,#6d4aff,#8b6bff);border-radius:999px;padding:3px 8px}
+.fl-badge.soon{background:#efe9fb;color:#8579b8}
+.fl-when{font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;color:var(--ink-2)}
+.fl-when .k{font-size:8px;color:var(--ink-3);letter-spacing:.08em;margin-right:4px}
+.fl-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.fl-bk{border:none;border-radius:13px;padding:9px 10px;cursor:pointer;color:#fff;font-family:'Space Grotesk',sans-serif;display:flex;align-items:center;justify-content:space-between;gap:6px;text-align:left}
+.fl-bk:active{transform:translateY(1px)}
+.fl-bk .bl{display:flex;flex-direction:column;line-height:1.1}
+.fl-bk .ba{font-size:12px;font-weight:800}
+.fl-bk .bp{font-family:'JetBrains Mono',monospace;font-size:8px;opacity:.9;margin-top:2px}
+.fl-bk .bm{font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:700}
+.fl-bk.u{background:linear-gradient(135deg,#3fdda6,#17bd86)}
+.fl-bk.uu{background:linear-gradient(135deg,#12b884,#0a8f66);box-shadow:0 0 0 1px rgba(19,201,140,.4),0 6px 16px rgba(19,201,140,.35)}
+.fl-bk.d{background:linear-gradient(135deg,#ff8aa2,#f2566f)}
+.fl-bk.dd{background:linear-gradient(135deg,#f2456a,#cf2c50);box-shadow:0 0 0 1px rgba(242,69,106,.4),0 6px 16px rgba(242,69,106,.35)}
+.fl-fcfoot{font-family:'JetBrains Mono',monospace;font-size:8.5px;color:var(--ink-3);text-align:center;margin-top:8px}
+.fl-fcfoot b{color:var(--ink-2)}
 
-.fp-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
-.fp-rounds-btn{
-  display:flex;align-items:center;gap:6px;
-  padding:8px 13px;border-radius:999px;
-  background:var(--glass-strong);backdrop-filter:none;
-  border:1px solid var(--border);color:var(--ink);
-  font-family:inherit;font-size:11px;font-weight:700;letter-spacing:0.3px;
-  cursor:pointer;transition:all .15s;
-}
-.fp-rounds-btn:hover{border-color:var(--ink);background:#f0f0f1}
-.fp-rounds-btn.fp-has-claim{
-  background:#0a0a0a;border-color:#0a0a0a;color:#fff;box-shadow:none;
-}
-.fp-rounds-btn-count{
-  background:#0a0a0a;color:#fff;border-radius:50%;
-  width:18px;height:18px;display:grid;place-items:center;
-  font-size:10px;font-weight:800;
-}
-.fp-rounds-btn.fp-has-claim .fp-rounds-btn-count{background:#fff;color:#0a0a0a}
-.fp-bal{
-  display:flex;align-items:center;gap:6px;
-  padding:8px 12px;border-radius:999px;
-  background:var(--glass-strong);backdrop-filter:none;
-  border:1px solid var(--border);
-  cursor:default;
-}
-.fp-bal-l{font-family:ui-monospace,Menlo,monospace;font-size:9px;font-weight:700;color:var(--ink-3);letter-spacing:1px}
-.fp-bal-v{font-family:ui-monospace,Menlo,monospace;font-size:12px;font-weight:700;color:var(--green);font-variant-numeric:tabular-nums}
-.fp-bal-v.fp-bal-loading{color:var(--ink-3)}
-.fp-bal-v.fp-bal-fail{color:var(--red);font-family:inherit;font-size:10px;letter-spacing:0.4px;font-weight:800}
-.fp-bal.fp-bal-warn{border-color:rgba(224,54,79,.35)}
-.fp-bal-connect{cursor:pointer}
-.fp-bal-connect .fp-bal-v{color:var(--ink);font-family:inherit;font-size:11px;font-weight:800;letter-spacing:0.4px}
+/* empty / loading */
+.fl-empty{background:#fff;border-radius:24px;margin:0 15px;padding:28px 18px;text-align:center;box-shadow:0 10px 26px rgba(80,55,160,.12);font-family:'JetBrains Mono',monospace;color:var(--ink-2);font-size:12px}
+.fl-empty .i{font-size:28px;margin-bottom:8px}
+.fl-empty .t{font-weight:700;color:var(--ink);font-size:14px;margin-bottom:4px;font-family:'Space Grotesk',sans-serif}
+.fl-empty.err .t{color:var(--down)}
 
-/* ROUNDS LABEL */
-.fp-rounds-head{
-  padding:14px 20px 8px;max-width:520px;margin:0 auto;
-  display:flex;align-items:baseline;justify-content:space-between;gap:10px;
-}
-.fp-rounds-title{
-  font-family:inherit;font-size:19px;line-height:1;color:var(--ink);letter-spacing:-.02em;
-  margin:0;font-weight:700;
-}
-.fp-rounds-title em{
-  font-style:normal;background:none;-webkit-background-clip:initial;background-clip:initial;color:var(--ink-2);
-}
-.fp-rounds-sub{
-  font-family:ui-monospace,Menlo,monospace;font-size:9px;font-weight:700;color:var(--ink-3);
-  letter-spacing:1.1px;text-transform:uppercase;
-}
-.fp-rounds-sub .arrow{color:var(--ink-3)}
+/* flash */
+.fl-flashwrap{position:sticky;top:8px;z-index:60;display:flex;justify-content:center;pointer-events:none;padding:6px 14px 0}
+.fl-flash{pointer-events:auto;padding:10px 16px;border-radius:14px;font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#fff;box-shadow:0 10px 26px rgba(0,0,0,.16)}
+.fl-flash.success{background:linear-gradient(135deg,#1ad99a,#12b884)}
+.fl-flash.error{background:linear-gradient(135deg,#ff6f8d,#f2456a)}
 
-/* CAROUSEL */
-.fp-carousel{
-  display:flex;gap:12px;
-  padding:10px 18px 22px;
-  overflow-x:auto;overflow-y:visible;
-  scroll-snap-type:x proximity;
-  touch-action:pan-x pan-y;
-  overscroll-behavior-x:contain;
-  scrollbar-width:none;-ms-overflow-style:none;
-  -webkit-overflow-scrolling:touch;
-}
-.fp-carousel::-webkit-scrollbar{display:none}
+/* tabs / footer */
+.fl-tabs{display:flex;gap:8px;padding:20px 15px 4px}
+.fl-tab{flex:1;text-align:center;padding:12px;border-radius:16px;font-size:11px;font-weight:700;font-family:'JetBrains Mono',monospace;background:rgba(255,255,255,.7);color:#8a85a6;box-shadow:0 5px 14px rgba(80,55,160,.08);cursor:pointer}
+.fl-tab.on{background:linear-gradient(135deg,#6d4aff,#8b6bff);color:#fff}
+.fl-tab.disabled{opacity:.55;cursor:default}
+.fl-soon{font-size:7px;letter-spacing:.06em;background:var(--ink-3);color:#fff;border-radius:999px;padding:1px 5px;margin-left:5px}
+.fl-foot{text-align:center;font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--ink-3);padding:16px 24px 8px;line-height:1.5}
 
-/* CARD */
-.fp-card{
-  flex-shrink:0;width:min(260px,76vw);min-height:420px;
-  scroll-snap-align:center;
-  background:#fff;backdrop-filter:none;
-  border:1px solid var(--hairline);border-radius:18px;
-  padding:13px;
-  display:flex;flex-direction:column;
-  box-shadow:0 1px 3px rgba(10,10,10,.05);
-  position:relative;overflow:hidden;
-  animation:fp-card-enter .45s cubic-bezier(.2,1,.4,1) backwards;
-}
-.fp-card-previous{opacity:0.7}
-.fp-card-later{opacity:0.78}
-.fp-card-loading{width:100%;max-width:320px;margin:0 auto;min-height:200px;justify-content:center;align-items:center;text-align:center;color:var(--ink-2);font-size:13px;font-weight:500;padding:24px}
-.fp-card-empty{width:100%;max-width:340px;margin:0 auto;min-height:200px;justify-content:center;align-items:center;text-align:center;padding:24px}
-.fp-card-empty-icon{font-size:28px;margin-bottom:10px;opacity:.7}
-.fp-card-empty-title{font-family:inherit;font-style:normal;font-weight:700;font-size:18px;color:var(--ink);margin-bottom:6px;line-height:1.2}
-.fp-card-empty-msg{font-size:12px;color:var(--ink-2);font-weight:500;line-height:1.5;word-break:break-word}
-.fp-card-empty.err{border-color:rgba(224,54,79,.35);background:rgba(224,54,79,.04)}
-.fp-card-empty.err .fp-card-empty-msg{color:var(--red);font-family:ui-monospace,Menlo,monospace;font-size:10px;letter-spacing:0.3px}
+/* bet sheet + rounds sheet */
+.fl-backdrop{position:fixed;inset:0;background:rgba(20,12,45,.5);z-index:200}
+.fl-sheet{position:fixed;left:50%;bottom:0;transform:translateX(-50%);width:100%;max-width:480px;z-index:210;background:#fff;border-radius:24px 24px 0 0;padding:16px 16px calc(env(safe-area-inset-bottom) + 18px);box-shadow:0 -12px 40px rgba(40,25,90,.3)}
+.fl-grab{width:40px;height:4px;border-radius:999px;background:#e3ddf2;margin:0 auto 14px}
+.fl-shhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.fl-shtitle{font-size:16px;font-weight:800;color:#36284f}
+.fl-close{border:none;background:#f2eefb;color:#6b6588;width:30px;height:30px;border-radius:50%;font-size:16px;cursor:pointer}
+.fl-pickpill{display:inline-flex;align-items:center;gap:7px;border-radius:14px;padding:9px 13px;color:#fff;font-weight:800;font-size:14px;margin-bottom:12px}
+.fl-pickpill .rng{font-family:'JetBrains Mono',monospace;font-size:10px;opacity:.9;font-weight:700}
+.fl-pickpill.u{background:linear-gradient(135deg,#3fdda6,#17bd86)}
+.fl-pickpill.uu{background:linear-gradient(135deg,#12b884,#0a8f66)}
+.fl-pickpill.d{background:linear-gradient(135deg,#ff8aa2,#f2566f)}
+.fl-pickpill.dd{background:linear-gradient(135deg,#f2456a,#cf2c50)}
+.fl-amt{display:flex;align-items:center;gap:8px;background:#f7f5fd;border-radius:16px;padding:14px 16px;margin-bottom:10px}
+.fl-amt .dollar{font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;color:var(--ink-3)}
+.fl-amt input{border:none;background:none;outline:none;font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;color:var(--ink);width:100%}
+.fl-chips{display:flex;gap:7px;margin-bottom:12px}
+.fl-chip{flex:1;border:1px solid #e7e3f5;background:#fff;border-radius:12px;padding:9px;font-family:'JetBrains Mono',monospace;font-weight:700;font-size:12px;color:var(--ink-2);cursor:pointer}
+.fl-chip.on{background:#efe9fb;border-color:#c9bcff;color:var(--vio)}
+.fl-est{display:flex;justify-content:space-between;align-items:center;background:#f2eefb;border-radius:14px;padding:11px 14px;margin-bottom:12px;font-family:'JetBrains Mono',monospace}
+.fl-est .l{font-size:9px;letter-spacing:.1em;color:var(--ink-3)}
+.fl-est .v{font-size:16px;font-weight:700;color:var(--vio)}
+.fl-cta{width:100%;border:none;border-radius:16px;padding:15px;font-size:15px;font-weight:800;color:#fff;font-family:'Space Grotesk',sans-serif;background:linear-gradient(135deg,#6d4aff,#8b6bff);cursor:pointer}
+.fl-cta:disabled{opacity:.5;cursor:default}
+.fl-sherr{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--down);text-align:center;margin-top:9px}
+.fl-shnote{font-family:'JetBrains Mono',monospace;font-size:8.5px;color:var(--ink-3);text-align:center;margin-top:9px;line-height:1.5}
 
-/* LIVE CARD — solid black border instead of glow */
-.fp-card-live{
-  width:min(310px,86vw);min-height:485px;
-  background:#fff;
-  border-color:#0a0a0a;
-  box-shadow:0 6px 20px rgba(10,10,10,.12);
-}
-.fp-card-livering{display:none}
-.fp-card-live > *:not(.fp-card-livering){position:relative;z-index:1}
+/* rounds list rows */
+.fl-rrow{display:flex;align-items:center;justify-content:space-between;padding:12px 4px;border-bottom:1px solid #f0ecf9}
+.fl-rrow .ep{font-family:'JetBrains Mono',monospace;font-weight:700;color:var(--vio);font-size:13px}
+.fl-rrow .st{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--ink-3);margin-top:2px}
+.fl-rrow .claim{border:none;border-radius:12px;padding:8px 13px;font-weight:800;font-size:12px;color:#03281a;background:linear-gradient(135deg,#6df2a8,#19d27a);cursor:pointer}
+.fl-rempty{text-align:center;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink-3);padding:24px}
 
-/* URGENT — last 10s */
-.fp-card-urgent{
-  background:#fff !important;
-  border-color:var(--red) !important;
-  box-shadow:0 6px 20px rgba(224,54,79,.18) !important;
-}
-.fp-card-urgent .fp-card-livering{display:none}
+/* block screen */
+.fl-block{min-height:100dvh;display:grid;place-items:center;padding:24px;background:linear-gradient(170deg,#f1edfc,#eaf4f1);text-align:center}
+.fl-block-card{background:#fff;border-radius:24px;padding:34px 26px;max-width:340px;box-shadow:0 16px 40px rgba(80,55,160,.16)}
+.fl-block-i{font-size:34px;margin-bottom:12px}
+.fl-block-t{font-size:20px;font-weight:800;color:#36284f;margin-bottom:8px}
+.fl-block-t em{font-style:normal;color:var(--vio)}
+.fl-block-m{font-size:13px;color:var(--ink-2);line-height:1.5}
+.fl-block-s{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--ink-3);margin-top:12px}
 
-/* CARD HEAD */
-.fp-card-head{
-  display:flex;align-items:center;justify-content:space-between;
-  margin-bottom:11px;padding:0 2px;
-}
-.fp-card-badge{
-  font-family:ui-monospace,Menlo,monospace;font-size:9px;font-weight:700;
-  padding:4px 9px;border-radius:6px;letter-spacing:0.8px;
-}
-.fp-card-badge.prev{background:var(--hairline);color:var(--ink-3)}
-.fp-card-badge.live{background:#0a0a0a;color:#fff}
-.fp-card-badge.live .d{display:inline-block;width:5px;height:5px;border-radius:50%;background:#16ff8a;margin-right:5px;animation:fp-pulse 1.4s ease-in-out infinite;vertical-align:middle}
-.fp-card-badge.next{background:var(--glass-strong);color:var(--ink-2);border:1px solid var(--border)}
-.fp-card-badge.later{background:var(--hairline);color:var(--ink-3)}
-.fp-card-urgent .fp-card-badge.live{background:var(--red);color:#fff}
-.fp-card-urgent .fp-card-badge.live .d{background:#fff}
-.fp-card-epoch{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--ink-3);font-weight:700;letter-spacing:0.4px}
-
-/* SIDE BUTTONS — UP green / DOWN red */
-.fp-card-side{
-  width:100%;padding:13px 15px;border-radius:13px;
-  border:1.5px solid;font-family:inherit;font-weight:700;
-  display:flex;align-items:center;justify-content:space-between;gap:8px;
-  cursor:pointer;transition:transform .2s;
-}
-.fp-card-side:hover:not(:disabled){transform:translateY(-1px)}
-.fp-card-side:active:not(:disabled){transform:scale(.98)}
-.fp-card-side:disabled{cursor:not-allowed}
-.fp-card-side-icon{font-size:18px;line-height:1;font-weight:900;width:22px;text-align:center}
-.fp-card-side-label{flex:1;text-align:center;font-family:inherit;font-size:13px;font-weight:800;letter-spacing:0.08em}
-.fp-card-side-mult{font-family:ui-monospace,Menlo,monospace;font-style:normal;font-size:15px;font-weight:700;font-variant-numeric:tabular-nums}
-
-.fp-card-long{
-  background:rgba(22,163,74,.07);
-  border-color:rgba(22,163,74,.45);color:var(--green);
-}
-.fp-card-long.active{background:var(--green);border-color:var(--green);color:#fff;box-shadow:none}
-.fp-card-long.won{background:var(--green);border-color:var(--green);color:#fff}
-.fp-card-long.lost{background:rgba(22,163,74,.04);border-color:rgba(22,163,74,.15);color:var(--ink-3)}
-
-.fp-card-short{
-  background:rgba(224,54,79,.06);
-  border-color:rgba(224,54,79,.45);color:var(--red);
-}
-.fp-card-short.active{background:var(--red);border-color:var(--red);color:#fff;box-shadow:none}
-.fp-card-short.won{background:var(--red);border-color:var(--red);color:#fff}
-.fp-card-short.lost{background:rgba(224,54,79,.04);border-color:rgba(224,54,79,.15);color:var(--ink-3)}
-
-/* MIDDLE PANEL */
-.fp-card-mid{
-  margin:9px 0;padding:13px;border-radius:13px;text-align:center;
-  background:var(--glass-strong);border:1px solid var(--hairline);
-  flex:1;display:flex;flex-direction:column;justify-content:center;
-}
-.fp-card-live .fp-card-mid{background:var(--glass-strong);border-color:var(--hairline)}
-.fp-card-urgent .fp-card-mid{background:rgba(224,54,79,.04);border-color:rgba(224,54,79,.2)}
-
-.fp-mid-label{
-  font-family:ui-monospace,Menlo,monospace;font-size:9px;font-weight:700;
-  color:var(--ink-3);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:7px;
-}
-
-/* BIG LIVE PRICE — mono sans instead of serif */
-.fp-mid-price{
-  font-family:ui-monospace,Menlo,monospace;font-style:normal;font-weight:700;
-  font-size:40px;line-height:0.95;letter-spacing:-.03em;color:var(--ink);
-  font-variant-numeric:tabular-nums;
-}
-
-.fp-mid-delta{
-  display:inline-block;margin-top:8px;
-  padding:3px 11px;border-radius:6px;
-  font-family:ui-monospace,Menlo,monospace;font-size:11px;font-weight:700;letter-spacing:0.3px;
-  font-variant-numeric:tabular-nums;
-}
-.fp-mid-delta.up{background:rgba(22,163,74,.12);color:var(--green);border:1px solid rgba(22,163,74,.3)}
-.fp-mid-delta.down{background:rgba(224,54,79,.1);color:var(--red);border:1px solid rgba(224,54,79,.3)}
-
-.fp-mid-divider{height:1px;margin:11px 0;background:var(--hairline)}
-
-.fp-mid-row{
-  display:flex;justify-content:space-between;
-  font-family:ui-monospace,Menlo,monospace;font-size:11px;
-  color:var(--ink-3);margin-top:5px;letter-spacing:0.3px;
-}
-.fp-mid-row-val{color:var(--ink);font-weight:700;font-variant-numeric:tabular-nums}
-.fp-mid-row-val.gold{color:var(--gold)}
-
-.fp-mid-timer{
-  margin-top:13px;
-  font-family:ui-monospace,Menlo,monospace;font-size:28px;font-weight:700;line-height:1;color:var(--ink);
-  font-variant-numeric:tabular-nums;letter-spacing:-.02em;
-}
-.fp-mid-timer.urgent{
-  color:var(--red);font-style:normal;
-  animation:fp-timer-urgent .5s ease-in-out infinite;
-}
-
-.fp-mid-pool{
-  font-family:ui-monospace,Menlo,monospace;font-style:normal;font-weight:700;font-size:34px;line-height:1;letter-spacing:-.025em;
-  background:none;-webkit-background-clip:initial;background-clip:initial;color:var(--ink);
-  font-variant-numeric:tabular-nums;
-}
-
-.fp-mid-payout-preview{
-  font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--ink-2);
-  margin-top:6px;line-height:1.5;
-}
-.fp-mid-payout-preview b{font-weight:700;color:var(--ink)}
-.fp-mid-payout-preview .l{color:var(--green);font-weight:700}
-.fp-mid-payout-preview .s{color:var(--red);font-weight:700}
-
-.fp-mid-starts{
-  margin-top:10px;
-  font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--ink-3);letter-spacing:0.3px;
-}
-.fp-mid-starts b{
-  color:var(--ink);font-family:ui-monospace,Menlo,monospace;font-style:normal;
-  font-size:14px;font-weight:700;font-variant-numeric:tabular-nums;
-}
-
-.fp-mid-later-icon{font-size:32px;margin:14px 0 8px;opacity:0.55}
-
-.fp-mid-outcome{
-  margin-top:8px;display:inline-block;
-  padding:6px 14px;border-radius:8px;
-  font-family:inherit;font-size:11px;font-weight:800;letter-spacing:0.8px;
-}
-.fp-mid-outcome.long{background:rgba(22,163,74,.12);color:var(--green);border:1px solid rgba(22,163,74,.35)}
-.fp-mid-outcome.short{background:rgba(224,54,79,.1);color:var(--red);border:1px solid rgba(224,54,79,.35)}
-.fp-mid-outcome.tie{background:var(--hairline);color:var(--ink-2);border:1px solid var(--border)}
-
-.fp-mid-claim{
-  margin-top:10px;width:100%;padding:11px;border-radius:12px;
-  background:#0a0a0a;
-  border:none;color:#fff;
-  font-family:inherit;font-weight:800;font-size:12px;letter-spacing:0.6px;
-  cursor:pointer;box-shadow:none;
-  transition:opacity .15s;
-}
-.fp-mid-claim:hover{opacity:.9}
-
-/* USER POSITION */
-.fp-card-position{
-  margin-top:9px;padding:8px 14px;border-radius:11px;
-  display:flex;justify-content:space-between;align-items:center;
-  font-family:ui-monospace,Menlo,monospace;font-size:11px;font-weight:700;letter-spacing:0.3px;
-  animation:fp-pop .3s cubic-bezier(.34,1.56,.64,1);
-}
-.fp-card-position-heads{background:rgba(22,163,74,.1);border:1px solid rgba(22,163,74,.35);color:var(--green)}
-.fp-card-position-tails{background:rgba(224,54,79,.08);border:1px solid rgba(224,54,79,.35);color:var(--red)}
-
-/* FOOTER */
-.fp-footer{
-  max-width:520px;margin:14px auto 0;
-  padding:8px 22px;text-align:center;
-  font-family:ui-monospace,Menlo,monospace;font-size:10px;color:var(--ink-3);font-weight:600;
-  letter-spacing:0.2px;
-}
-
-/* BLOCK SCREEN */
-.fp-block-wrap{
-  min-height:70dvh;display:flex;align-items:center;justify-content:center;
-  padding:40px 22px;position:relative;z-index:5;
-}
-.fp-block-card{
-  max-width:440px;width:100%;
-  background:#fff;backdrop-filter:none;
-  border:1px solid var(--hairline);border-radius:20px;
-  padding:36px 28px;text-align:center;
-  box-shadow:0 4px 20px rgba(10,10,10,.06);
-}
-.fp-block-icon{
-  width:56px;height:56px;margin:0 auto 18px;border-radius:16px;
-  background:#0a0a0a;
-  display:grid;place-items:center;color:#fff;font-size:24px;
-  box-shadow:none;
-}
-.fp-block-title{
-  margin:0 0 10px;
-  font-family:inherit;font-size:24px;font-weight:700;color:var(--ink);
-  letter-spacing:-.02em;
-}
-.fp-block-title em{
-  font-style:normal;background:none;-webkit-background-clip:initial;background-clip:initial;color:var(--ink-2);
-}
-.fp-block-msg{margin:0 0 12px;font-size:13px;color:var(--ink-2);line-height:1.6;font-weight:500}
-.fp-block-sub{margin:0;font-size:11px;color:var(--ink-3);font-style:normal}
-
-/* ROUNDS POPUP (sheet) */
-.fp-sheet-backdrop{
-  position:fixed;inset:0;z-index:200;
-  background:rgba(10,10,10,0.35);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);
-}
-.fp-sheet{
-  position:fixed;bottom:0;left:50%;transform:translateX(-50%);
-  width:100%;max-width:520px;z-index:201;
-  max-height:80dvh;display:flex;flex-direction:column;overflow:hidden;
-  background:#fff;
-  border-top:1px solid var(--border);
-  border-radius:22px 22px 0 0;
-  box-shadow:0 -12px 50px rgba(10,10,10,.18);
-  font-family:inherit;
-  animation:fp-modal-up .3s cubic-bezier(.16,1,.3,1);
-}
-.fp-grabber{width:40px;height:4px;border-radius:99px;background:var(--border);margin:10px auto 16px}
-.fp-sheet-head{flex-shrink:0;padding:0 22px 14px}
-.fp-sheet-head-row{display:flex;align-items:center;justify-content:space-between}
-.fp-sheet-title{
-  font-family:inherit;font-size:20px;font-weight:700;color:var(--ink);letter-spacing:-.02em;line-height:1;
-}
-.fp-sheet-title em{font-style:normal;background:none;-webkit-background-clip:initial;background-clip:initial;color:var(--ink-2)}
-.fp-close-btn{
-  width:34px;height:34px;border-radius:50%;
-  background:var(--glass-strong);border:1px solid var(--border);
-  color:var(--ink);font-size:16px;cursor:pointer;font-family:inherit;
-  display:grid;place-items:center;transition:all .15s;
-}
-.fp-close-btn:hover{background:#f0f0f1;border-color:var(--ink)}
-
-.fp-sheet-body{flex:1;overflow-y:auto;padding:0 22px 14px}
-.fp-sheet-empty{text-align:center;padding:40px 0;color:var(--ink-3);font-size:13px;font-weight:500}
-
-.fp-round-row{
-  display:flex;align-items:center;gap:12px;
-  padding:12px 14px;margin-bottom:8px;border-radius:14px;
-  background:var(--glass-strong);border:1px solid;
-}
-.fp-round-row.claim{border-color:#0a0a0a;background:#fafafa}
-.fp-round-row.live{border-color:rgba(22,163,74,.4)}
-.fp-round-row.pending{border-color:rgba(47,107,255,.3)}
-.fp-round-row.won{border-color:rgba(22,163,74,.3)}
-.fp-round-row.lost{border-color:rgba(224,54,79,.25)}
-.fp-round-row.tie{border-color:var(--border)}
-.fp-round-row.expired{border-color:var(--hairline)}
-
-.fp-round-epoch{min-width:42px;text-align:center}
-.fp-round-epoch .l{font-family:ui-monospace,Menlo,monospace;font-size:9px;color:var(--ink-3);font-weight:700;letter-spacing:1px}
-.fp-round-epoch .n{font-family:ui-monospace,Menlo,monospace;font-style:normal;font-size:16px;font-weight:700;color:var(--ink);line-height:1.1}
-
-.fp-round-mid{flex:1;min-width:0}
-.fp-round-prices{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--ink-2);font-variant-numeric:tabular-nums}
-.fp-round-bets{margin-top:3px;display:flex;gap:8px;flex-wrap:wrap}
-.fp-round-bets .l{font-family:ui-monospace,Menlo,monospace;font-size:10px;color:var(--green);font-weight:700;font-variant-numeric:tabular-nums}
-.fp-round-bets .s{font-family:ui-monospace,Menlo,monospace;font-size:10px;color:var(--red);font-weight:700;font-variant-numeric:tabular-nums}
-.fp-round-warn{margin-top:3px;font-family:ui-monospace,Menlo,monospace;font-size:9px;color:var(--gold);font-weight:700}
-
-.fp-round-right{text-align:right;flex-shrink:0}
-.fp-round-status{
-  font-family:ui-monospace,Menlo,monospace;font-size:10px;font-weight:700;
-  padding:5px 10px;border-radius:8px;letter-spacing:0.4px;display:inline-block;
-}
-.fp-round-status.live{background:rgba(22,163,74,.12);color:var(--green);border:1px solid rgba(22,163,74,.3)}
-.fp-round-status.pending{background:rgba(47,107,255,.1);color:#1e52cc;border:1px solid rgba(47,107,255,.3)}
-.fp-round-status.won{background:rgba(22,163,74,.12);color:var(--green);border:1px solid rgba(22,163,74,.3)}
-.fp-round-status.lost{background:rgba(224,54,79,.1);color:var(--red);border:1px solid rgba(224,54,79,.3)}
-.fp-round-status.tie{background:var(--hairline);color:var(--ink-2);border:1px solid var(--border)}
-.fp-round-status.expired{background:var(--hairline);color:var(--ink-3);border:1px solid var(--hairline)}
-
-.fp-round-claim-btn{
-  background:#0a0a0a;border:none;border-radius:9px;
-  padding:7px 12px;color:#fff;font-family:inherit;
-  font-weight:800;font-size:11px;letter-spacing:0.4px;cursor:pointer;box-shadow:none;
-}
-.fp-round-claim-sub{margin-top:3px;font-family:ui-monospace,Menlo,monospace;font-size:9px;color:var(--ink-3)}
-
-.fp-sheet-note{
-  margin-top:8px;padding:10px 14px;border-radius:12px;
-  background:var(--glass-strong);border:1px solid var(--hairline);
-  font-family:ui-monospace,Menlo,monospace;font-size:10px;color:var(--ink-2);
-  line-height:1.5;text-align:center;
-}
-.fp-sheet-note b{color:var(--gold);font-weight:800}
-
-/* BET MODAL (sheet) */
-.fp-bet-sheet{
-  position:fixed;bottom:0;left:50%;transform:translateX(-50%);
-  width:100%;max-width:520px;z-index:301;
-  display:flex;flex-direction:column;overflow:hidden;
-  background:#fff;
-  border-top:1px solid var(--border);
-  border-radius:22px 22px 0 0;
-  padding:0 22px calc(env(safe-area-inset-bottom) + 22px);
-  font-family:inherit;
-  animation:fp-modal-up .3s cubic-bezier(.16,1,.3,1);
-  box-shadow:0 -12px 50px rgba(10,10,10,.18);
-}
-
-.fp-bet-head{display:flex;align-items:center;justify-content:space-between;padding-top:16px;margin-bottom:16px}
-.fp-bet-head-left{display:flex;align-items:center;gap:10px;min-width:0}
-.fp-bet-side-pill{
-  padding:6px 14px;border-radius:999px;
-  font-family:inherit;font-weight:800;font-size:13px;letter-spacing:0.6px;
-  border:1px solid;
-}
-.fp-bet-side-pill.long{background:rgba(22,163,74,.12);color:var(--green);border-color:rgba(22,163,74,.45)}
-.fp-bet-side-pill.short{background:rgba(224,54,79,.1);color:var(--red);border-color:rgba(224,54,79,.45)}
-.fp-bet-epoch{color:var(--ink-3);font-family:ui-monospace,Menlo,monospace;font-size:11px;font-weight:700;letter-spacing:0.4px}
-
-.fp-bet-amount{
-  background:var(--glass-strong);border:1px solid var(--border);
-  border-radius:16px;padding:14px 18px;margin-bottom:12px;transition:border-color .15s;
-}
-.fp-bet-amount.long{border-color:rgba(22,163,74,.3)}
-.fp-bet-amount.short{border-color:rgba(224,54,79,.3)}
-.fp-bet-amount.err{border-color:rgba(224,54,79,.45)}
-.fp-bet-amount-label{
-  font-family:ui-monospace,Menlo,monospace;font-size:9px;font-weight:700;
-  color:var(--ink-3);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:6px;
-}
-.fp-bet-amount-row{display:flex;align-items:center;gap:8px}
-.fp-bet-dollar{font-family:ui-monospace,Menlo,monospace;font-size:28px;font-weight:600;color:var(--ink-3);line-height:1}
-.fp-bet-input{
-  flex:1;background:transparent;border:none;outline:none;
-  font-family:ui-monospace,Menlo,monospace;font-size:34px;font-weight:700;line-height:1;color:var(--ink);
-  font-variant-numeric:tabular-nums;min-width:0;width:100%;
-}
-.fp-bet-input:disabled{opacity:.6}
-.fp-bet-bal{font-family:ui-monospace,Menlo,monospace;font-size:10px;color:var(--ink-3);font-weight:600;white-space:nowrap}
-
-.fp-bet-chips{display:flex;gap:8px;margin-bottom:14px}
-.fp-bet-chip{
-  flex:1;padding:9px 0;border-radius:999px;
-  background:var(--glass-strong);border:1px solid var(--border);color:var(--ink-2);
-  font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;transition:all .15s;
-}
-.fp-bet-chip:hover{background:#f0f0f1;border-color:var(--ink)}
-.fp-bet-chip.active.long{background:var(--green);border-color:var(--green);color:#fff}
-.fp-bet-chip.active.short{background:var(--red);border-color:var(--red);color:#fff}
-.fp-bet-chip:disabled{cursor:not-allowed;opacity:.5}
-
-.fp-bet-est{
-  background:var(--glass-strong);border:1px solid var(--border);
-  border-radius:14px;padding:12px 16px;margin-bottom:14px;
-  display:flex;justify-content:space-between;align-items:center;gap:10px;
-}
-.fp-bet-est-block{}
-.fp-bet-est-l{font-family:ui-monospace,Menlo,monospace;font-size:9px;font-weight:700;color:var(--ink-3);letter-spacing:1.2px;margin-bottom:2px}
-.fp-bet-est-v{font-family:ui-monospace,Menlo,monospace;font-style:normal;font-size:22px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
-.fp-bet-est-v.long{color:var(--green)}
-.fp-bet-est-v.short{color:var(--red)}
-.fp-bet-est-v.gold{color:var(--gold)}
-.fp-bet-est-r{text-align:right}
-
-.fp-bet-status{
-  display:flex;align-items:center;justify-content:center;gap:10px;
-  padding:10px;margin-bottom:10px;font-size:13px;font-weight:700;
-}
-.fp-bet-status.long{color:var(--green)}
-.fp-bet-status.short{color:var(--red)}
-.fp-bet-spinner{width:14px;height:14px;border-radius:50%;border:2px solid currentColor;border-top-color:transparent;animation:fp-spin .7s linear infinite}
-
-.fp-bet-success{text-align:center;padding:12px;margin-bottom:10px;color:var(--green);font-size:14px;font-weight:800;animation:fp-pop .3s cubic-bezier(.34,1.56,.64,1)}
-.fp-bet-error{
-  padding:10px 14px;margin-bottom:10px;border-radius:12px;
-  background:rgba(224,54,79,.08);border:1px solid rgba(224,54,79,.3);
-  color:var(--red);font-size:12px;font-weight:700;
-}
-
-.fp-bet-cta{
-  width:100%;padding:16px;border-radius:999px;border:none;
-  font-family:inherit;font-size:16px;letter-spacing:-.01em;
-  color:#fff;cursor:pointer;font-weight:700;
-  transition:opacity .15s,transform .15s;position:relative;overflow:hidden;
-}
-.fp-bet-cta.long{background:var(--green);color:#fff;box-shadow:none}
-.fp-bet-cta.short{background:var(--red);color:#fff;box-shadow:none}
-.fp-bet-cta:hover:not(:disabled){opacity:.9}
-.fp-bet-cta:disabled{background:var(--glass-strong);color:var(--ink-3);border:1px solid var(--border);box-shadow:none;cursor:not-allowed}
-
-.fp-bet-foot{
-  margin-top:10px;text-align:center;
-  font-family:ui-monospace,Menlo,monospace;font-size:10px;color:var(--ink-3);font-weight:600;letter-spacing:0.3px;
-}
-
-/* ===== Flipsy v7 layout (fx-*) ===== */
-.fx-page{font-family:'Space Grotesk',sans-serif}
-.fx-inner{max-width:480px;margin:0 auto;padding:0 0 10px}
-.fx-claim{display:flex;align-items:center;gap:9px;justify-content:center;margin:12px 14px 4px;padding:11px 14px;border-radius:16px;background:linear-gradient(135deg,#6d4aff,#8b6bff);color:#fff;font-family:'JetBrains Mono',monospace;font-weight:700;font-size:11px;letter-spacing:.04em;cursor:pointer;box-shadow:0 8px 20px rgba(109,74,255,.32)}
-.fx-claim-c{background:rgba(255,255,255,.25);border-radius:999px;padding:2px 9px}
-.fx-flash-wrap{position:sticky;top:8px;z-index:60;display:flex;justify-content:center;pointer-events:none;padding:6px 14px 0}
-.fx-flash{pointer-events:auto;padding:10px 16px;border-radius:14px;font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#fff;box-shadow:0 10px 26px rgba(0,0,0,.16)}
-.fx-flash.success{background:linear-gradient(135deg,#1ad99a,#12b884)}
-.fx-flash.error{background:linear-gradient(135deg,#ff6f8d,#f2456a)}
-
-.fx-hd{display:flex;align-items:center;justify-content:space-between;padding:15px 16px 9px}
-.fx-br{display:flex;align-items:center;gap:10px}
-.fx-mascot{width:38px;height:38px;border-radius:50%;background:radial-gradient(circle at 32% 28%,#8b6bff,#6d4aff 60%,#5a37e6);display:grid;place-items:center;font-weight:700;font-size:18px;color:#fff;box-shadow:0 5px 16px rgba(109,74,255,.4),inset 0 0 0 2px rgba(255,255,255,.25)}
-.fx-bt{font-size:21px;font-weight:700;letter-spacing:-.02em;line-height:1;color:#36284f}
-.fx-bs{font-family:'JetBrains Mono',monospace;font-size:8px;letter-spacing:.14em;text-transform:uppercase;color:#8a85a6;margin-top:3px}
-.fx-hr{display:flex;align-items:center;gap:8px}
-.fx-streak{display:flex;align-items:center;gap:4px;background:linear-gradient(135deg,#ffc861,#ff9d3c);border-radius:999px;padding:7px 12px;font-family:'JetBrains Mono',monospace;font-weight:700;font-size:13px;color:#5a3500;box-shadow:0 5px 14px rgba(255,157,60,.38)}
-.fx-bal{display:flex;flex-direction:column;align-items:flex-end;background:#fff;border-radius:16px;padding:6px 12px;box-shadow:0 4px 12px rgba(80,60,160,.1)}
-.fx-bal-connect{cursor:pointer;background:linear-gradient(135deg,#6d4aff,#8b6bff)}
-.fx-bal-connect .fx-bal-v{color:#fff;font-size:13px}
-.fx-bal-l{font-family:'JetBrains Mono',monospace;font-size:7px;letter-spacing:.12em;color:var(--ink-3)}
-.fx-bal-v{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:var(--vio)}
-.fx-bal-v.fail{color:var(--down)}
-.fx-bal.warn{box-shadow:0 0 0 1.5px var(--down) inset,0 4px 12px rgba(80,60,160,.1)}
-
-.fx-prow{display:flex;align-items:center;gap:9px;padding:4px 16px 9px}
-.fx-ppill{display:flex;align-items:center;gap:10px;background:#fff;border-radius:999px;padding:6px 16px 6px 6px;box-shadow:0 5px 16px rgba(80,60,160,.12)}
-.fx-ptok{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#6d4aff,#13c98c);display:grid;place-items:center;color:#fff;font-weight:700;font-size:14px}
-.fx-pv{font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:700;color:var(--ink);line-height:1}
-.fx-pl{font-family:'JetBrains Mono',monospace;font-size:8px;letter-spacing:.1em;color:var(--ink-3);margin-top:2px}
-
-.fx-fclbl{padding:6px 16px 6px;font-family:'JetBrains Mono',monospace;font-size:8.5px;letter-spacing:.12em;color:#7a7498;font-weight:700}
-.fx-fcrow{display:flex;gap:8px;overflow-x:auto;padding:0 16px 4px;-webkit-overflow-scrolling:touch}
-.fx-fcrow::-webkit-scrollbar{display:none}
-.fx-fcell{flex:0 0 auto;min-width:62px;background:#fff;border-radius:17px;padding:9px 12px;box-shadow:0 4px 12px rgba(80,60,160,.08)}
-.fx-ft{font-family:'JetBrains Mono',monospace;font-size:8px;letter-spacing:.06em;color:var(--ink-3);margin-bottom:3px}
-.fx-fp{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:var(--ink);line-height:1}
-.fx-fd{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;margin-top:3px}
-.fx-fd.u{color:var(--up)} .fx-fd.n{color:var(--ink-3)} .fx-fd.d{color:var(--down)}
-
-.fx-hist{display:flex;align-items:center;gap:7px;padding:9px 17px 4px}
-.fx-hl{font-family:'JetBrains Mono',monospace;font-size:8px;letter-spacing:.1em;color:#7a7498;font-weight:700}
-.fx-pips{display:flex;gap:3px}
-.fx-pip{width:9px;height:9px;border-radius:50%}
-.fx-pip.u{background:var(--up);box-shadow:0 2px 5px rgba(19,201,140,.5)}
-.fx-pip.d{background:var(--down);opacity:.6}
-.fx-pip.t{background:var(--ink-3);opacity:.5}
-.fx-wr{margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--up);font-weight:700}
-
-.fx-rh{display:flex;align-items:baseline;justify-content:space-between;padding:10px 17px 8px}
-.fx-rh h3{font-size:17px;font-weight:700;color:#36284f;margin:0}
-.fx-rh em{font-style:normal;font-family:'JetBrains Mono',monospace;color:var(--vio)}
-.fx-sw{font-family:'JetBrains Mono',monospace;font-size:9px;color:#8a85a6}
-
-.fx-wrap{padding:0 15px}
-.fx-lcard{background:#fff;border-radius:30px;padding:13px;box-shadow:0 16px 40px rgba(80,55,160,.18)}
-.fx-lhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:11px;padding:2px 4px}
-.fx-lv{display:flex;align-items:center;gap:7px;font-weight:700;font-size:13px;color:var(--vio);letter-spacing:.03em}
-.fx-dot{width:7px;height:7px;border-radius:50%;background:var(--up);box-shadow:0 0 8px var(--up);animation:fx-pl 1.3s infinite}
-@keyframes fx-pl{50%{opacity:.4}}
-.fx-ep{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink-3);margin-left:6px}
-.fx-tm{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:var(--down)}
-.fx-tm.urgent{animation:fx-pl .6s infinite}
-.fx-big{width:100%;border:none;border-radius:20px;padding:15px 18px;display:flex;align-items:center;gap:9px;cursor:pointer;color:#fff;font-family:'Space Grotesk',sans-serif;box-shadow:0 8px 20px rgba(0,0,0,.08)}
-.fx-big:active{transform:translateY(1px)}
-.fx-ic{font-size:19px;font-weight:700}
-.fx-lb{font-size:16px;font-weight:700;letter-spacing:.02em}
-.fx-ml{margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:700}
-.fx-big.up{background:linear-gradient(135deg,#1ad99a,#12b884)}
-.fx-big.down{background:linear-gradient(135deg,#ff6f8d,#f2456a)}
-.fx-panel{background:linear-gradient(180deg,#fbfaff,#f4f1fc);border-radius:24px;padding:14px 15px;margin:9px 0;box-shadow:inset 0 0 0 1.5px rgba(109,74,255,.1)}
-.fx-plab{display:flex;align-items:center;justify-content:space-between}
-.fx-plab .fx-l{font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.12em;color:var(--ink-2);font-weight:700}
-.fx-co{font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--ink-3)}
-.fx-prow2{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:6px}
-.fx-cprice{font-family:'JetBrains Mono',monospace;font-size:25px;font-weight:700;letter-spacing:-.01em}
-.fx-cdelta{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:#fff;border-radius:999px;padding:7px 13px;white-space:nowrap}
-.fx-spk{display:block;width:100%;height:50px;margin:9px 0 6px}
-.fx-metrow{display:flex;gap:8px;margin-top:4px}
-.fx-met{flex:1;background:#fff;border-radius:14px;padding:8px 11px;box-shadow:0 2px 8px rgba(80,60,160,.06)}
-.fx-ml2{font-family:'JetBrains Mono',monospace;font-size:7.5px;letter-spacing:.1em;color:var(--ink-3)}
-.fx-mv{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:var(--ink);margin-top:2px}
-.fx-mv.g{color:var(--gold)}
-.fx-sent{margin:11px 2px 2px}
-.fx-sl{display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;margin-bottom:4px}
-.fx-sl .su{color:var(--up)} .fx-sl .sd{color:var(--down)}
-.fx-bar{height:8px;border-radius:999px;overflow:hidden;background:var(--down)}
-.fx-bar .fx-f{height:100%;background:var(--up);border-radius:999px 0 0 999px}
-.fx-pos{display:flex;justify-content:space-between;margin-top:10px;padding:9px 13px;border-radius:14px;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;background:rgba(19,201,140,.12);color:var(--upd)}
-
-.fx-empty{background:#fff;border-radius:24px;padding:30px 18px;text-align:center;box-shadow:0 10px 26px rgba(80,55,160,.12);font-family:'JetBrains Mono',monospace;color:var(--ink-2);font-size:12px}
-.fx-empty-i{font-size:30px;margin-bottom:8px}
-.fx-empty-t{font-weight:700;color:var(--ink);font-size:14px;margin-bottom:4px;font-family:'Space Grotesk',sans-serif}
-.fx-empty-m{font-size:11px;color:var(--ink-3)}
-.fx-empty.err .fx-empty-t{color:var(--down)}
-
-.fx-utitle{display:flex;align-items:baseline;justify-content:space-between;padding:18px 17px 9px}
-.fx-utitle h4{font-size:14px;font-weight:700;color:#36284f;margin:0}
-.fx-c{font-family:'JetBrains Mono',monospace;font-size:9px;color:#8a85a6}
-.fx-ugrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:0 15px}
-.fx-ut{background:#fff;border-radius:22px;padding:12px;box-shadow:0 6px 16px rgba(80,55,160,.1)}
-.fx-uh{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px}
-.fx-ue{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:var(--vio)}
-.fx-ub{font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:700;letter-spacing:.08em;color:#fff;background:linear-gradient(135deg,#6d4aff,#8b6bff);border-radius:999px;padding:3px 9px}
-.fx-us2{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--ink-3)}
-.fx-us{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--ink-2);margin-bottom:9px}
-.fx-us b{color:var(--ink)} .fx-us .g{color:var(--gold);font-weight:700}
-.fx-ubt{display:flex;gap:7px;margin-top:8px}
-.fx-mini{flex:1;border-radius:14px;padding:9px;font-size:11px;font-weight:700;border:none;cursor:pointer;color:#fff;font-family:'Space Grotesk',sans-serif}
-.fx-mini.u{background:linear-gradient(135deg,#1ad99a,#12b884)}
-.fx-mini.d{background:linear-gradient(135deg,#ff6f8d,#f2456a)}
-
-.fx-tabs{display:flex;gap:8px;padding:18px 15px 4px}
-.fx-tab{flex:1;text-align:center;padding:12px;border-radius:18px;font-size:11px;font-weight:700;font-family:'JetBrains Mono',monospace;background:#fff;color:#8a85a6;box-shadow:0 5px 14px rgba(80,55,160,.08);cursor:pointer;position:relative}
-.fx-tab.on{background:linear-gradient(135deg,#6d4aff,#8b6bff);color:#fff;box-shadow:0 8px 18px rgba(109,74,255,.34)}
-.fx-tab.disabled{opacity:.55;cursor:default}
-.fx-soon{font-size:7px;letter-spacing:.06em;background:var(--ink-3);color:#fff;border-radius:999px;padding:1px 5px;margin-left:5px;vertical-align:middle}
-.fx-footer{text-align:center;font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--ink-3);padding:18px 24px 8px;line-height:1.5}
+@media (prefers-reduced-motion:reduce){ .fl-page *{animation:none !important} }
 `;
 
 function injectFlipsyStyles() {
@@ -732,515 +196,287 @@ function injectFlipsyStyles() {
   document.head.appendChild(tag);
 }
 
-const BLOCKED_COUNTRIES = [
-  // Comprehensively sanctioned / high-risk jurisdictions (baseline).
-  // NOTE: prediction-market & online-gaming rules vary widely by country and by
-  // US state — review and expand this list with counsel before a public launch.
-  'US', 'IR', 'KP', 'SY', 'CU',
-];
-const GEO_BYPASS_WALLETS = new Set([
-  'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV',
-  'GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA',
-]);
-const DEFAULT_MIN_BET = 1;
-const DEFAULT_MAX_BET = 25;
-const DEFAULT_CLAIM_FORFEIT_DELAY = 21_600; // 6 hours
-const NET_MULT = 0.75;
+// ============================================================
+// BRACKET METADATA + PAYOUT MATH (mirrors the contract)
+// ============================================================
+const THRESHOLD_BPS = 50; // 0.5% — must match BRACKET_THRESHOLD_BPS in lib.rs
 
-// Illustrative SOL price forecasts for the strip. These are PLACEHOLDER values —
-// replace with a live feed from your backend (they will otherwise go stale).
-// Set SOL_FORECASTS = [] to hide the forecast strip entirely.
-const SOL_FORECASTS = [
-  { t: 'TODAY', p: '$72.49', d: '+2.4%', k: 'u' },
-  { t: 'TMRW',  p: '$73.28', d: '+3.5%', k: 'u' },
-  { t: '7D',    p: '$76.55', d: '+8.1%', k: 'u' },
-  { t: '30D',   p: '$75.42', d: '+6.5%', k: 'u' },
-  { t: 'EOY',   p: '$80.00', d: '+13%',  k: 'u' },
+// Grid order: up row, then down row.
+const BRACKET_META = [
+  { key: 'upSmall',   label: '▲ Up',    range: '0–0.5%', cls: 'u'  },
+  { key: 'upBig',     label: '▲▲ Up',   range: '>0.5%',  cls: 'uu' },
+  { key: 'downSmall', label: '▼ Down',  range: '0–0.5%', cls: 'd'  },
+  { key: 'downBig',   label: '▼▼ Down', range: '>0.5%',  cls: 'dd' },
 ];
+// Left-to-right order for the live "scale" (most-down .. most-up).
+const SCALE_ORDER = ['downBig', 'downSmall', 'upSmall', 'upBig'];
+const META = Object.fromEntries(BRACKET_META.map(b => [b.key, b]));
 
-// Live payout estimate for one side, matching the on-chain compute_payout():
-//   winners split the total pool, and the configured fee is taken on PROFIT only.
-//   netMult = 1 - feeBps/10000  (e.g. feeBps 2500 -> 0.75).
-// Returns null when this side has no bets yet (payout undefined until someone bets).
-// When the OPPOSING pool is empty, a win only refunds principal minus fee (netMult x).
-function livePayout(sidePool, oppPool, netMult) {
-  if (sidePool <= 0) return null;
-  if (oppPool <= 0) return netMult;
-  const total = sidePool + oppPool;
-  return 1 + ((total / sidePool) - 1) * netMult;
+// Live payout multiplier for one bracket, from the current pools.
+// = totalPot / bracketPool, with the fee taken off the profit. null if empty.
+function bracketMult(poolUsd, totalUsd, feeBps) {
+  if (!(poolUsd > 0)) return null;
+  const gross = totalUsd / poolUsd;
+  const fee = (gross - 1) * ((feeBps || 0) / 10000);
+  return Math.max(0, gross - fee);
 }
-const fmtPayout = (p) => (p == null ? '—' : p.toFixed(2) + '×');
+const fmtMult = (m) => (m == null ? '—' : '~' + m.toFixed(2) + '×');
+const fmtUsd = (n) => '$' + (Number(n) || 0).toFixed(2);
 
-async function checkGeo() {
-  const sources = [
-    { url: 'https://ipapi.co/json/', field: 'country_code' },
-    { url: 'https://api.country.is/', field: 'country' },
-  ];
-  for (const src of sources) {
-    try {
-      const ctrl = new AbortController();
-      const timeout = setTimeout(() => ctrl.abort(), 4000);
-      const res = await fetch(src.url, { signal: ctrl.signal });
-      clearTimeout(timeout);
-      if (!res.ok) continue;
-      const data = await res.json();
-      const cc = (data[src.field] || '').toUpperCase();
-      if (cc) return { country: cc, blocked: BLOCKED_COUNTRIES.includes(cc) };
-    } catch {}
-  }
-  // Fail CLOSED: if geo can't be determined (both sources failed, timed out, or
-  // were blocked by an ad-blocker / VPN), deny rather than allow. Wallets in
-  // GEO_BYPASS_WALLETS still pass, so testing isn't affected.
-  return { country: 'UNKNOWN', blocked: true };
+// Which bracket does a live price sit in, vs the lock price?
+function moveBracket(lockPrice, price) {
+  if (!lockPrice || !price) return null;
+  if (price === lockPrice) return 'tie';
+  const mag = (Math.abs(price - lockPrice) / lockPrice) * 10000;
+  const big = mag >= THRESHOLD_BPS;
+  if (price > lockPrice) return big ? 'upBig' : 'upSmall';
+  return big ? 'downBig' : 'downSmall';
 }
 
+const OUTCOME_LABEL = {
+  upSmall: 'Up 0–0.5%', upBig: 'Up >0.5%',
+  downSmall: 'Down 0–0.5%', downBig: 'Down >0.5%',
+  tie: 'Flat (refund)', allLost: 'No winners', unresolved: 'Pending',
+};
+
+// ============================================================
+// SUBCOMPONENTS
+// ============================================================
 function BlockScreen({ title, message, sub }) {
   return (
-    <div className="fp-page">
-      <div className="fp-block-wrap">
-        <div className="fp-block-card">
-          <div className="fp-block-icon">🔒</div>
-          <h2 className="fp-block-title">{title}</h2>
-          <p className="fp-block-msg">{message}</p>
-          {sub && <p className="fp-block-sub">{sub}</p>}
-        </div>
+    <div className="fl-block">
+      <div className="fl-block-card">
+        <div className="fl-block-i">🌍</div>
+        <div className="fl-block-t">{title}</div>
+        <div className="fl-block-m">{message}</div>
+        {sub && <div className="fl-block-s">{sub}</div>}
       </div>
     </div>
   );
 }
 
-// ============================================================
-// ROUNDS HISTORY POPUP
-// ============================================================
-function RoundsPopup({ open, onClose, liveRound, upcomingRounds, recentRounds, userBets, onClaim, claimForfeitDelay }) {
-  useEffect(() => {
-    if (!open) return;
-    const fn = (e) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', fn);
-    return () => window.removeEventListener('keydown', fn);
-  }, [open, onClose]);
-
-  if (!open) return null;
-
-  const getBetsForEpoch = (epoch) => {
-    const b = userBets[epoch];
-    if (!b) return [];
-    return Array.isArray(b) ? b : [b];
-  };
-
-  const nowTs = Math.floor(Date.now() / 1000);
-
-  const isClaimable = (round) => {
-    if (round.outcome === 'unresolved') return false;
-    const bets = getBetsForEpoch(round.epoch);
-    const expired = round.resolvedAt > 0 && nowTs > round.resolvedAt + claimForfeitDelay;
-    if (expired) return false;
-    return bets.some(b => {
-      if (b.claimed) return false;
-      if (round.outcome === b.side) return true;
-      if (round.outcome === 'tie') return true;
-      return false;
-    });
-  };
-
-  const allRounds = [
-    ...(liveRound ? [liveRound] : []),
-    ...(upcomingRounds || []),
-    ...(recentRounds || []),
-  ];
-  const seen = new Set();
-  const rounds = allRounds
-    .filter(r => {
-      if (!r || seen.has(r.epoch)) return false;
-      if (getBetsForEpoch(r.epoch).length === 0) return false;
-      seen.add(r.epoch);
-      return true;
-    })
-    .sort((a, b) => b.epoch - a.epoch);
-
-  const forfeitLabel = claimForfeitDelay >= 3600
-    ? Math.round(claimForfeitDelay / 3600) + ' hours'
-    : Math.round(claimForfeitDelay / 60) + ' minutes';
-
-  return (
-    <>
-      <div onClick={onClose} className="fp-sheet-backdrop"/>
-      <div className="fp-sheet">
-        <div className="fp-grabber"/>
-        <div className="fp-sheet-head">
-          <div className="fp-sheet-head-row">
-            <div className="fp-sheet-title">My <em>Rounds</em></div>
-            <button onClick={onClose} className="fp-close-btn">✕</button>
-          </div>
-        </div>
-
-        <div className="fp-sheet-body">
-          {rounds.length === 0 && (
-            <div className="fp-sheet-empty">No rounds yet</div>
-          )}
-          {rounds.map(r => {
-            const bets = getBetsForEpoch(r.epoch);
-            const canClaim = isClaimable(r);
-            const deadlineTs = r.resolvedAt > 0 ? r.resolvedAt + claimForfeitDelay : 0;
-            const minutesLeft = deadlineTs > 0 ? Math.max(0, Math.floor((deadlineTs - nowTs) / 60)) : 0;
-            const hoursLeft = Math.floor(minutesLeft / 60);
-            const expired = deadlineTs > 0 && nowTs > deadlineTs;
-            const hasUnclaimedWin = bets.some(b => !b.claimed && (r.outcome === b.side || r.outcome === 'tie'));
-            const isLiveOrPending = r.outcome === 'unresolved';
-
-            const longTotal = bets.filter(b => b.side === 'heads').reduce((s, b) => s + b.amount, 0);
-            const shortTotal = bets.filter(b => b.side === 'tails').reduce((s, b) => s + b.amount, 0);
-            const won = !isLiveOrPending && (
-              (r.outcome === 'heads' && longTotal > 0) ||
-              (r.outcome === 'tails' && shortTotal > 0)
-            );
-            const lost = !isLiveOrPending && !won && r.outcome !== 'tie';
-            const tie = r.outcome === 'tie';
-
-            let statusKey, statusLabel;
-            if (isLiveOrPending) {
-              const isLive = liveRound && liveRound.epoch === r.epoch;
-              statusKey = isLive ? 'live' : 'pending';
-              statusLabel = isLive ? '● LIVE' : '⏱ PENDING';
-            } else if (won)  { statusKey = 'won';  statusLabel = '✓ WON'; }
-            else if (lost)   { statusKey = 'lost'; statusLabel = '💔 LOST'; }
-            else if (tie)    { statusKey = 'tie';  statusLabel = '= TIE'; }
-            else             { statusKey = 'tie';  statusLabel = '= TIE'; }
-
-            const rowKind = canClaim ? 'claim'
-              : isLiveOrPending ? statusKey
-              : statusKey;
-
-            const formatTimeLeft = () =>
-              hoursLeft > 0 ? `${hoursLeft}h left` : `${minutesLeft}m left`;
-
-            return (
-              <div key={r.epoch} className={'fp-round-row ' + rowKind}>
-                <div className="fp-round-epoch">
-                  <div className="l">RND</div>
-                  <div className="n">#{r.epoch}</div>
-                </div>
-
-                <div className="fp-round-mid">
-                  {!isLiveOrPending ? (
-                    <div className="fp-round-prices">
-                      ${r.lockPrice.toFixed(2)} → ${r.closePrice.toFixed(2)}
-                    </div>
-                  ) : r.lockPrice > 0 ? (
-                    <div className="fp-round-prices">Locked at ${r.lockPrice.toFixed(2)}</div>
-                  ) : (
-                    <div className="fp-round-prices">Awaiting start</div>
-                  )}
-                  <div className="fp-round-bets">
-                    {longTotal > 0 && (<span className="l">↑ ${longTotal.toFixed(2)}</span>)}
-                    {shortTotal > 0 && (<span className="s">↓ ${shortTotal.toFixed(2)}</span>)}
-                  </div>
-                  {canClaim && hoursLeft < 2 && (
-                    <div className="fp-round-warn">⚠️ {formatTimeLeft()} to collect</div>
-                  )}
-                </div>
-
-                <div className="fp-round-right">
-                  {canClaim ? (
-                    <>
-                      <button onClick={() => onClaim(r.epoch)} className="fp-round-claim-btn">💰 Collect</button>
-                      {hoursLeft >= 2 && (<div className="fp-round-claim-sub">{formatTimeLeft()}</div>)}
-                    </>
-                  ) : expired && hasUnclaimedWin ? (
-                    <div className="fp-round-status expired">⌛ EXPIRED</div>
-                  ) : (
-                    <div className={'fp-round-status ' + statusKey}>{statusLabel}</div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-
-          {rounds.length > 0 && (
-            <div className="fp-sheet-note">
-              ⚠️ Uncollected winnings are forfeited after <b>{forfeitLabel}</b>. Collect promptly.
-            </div>
-          )}
-        </div>
-      </div>
-    </>
-  );
-}
-
-// ============================================================
-// BET MODAL
-// ============================================================
-function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, tailsPayout, minBet, maxBet }) {
-  const [amount, setAmount] = useState('5');
-  const [status, setStatus] = useState('idle');
-  const [errMsg, setErrMsg] = useState('');
-  const inputRef = useRef(null);
-
-  useEffect(() => {
-    if (open) {
-      setAmount(String(Math.min(Math.max(5, minBet), maxBet))); setStatus('idle'); setErrMsg('');
-      setTimeout(() => inputRef.current?.focus(), 100);
-    }
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const fn = (e) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', fn);
-    return () => window.removeEventListener('keydown', fn);
-  }, [open, onClose]);
-
-  if (!open) return null;
-
-  const amt = parseFloat(amount) || 0;
-  const payout = side === 'heads' ? headsPayout : tailsPayout;
-  const estWin = amt * payout;
-  const isLong = side === 'heads';
-  const sideKey = isLong ? 'long' : 'short';
-  const sideLabel = isLong ? '↑ UP' : '↓ DOWN';
-  const insufficient = amt > balance;
-  const belowMin = amt > 0 && amt < minBet;
-  const aboveMax = amt > maxBet;
-  const invalidAmount = belowMin || aboveMax || insufficient;
-
-  // Quick-bet chips clamped to the live min/max so a preset can never be invalid.
-  const chipPresets = [1, 5, 10, 25, 50, 100];
-  const chipsInRange = chipPresets.filter(v => v >= minBet && v <= maxBet);
-  const betChips = (chipsInRange.length ? chipsInRange : [minBet, maxBet]).slice(0, 4);
-
-  const handleTrade = async () => {
-    if (amt <= 0 || invalidAmount) return;
-    setStatus('signing'); setErrMsg('');
-    try {
-      await onTrade(epoch, side, amt);
-      setStatus('success');
-      setTimeout(() => onClose(), 1500);
-    } catch (e) {
-      setErrMsg(e.message || 'Transaction failed');
-      setStatus('error');
-    }
-  };
-
-  let buttonLabel = 'Trade';
-  if (insufficient) buttonLabel = 'Insufficient Balance';
-  else if (belowMin) buttonLabel = `Minimum $${minBet}`;
-  else if (aboveMax) buttonLabel = `Maximum $${maxBet}`;
-  else if (status === 'signing') buttonLabel = 'Signing…';
-  else buttonLabel = isLong ? `Long #${epoch} · $${amt.toFixed(2)}` : `Short #${epoch} · $${amt.toFixed(2)}`;
-
-  return (
-    <>
-      <div onClick={onClose} className="fp-sheet-backdrop" style={{ zIndex: 300 }}/>
-      <div className="fp-bet-sheet">
-        <div className="fp-grabber"/>
-        <div className="fp-bet-head">
-          <div className="fp-bet-head-left">
-            <div className={'fp-bet-side-pill ' + sideKey}>{sideLabel}</div>
-            <span className="fp-bet-epoch">Round #{epoch}</span>
-          </div>
-          <button onClick={onClose} className="fp-close-btn">✕</button>
-        </div>
-
-        <div className={'fp-bet-amount ' + sideKey + (status === 'error' ? ' err' : '')}>
-          <div className="fp-bet-amount-label">
-            AMOUNT (USD) · MIN ${minBet} · MAX ${maxBet}
-          </div>
-          <div className="fp-bet-amount-row">
-            <span className="fp-bet-dollar">$</span>
-            <input
-              ref={inputRef}
-              type="number"
-              min={minBet}
-              max={maxBet}
-              value={amount}
-              onChange={e => { setAmount(e.target.value); setStatus('idle'); setErrMsg(''); }}
-              disabled={status === 'signing' || status === 'success'}
-              className="fp-bet-input"
-            />
-            {balance != null && <span className="fp-bet-bal">Bal: ${balance.toFixed(2)}</span>}
-          </div>
-        </div>
-
-        <div className="fp-bet-chips">
-          {betChips.map(v => {
-            const active = parseFloat(amount) === v;
-            return (
-              <button
-                key={v}
-                onClick={() => { setAmount(String(v)); setStatus('idle'); setErrMsg(''); }}
-                disabled={status === 'signing' || status === 'success'}
-                className={'fp-bet-chip' + (active ? ' active ' + sideKey : '')}
-              >${v}</button>
-            );
-          })}
-        </div>
-
-        {amt > 0 && !belowMin && !aboveMax && (
-          <div className="fp-bet-est">
-            <div className="fp-bet-est-block">
-              <div className="fp-bet-est-l">EST. PAYOUT</div>
-              <div className={'fp-bet-est-v ' + sideKey}>${estWin.toFixed(2)}</div>
-            </div>
-            <div className="fp-bet-est-r">
-              <div className="fp-bet-est-l">MULTIPLIER</div>
-              <div className="fp-bet-est-v gold">{payout.toFixed(2)}×</div>
-            </div>
-          </div>
-        )}
-
-        {status === 'signing' && (
-          <div className={'fp-bet-status ' + sideKey}>
-            <div className="fp-bet-spinner"/>
-            Check your wallet…
-          </div>
-        )}
-        {status === 'success' && (
-          <div className="fp-bet-success">✓ Trade placed!</div>
-        )}
-        {status === 'error' && errMsg && (
-          <div className="fp-bet-error">{errMsg}</div>
-        )}
-
-        {status !== 'success' && (
-          <button
-            onClick={handleTrade}
-            disabled={amt <= 0 || invalidAmount || status === 'signing'}
-            className={'fp-bet-cta ' + sideKey}
-          >
-            {buttonLabel}
-          </button>
-        )}
-        <div className="fp-bet-foot">NETWORK FEE ~0.000005 SOL · 25% FEE ON WINNINGS ONLY</div>
-      </div>
-    </>
-  );
-}
-
-// ============================================================
-// ROUND CARD
-// ============================================================
-function LiveHero({ round, livePrice, bets, onSide, netMult = NET_MULT }) {
-  const { epoch, headsPool = 0, tailsPool = 0, lockPrice = 0, closeTime = 0 } = round;
-  const total = headsPool + tailsPool;
-  const headsPayout = livePayout(headsPool, tailsPool, netMult);
-  const tailsPayout = livePayout(tailsPool, headsPool, netMult);
-
+// Live (locked) round — watch only, shows each bracket's live payout.
+function LiveHero({ round, livePrice, myBets, feeBps }) {
   const [now, setNow] = useState(Math.floor(Date.now() / 1000));
   useEffect(() => {
     const i = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
     return () => clearInterval(i);
   }, []);
 
-  // rolling live-price buffer for the sparkline (resets per round)
-  const [hist, setHist] = useState([]);
-  useEffect(() => { setHist([]); }, [epoch]);
-  useEffect(() => {
-    if (livePrice > 0) setHist(h => (h.length && h[h.length - 1] === livePrice ? h : [...h.slice(-39), livePrice]));
-  }, [livePrice]);
-
-  const timeLeft = Math.max(0, closeTime - now);
-  const urgent = timeLeft <= 10 && timeLeft > 0;
+  const total = round.totalPool || 0;
+  const timeLeft = Math.max(0, (round.closeTime || 0) - now);
   const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  const dur = Math.max(1, (round.closeTime || 0) - (round.startTime || 0));
+  const frac = Math.min(1, Math.max(0, timeLeft / dur));
+  const C = 2 * Math.PI * 24; // r=24
+  const urgent = timeLeft <= 30;
 
-  const priceDiff = lockPrice > 0 ? livePrice - lockPrice : 0;
-  const up = priceDiff >= 0;
-  const upPct = total > 0 ? Math.round((headsPool / total) * 100) : 50;
-
-  const betsArr = Array.isArray(bets) ? bets : (bets ? [bets] : []);
-  const myUp = betsArr.filter(b => b.side === 'heads').reduce((s, b) => s + b.amount, 0);
-  const myDown = betsArr.filter(b => b.side === 'tails').reduce((s, b) => s + b.amount, 0);
-  const myBet = myUp + myDown;
-  const mySide = myUp >= myDown ? 'heads' : 'tails';
-  const myPayout = (mySide === 'heads' ? headsPayout : tailsPayout) ?? netMult;
-
-  let spark = null;
-  if (hist.length >= 2) {
-    const min = Math.min(...hist), max = Math.max(...hist), rng = (max - min) || 1;
-    const pts = hist.map((v, i) => `${((i / (hist.length - 1)) * 300).toFixed(1)},${(50 - ((v - min) / rng) * 44).toFixed(1)}`).join(' ');
-    spark = (
-      <svg className="fx-spk" viewBox="0 0 300 54" preserveAspectRatio="none">
-        <polyline points={pts} fill="none" stroke={up ? 'var(--up)' : 'var(--down)'} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    );
-  }
+  const lockPx = round.lockPrice || 0;
+  const here = moveBracket(lockPx, livePrice);
+  const diff = lockPx > 0 ? livePrice - lockPx : 0;
+  const up = diff >= 0;
+  const mineKeys = new Set((myBets || []).map(b => b.bracket));
 
   return (
-    <div className="fx-lcard">
-      <div className="fx-lhead">
-        <span className="fx-lv"><span className="fx-dot" />LIVE<span className="fx-ep">#{epoch}</span></span>
-        <span className={'fx-tm' + (urgent ? ' urgent' : '')}>{fmt(timeLeft)}</span>
+    <div className="fl-hero">
+      <div className="fl-htop">
+        <span className="fl-live"><span className="d" />LIVE<span className="ep">#{round.epoch}</span></span>
+        <div className="fl-ring">
+          <svg width="54" height="54" viewBox="0 0 54 54">
+            <circle cx="27" cy="27" r="24" fill="none" stroke="rgba(255,255,255,.1)" strokeWidth="4" />
+            <circle cx="27" cy="27" r="24" fill="none" stroke={urgent ? '#ff6f8d' : '#8b6bff'} strokeWidth="4"
+              strokeLinecap="round" strokeDasharray={C.toFixed(1)} strokeDashoffset={(C * (1 - frac)).toFixed(1)} />
+          </svg>
+          <div className="tt">{fmt(timeLeft)}<span className="tl">LEFT</span></div>
+        </div>
       </div>
 
-      <button className="fx-big up" onClick={() => onSide(epoch, 'heads', headsPayout ?? 2.0, tailsPayout ?? 2.0)}>
-        <span className="fx-ic">↑</span><span className="fx-lb">UP</span><span className="fx-ml">{fmtPayout(headsPayout)}</span>
-      </button>
+      <div className="fl-locked">🔒 Betting closed — locked at go-live</div>
 
-      <div className="fx-panel">
-        <div className="fx-plab">
-          <span className="fx-l">LIVE PRICE</span>
-          <span className="fx-co">locked {lockPrice > 0 ? '$' + lockPrice.toFixed(2) : '—'}</span>
+      <div className="fl-prow2">
+        <div>
+          <div className="fl-price" style={{ color: up ? 'var(--up)' : 'var(--down)' }}>
+            {livePrice > 0 ? '$' + livePrice.toFixed(4) : '—'}
+          </div>
+          <div className="fl-lockpx">locked {lockPx > 0 ? '$' + lockPx.toFixed(4) : '—'}</div>
         </div>
-        <div className="fx-prow2">
-          <div className="fx-cprice" style={{ color: up ? 'var(--up)' : 'var(--down)' }}>${livePrice.toFixed(4)}</div>
-          {lockPrice > 0 && (
-            <div className="fx-cdelta" style={{ background: up ? 'var(--up)' : 'var(--down)' }}>
-              {up ? '↑' : '↓'} ${Math.abs(priceDiff).toFixed(4)}
-            </div>
-          )}
-        </div>
-        {spark}
-        <div className="fx-metrow">
-          <div className="fx-met"><div className="fx-ml2">PRIZE POOL</div><div className="fx-mv g">${total.toFixed(2)}</div></div>
-          {myBet > 0
-            ? <div className="fx-met"><div className="fx-ml2">YOUR BET</div><div className="fx-mv">${myBet.toFixed(2)} → ~${(myBet * myPayout).toFixed(2)}</div></div>
-            : <div className="fx-met"><div className="fx-ml2">DOWN PAYS</div><div className="fx-mv">{fmtPayout(tailsPayout)}</div></div>}
-        </div>
-        <div className="fx-sent">
-          <div className="fx-sl"><span className="su">▲ UP {upPct}%</span><span className="sd">{100 - upPct}% DOWN ▼</span></div>
-          <div className="fx-bar"><div className="fx-f" style={{ width: upPct + '%' }} /></div>
-        </div>
-        {myBet > 0 && (
-          <div className="fx-pos">
-            <span>● YOUR {mySide === 'heads' ? 'UP' : 'DOWN'} BET</span>
-            <span>${myBet.toFixed(2)} → ~${(myBet * myPayout).toFixed(2)}</span>
+        {lockPx > 0 && (
+          <div className="fl-move" style={{ background: up ? 'var(--up)' : 'var(--down)', color: up ? '#03281a' : '#fff' }}>
+            {up ? '↑' : '↓'} {((Math.abs(diff) / lockPx) * 100).toFixed(2)}%
           </div>
         )}
       </div>
 
-      <button className="fx-big down" onClick={() => onSide(epoch, 'tails', headsPayout ?? 2.0, tailsPayout ?? 2.0)}>
-        <span className="fx-ic">↓</span><span className="fx-lb">DOWN</span><span className="fx-ml">{fmtPayout(tailsPayout)}</span>
-      </button>
-    </div>
-  );
-}
-
-function UpcomingTile({ round, next, onSide, netMult = NET_MULT }) {
-  const { epoch, headsPool = 0, tailsPool = 0, lockTime = 0 } = round;
-  const headsPayout = livePayout(headsPool, tailsPool, netMult);
-  const tailsPayout = livePayout(tailsPool, headsPool, netMult);
-
-  const [now, setNow] = useState(Math.floor(Date.now() / 1000));
-  useEffect(() => {
-    const i = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
-    return () => clearInterval(i);
-  }, []);
-  const startsIn = Math.max(0, lockTime - now);
-  const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-
-  return (
-    <div className="fx-ut">
-      <div className="fx-uh">
-        <span className="fx-ue">#{epoch}</span>
-        {next ? <span className="fx-ub">NEXT</span> : <span className="fx-us2">⏱ {fmt(startsIn)}</span>}
+      <div className="fl-scale">
+        {SCALE_ORDER.map((k) => {
+          const m = META[k];
+          const mult = bracketMult(round.pools?.[k] || 0, total, feeBps);
+          const cls = ['fl-seg', here === k ? 'here' : '', mineKeys.has(k) ? 'mine' : ''].join(' ').trim();
+          return (
+            <div className={cls} key={k}>
+              <div className="sr">{m.label.replace(' ', '')}<br />{m.range}</div>
+              <div className="sx">{fmtMult(mult)}</div>
+              <div className="sp">{fmtUsd(round.pools?.[k] || 0)}</div>
+            </div>
+          );
+        })}
       </div>
-      {next && (
-        <div className="fx-us">in <b>{fmt(startsIn)}</b>{total > 0 ? <> · <span className="g">${total.toFixed(0)}</span></> : null}</div>
+
+      {mineKeys.size > 0 ? (
+        <div className="fl-yours">Your pick: <b>{[...mineKeys].map(k => OUTCOME_LABEL[k]).join(', ')}</b> · pot {fmtUsd(total)}</div>
+      ) : (
+        <div className="fl-yours">You didn’t enter this round · pot {fmtUsd(total)}</div>
       )}
-      <div className="fx-ubt">
-        <button className="fx-mini u" onClick={() => onSide(epoch, 'heads', headsPayout ?? 2.0, tailsPayout ?? 2.0)}>↑ UP</button>
-        <button className="fx-mini d" onClick={() => onSide(epoch, 'tails', headsPayout ?? 2.0, tailsPayout ?? 2.0)}>↓ DOWN</button>
+    </div>
+  );
+}
+
+// One upcoming (bettable) round — 4 bracket buttons with live payouts.
+function UpcomingCard({ round, isNext, onPick, feeBps }) {
+  const [now, setNow] = useState(Math.floor(Date.now() / 1000));
+  useEffect(() => {
+    const i = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
+    return () => clearInterval(i);
+  }, []);
+  const total = round.totalPool || 0;
+  const startsIn = Math.max(0, (round.startTime || 0) - now);
+  const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  const anyBets = total > 0;
+
+  return (
+    <div className={'fl-fc' + (isNext ? ' next' : '')}>
+      <div className="fl-fctop">
+        <div className="fl-fcl">
+          <span className="fl-fcep">#{round.epoch}</span>
+          <span className={'fl-badge' + (isNext ? '' : ' soon')}>{isNext ? 'NEXT' : 'SOON'}</span>
+        </div>
+        <span className="fl-when"><span className="k">STARTS</span>{fmt(startsIn)}</span>
+      </div>
+      <div className="fl-grid">
+        {BRACKET_META.map((b) => {
+          const mult = bracketMult(round.pools?.[b.key] || 0, total, feeBps);
+          return (
+            <button className={'fl-bk ' + b.cls} key={b.key} onClick={() => onPick(round.epoch, b.key)}>
+              <span className="bl"><span className="ba">{b.label}</span><span className="bp">{b.range}</span></span>
+              <span className="bm">{fmtMult(mult)}</span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="fl-fcfoot">
+        {anyBets ? <>pool <b>{fmtUsd(total)}</b> · {round.betCount} bets · payouts are live estimates</>
+                 : <>empty — bet first and set the odds</>}
       </div>
     </div>
+  );
+}
+
+function BetModal({ open, epoch, bracket, round, feeBps, balance, minUsd, maxUsd, onClose, onConfirm }) {
+  const [amt, setAmt] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  useEffect(() => { if (open) { setAmt(''); setErr(null); setBusy(false); } }, [open, epoch, bracket]);
+  if (!open) return null;
+
+  const meta = META[bracket];
+  const total = round?.totalPool || 0;
+  const pool = round?.pools?.[bracket] || 0;
+  const usd = parseFloat(amt) || 0;
+  // Payout estimate: recompute with this bet added to the bracket pool.
+  const mult = bracketMult(pool + usd, total + usd, feeBps);
+  const est = mult != null ? usd * mult : 0;
+  const chips = [minUsd, 10, 25, maxUsd].filter((v, i, a) => v > 0 && a.indexOf(v) === i);
+
+  const submit = async () => {
+    setErr(null);
+    if (usd < minUsd) { setErr(`Minimum bet is ${fmtUsd(minUsd)}`); return; }
+    if (usd > maxUsd) { setErr(`Maximum bet is ${fmtUsd(maxUsd)}`); return; }
+    if (usd > balance) { setErr('Not enough balance'); return; }
+    setBusy(true);
+    try { await onConfirm(epoch, bracket, usd); onClose(); }
+    catch (e) { setErr(e?.message || 'Bet failed'); setBusy(false); }
+  };
+
+  return (
+    <>
+      <div className="fl-backdrop" onClick={onClose} />
+      <div className="fl-sheet">
+        <div className="fl-grab" />
+        <div className="fl-shhead">
+          <div className="fl-shtitle">Round #{epoch}</div>
+          <button className="fl-close" onClick={onClose}>×</button>
+        </div>
+        <div className={'fl-pickpill ' + meta.cls}>{meta.label} <span className="rng">{meta.range}</span></div>
+
+        <div className="fl-amt">
+          <span className="dollar">$</span>
+          <input inputMode="decimal" placeholder="0" value={amt}
+            onChange={(e) => setAmt(e.target.value.replace(/[^\d.]/g, ''))} />
+        </div>
+        <div className="fl-chips">
+          {chips.map((c) => (
+            <button key={c} className={'fl-chip' + (usd === c ? ' on' : '')} onClick={() => setAmt(String(c))}>${c}</button>
+          ))}
+        </div>
+
+        <div className="fl-est">
+          <span className="l">EST. PAYOUT IF RIGHT</span>
+          <span className="v">{usd > 0 ? `${fmtUsd(est)} · ${fmtMult(mult)}` : '—'}</span>
+        </div>
+
+        <button className="fl-cta" disabled={busy || usd <= 0} onClick={submit}>
+          {busy ? 'Confirming…' : `Bet ${usd > 0 ? fmtUsd(usd) : ''} on ${meta.label}`}
+        </button>
+        {err && <div className="fl-sherr">{err}</div>}
+        <div className="fl-shnote">
+          Payout is a live estimate — it moves as others bet, and settles from the final pools.
+          Fee is {(feeBps / 100).toFixed(0)}% of winnings only.
+        </div>
+      </div>
+    </>
+  );
+}
+
+function RoundsPopup({ open, onClose, userBets, recentRounds, liveRound, upcomingRounds, onClaim }) {
+  if (!open) return null;
+  const byEpoch = {};
+  [...(recentRounds || []), liveRound, ...(upcomingRounds || [])].forEach(r => { if (r) byEpoch[r.epoch] = r; });
+  const epochs = Object.keys(userBets || {}).map(Number).sort((a, b) => b - a);
+
+  return (
+    <>
+      <div className="fl-backdrop" onClick={onClose} />
+      <div className="fl-sheet">
+        <div className="fl-grab" />
+        <div className="fl-shhead">
+          <div className="fl-shtitle">My rounds</div>
+          <button className="fl-close" onClick={onClose}>×</button>
+        </div>
+        {epochs.length === 0 && <div className="fl-rempty">No bets yet. Pick a bracket to get started.</div>}
+        {epochs.map((ep) => {
+          const bets = userBets[ep] || [];
+          const r = byEpoch[ep];
+          const outcome = r?.outcome || 'unresolved';
+          const resolved = r && outcome !== 'unresolved';
+          const won = resolved && bets.some(b => b.bracket === outcome);
+          const claimable = won && bets.some(b => !b.claimed);
+          const picks = [...new Set(bets.map(b => OUTCOME_LABEL[b.bracket]))].join(', ');
+          const stake = bets.reduce((s, b) => s + b.amount, 0);
+          const status = !resolved ? 'Pending'
+            : outcome === 'tie' ? 'Flat — refunded'
+            : won ? 'Won' : 'Lost';
+          return (
+            <div className="fl-rrow" key={ep}>
+              <div>
+                <div className="ep">#{ep} · {picks}</div>
+                <div className="st">{fmtUsd(stake)} · {status}{resolved && ` · result ${OUTCOME_LABEL[outcome]}`}</div>
+              </div>
+              {claimable && <button className="claim" onClick={() => onClaim(ep)}>Collect</button>}
+            </div>
+          );
+        })}
+      </div>
+    </>
   );
 }
 
@@ -1248,292 +484,193 @@ function UpcomingTile({ round, next, onSide, netMult = NET_MULT }) {
 // MAIN
 // ============================================================
 export default function Flipsy({ onConnectWallet }) {
-  const wallet = useWallet();
-
   useEffect(() => { injectFlipsyStyles(); }, []);
-
-  let hookData = null, hookError = null;
-  try { hookData = useFlipsy(wallet); }
-  catch (e) { hookError = e; console.error('[Flipsy] useFlipsy threw:', e); }
-
+  const wallet = useWallet();
   const {
-    livePrice = 0, liveRound = null, upcomingRounds = [], recentRounds = [], userBets = {}, balance = 0,
-    balanceStatus = 'idle',
-    placeBet = async () => { throw new Error('Hook not ready'); },
-    claim = async () => { throw new Error('Hook not ready'); },
-    loading = true,
-    programConfig = null,
-    chainError = null,
-  } = hookData || {};
-
-  const minBetUsd = programConfig && livePrice > 0
-    ? +((programConfig.minBet / 1e9) * livePrice).toFixed(2)
-    : DEFAULT_MIN_BET;
-  const maxBetUsd = programConfig && livePrice > 0
-    ? +((programConfig.maxBet / 1e9) * livePrice).toFixed(2)
-    : DEFAULT_MAX_BET;
-  const claimForfeitDelay = programConfig?.claimForfeitDelay || DEFAULT_CLAIM_FORFEIT_DELAY;
+    livePrice, liveRound, upcomingRounds, recentRounds, userBets, balance,
+    balanceStatus, placeBet, claim, loading, programConfig, chainError,
+  } = useFlipsy(wallet);
 
   const [flash, setFlash] = useState(null);
-  const [geo, setGeo] = useState({ blocked: false, ready: false });
   const [betModal, setBetModal] = useState(null);
   const [roundsOpen, setRoundsOpen] = useState(false);
-  const carouselRef = useRef(null);
 
   useEffect(() => {
-    let cancelled = false;
-    checkGeo().then((res) => { if (!cancelled) setGeo({ blocked: res.blocked, ready: true }); });
-    return () => { cancelled = true; };
-  }, []);
-
-  const walletBypass = wallet?.publicKey && GEO_BYPASS_WALLETS.has(wallet.publicKey.toBase58());
-  const effectivelyBlocked = geo.blocked && !walletBypass;
-
-  useEffect(() => {
-    if (hookError) setFlash({ type: 'error', msg: `Hook crashed: ${hookError.message || 'see console'}` });
-  }, [hookError]);
-
-  useEffect(() => {
-    if (chainError) setFlash({ type: 'error', msg: chainError });
-  }, [chainError]);
-
-  useEffect(() => {
-    if (!liveRound || loading) return;
-    const t = setTimeout(() => {
-      const live = carouselRef.current?.querySelector('.fp-card-live');
-      if (live && carouselRef.current) {
-        const container = carouselRef.current;
-        container.scrollLeft = live.offsetLeft + live.offsetWidth / 2 - container.offsetWidth / 2;
-      }
-    }, 400);
+    if (!flash) return;
+    const t = setTimeout(() => setFlash(null), 3200);
     return () => clearTimeout(t);
-  }, [liveRound?.epoch, loading]);
-
-  useEffect(() => {
-    if (flash) { const t = setTimeout(() => setFlash(null), 3500); return () => clearTimeout(t); }
   }, [flash]);
 
-  const getBetsForEpoch = (epoch) => {
-    const b = userBets[epoch];
-    if (!b) return [];
-    return Array.isArray(b) ? b : [b];
-  };
+  const feeBps = programConfig?.feeBps ?? 500;
+  const minUsd = useMemo(() => {
+    const lp = programConfig?.minBet, px = livePrice;
+    return lp && px ? Math.max(1, Math.ceil((lp / 1e9) * px)) : 1;
+  }, [programConfig, livePrice]);
+  const maxUsd = useMemo(() => {
+    const lp = programConfig?.maxBet, px = livePrice;
+    return lp && px ? Math.floor((lp / 1e9) * px) : 25;
+  }, [programConfig, livePrice]);
 
-  const nowTs = Math.floor(Date.now() / 1000);
-
-  const isClaimable = (round) => {
-    const expired = round.resolvedAt > 0 && nowTs > round.resolvedAt + claimForfeitDelay;
-    if (expired) return false;
-    const bets = getBetsForEpoch(round.epoch);
-    return bets.some(b => {
-      if (b.claimed) return false;
-      if (round.outcome === b.side) return true;
-      if (round.outcome === 'tie') return true;
-      return false;
-    });
-  };
-
-  const claimableRounds = recentRounds.filter(r => isClaimable(r));
-  const hasClaim = claimableRounds.length > 0;
-
-  const handleSideTap = (epoch, side, headsPayout, tailsPayout) => {
-    if (!wallet.connected) { onConnectWallet?.(); return; }
-    setBetModal({ epoch, side, headsPayout, tailsPayout });
-  };
-
-  const handleTrade = useCallback(async (epoch, side, amount) => {
-    if (amount < minBetUsd) throw new Error(`Minimum bet is $${minBetUsd}`);
-    if (amount > maxBetUsd) throw new Error(`Maximum bet is $${maxBetUsd}`);
-    if (balance < amount) throw new Error('Insufficient balance');
-    await placeBet(epoch, side, amount);
-    setFlash({ type: 'success', msg: `${side === 'heads' ? '↑ UP' : '↓ DOWN'} #${epoch} · $${amount.toFixed(2)}` });
-  }, [placeBet, balance, minBetUsd, maxBetUsd]);
-
-  const handleClaim = async (epoch) => {
-    if (!wallet.connected) { onConnectWallet?.(); return; }
-    try {
-      await claim(epoch);
-      setFlash({ type: 'success', msg: `💰 Claimed #${epoch}` });
-      setRoundsOpen(false);
-    } catch (e) {
-      setFlash({ type: 'error', msg: e.message || 'Claim failed' });
+  // streak + pips from resolved recent rounds the user played
+  const sortedRecent = useMemo(
+    () => [...(recentRounds || [])].sort((a, b) => (b.epoch || 0) - (a.epoch || 0)),
+    [recentRounds],
+  );
+  const pips = useMemo(() => {
+    return [...(recentRounds || [])]
+      .filter(r => r && r.outcome && r.outcome !== 'unresolved')
+      .sort((a, b) => (a.epoch || 0) - (b.epoch || 0))
+      .slice(-12)
+      .map(r => (r.outcome.startsWith('up') ? 'u' : r.outcome.startsWith('down') ? 'd' : 't'));
+  }, [recentRounds]);
+  const streak = useMemo(() => {
+    let s = 0;
+    for (const r of sortedRecent) {
+      if (!r || r.outcome === 'unresolved') continue;
+      const bets = userBets[r.epoch];
+      if (!bets || bets.length === 0) break;
+      const won = bets.some(b => b.bracket === r.outcome) || r.outcome === 'tie';
+      if (won) s++; else break;
     }
-  };
+    return s;
+  }, [sortedRecent, userBets]);
 
-  if (geo.ready && effectivelyBlocked) {
-    return <BlockScreen title={<>Not available <em>here</em></>} message="Flipsy is not available in your region." sub="This may change in the future." />;
-  }
+  const handlePick = useCallback((epoch, bracket) => {
+    if (!wallet.connected) { onConnectWallet?.(); return; }
+    setBetModal({ epoch, bracket });
+  }, [wallet.connected, onConnectWallet]);
 
-  const liveEpoch = liveRound?.epoch ?? upcomingRounds[0]?.epoch ?? null;
-  const nothingToShow = !liveRound && upcomingRounds.length === 0 && recentRounds.length === 0;
+  const handleConfirm = useCallback(async (epoch, bracket, usd) => {
+    await placeBet(epoch, bracket, usd);
+    setFlash({ type: 'success', msg: `✅ Bet placed on #${epoch}` });
+  }, [placeBet]);
 
-  // --- derived UI data ---
-  const sortedRecent = [...recentRounds].sort((a, b) => (b.epoch || 0) - (a.epoch || 0)); // newest first
-  let streak = 0;
-  for (const r of sortedRecent) {
-    if (!r || r.outcome === 'unresolved') continue;
-    const rb = getBetsForEpoch(r.epoch);
-    if (!rb || rb.length === 0) break;            // streak counts only rounds you played
-    const won = rb.some(b => r.outcome === b.side || r.outcome === 'tie');
-    if (won) streak++; else break;
-  }
+  const handleClaim = useCallback(async (epoch) => {
+    try { await claim(epoch); setFlash({ type: 'success', msg: `💰 Collected #${epoch}` }); setRoundsOpen(false); }
+    catch (e) { setFlash({ type: 'error', msg: e?.message || 'Collect failed' }); }
+  }, [claim]);
 
-  const resolved = [...recentRounds]
-    .filter(r => r && r.outcome && r.outcome !== 'unresolved')
-    .sort((a, b) => (a.epoch || 0) - (b.epoch || 0));
-  const pips = resolved.slice(-12).map(r => (r.outcome === 'heads' ? 'u' : r.outcome === 'tails' ? 'd' : 't'));
-  const upCount = pips.filter(p => p === 'u').length;
-  const upRate = pips.length ? Math.round((upCount / pips.length) * 100) : 0;
+  const claimableCount = useMemo(() => {
+    let n = 0;
+    const byEpoch = {};
+    [...(recentRounds || []), liveRound].forEach(r => { if (r) byEpoch[r.epoch] = r; });
+    for (const ep of Object.keys(userBets || {})) {
+      const r = byEpoch[ep];
+      if (r && r.outcome && r.outcome !== 'unresolved' && r.outcome !== 'tie') {
+        if ((userBets[ep] || []).some(b => !b.claimed && b.bracket === r.outcome)) n++;
+      }
+    }
+    return n;
+  }, [userBets, recentRounds, liveRound]);
 
-  const netMult = (programConfig && programConfig.feeBps != null)
-    ? Math.max(0, 1 - programConfig.feeBps / 10000)
-    : NET_MULT;
-  const heroRound = liveRound || upcomingRounds[0] || null;
-  const gridRounds = liveRound ? upcomingRounds.slice(0, 6) : upcomingRounds.slice(1, 7);
+  const upcoming = upcomingRounds || [];
+  const nothing = !liveRound && upcoming.length === 0;
+  const betRound = betModal
+    ? (liveRound?.epoch === betModal.epoch ? liveRound : upcoming.find(r => r.epoch === betModal.epoch)) || null
+    : null;
 
-  // Honest balance pill — never a silent zero.
   const renderBalance = () => {
     if (!wallet.connected) {
       return (
-        <div className="fx-bal fx-bal-connect" onClick={() => onConnectWallet?.()}>
-          <span className="fx-bal-v">Connect</span>
+        <div className="fl-bal connect" onClick={() => onConnectWallet?.()}>
+          <span className="fl-bal-v">Connect</span>
         </div>
       );
     }
-    const isLoading = balanceStatus === 'loading' || balanceStatus === 'idle';
-    const isFail = balanceStatus === 'fail';
+    const fail = balanceStatus === 'fail';
+    const load = balanceStatus === 'loading' || balanceStatus === 'idle';
     return (
-      <div className={'fx-bal' + (isFail ? ' warn' : '')} title={isFail ? 'Solana RPC declined the balance lookup' : undefined}>
-        <span className="fx-bal-l">BAL</span>
-        <span className={'fx-bal-v' + (isFail ? ' fail' : '')}>
-          {isFail ? 'RPC DOWN' : isLoading ? '…' : '$' + balance.toFixed(2)}
-        </span>
+      <div className={'fl-bal' + (fail ? ' warn' : '')}>
+        <span className="fl-bal-l">BAL</span>
+        <span className={'fl-bal-v' + (fail ? ' fail' : '')}>{fail ? 'RPC DOWN' : load ? '…' : fmtUsd(balance)}</span>
       </div>
     );
   };
 
   return (
-    <div className="fp-page fx-page">
-      {hasClaim && (
-        <div className="fx-claim" onClick={() => setRoundsOpen(true)}>
-          <span>◆</span>
-          <span>{claimableRounds.length} ROUND{claimableRounds.length > 1 ? 'S' : ''} READY TO COLLECT</span>
-          <b className="fx-claim-c">{claimableRounds.length}</b>
-        </div>
-      )}
+    <div className="fl-page">
+      {flash && <div className="fl-flashwrap"><div className={'fl-flash ' + flash.type}>{flash.msg}</div></div>}
 
-      {flash && (
-        <div className="fx-flash-wrap"><div className={'fx-flash ' + flash.type}>{flash.msg}</div></div>
-      )}
-
-      <div className="fx-inner">
-        <header className="fx-hd">
-          <div className="fx-br">
-            <div className="fx-mascot">F</div>
-            <div>
-              <div className="fx-bt">flipsy</div>
-              <div className="fx-bs">Solana Sentiment</div>
-            </div>
+      <div className="fl-inner">
+        <header className="fl-hd">
+          <div className="fl-br">
+            <div className="fl-mascot">F</div>
+            <div><div className="fl-bt">flipsy</div><div className="fl-bs">Solana Sentiment</div></div>
           </div>
-          <div className="fx-hr">
-            {streak > 0 && <div className="fx-streak">🔥 {streak}</div>}
+          <div className="fl-hr">
+            {streak > 0 && <div className="fl-streak">🔥 {streak}</div>}
             {renderBalance()}
           </div>
         </header>
+        <div className="fl-tag"><span className="d" />Predict how far SOL moves · on-chain · settles in SOL</div>
 
-        <div className="fx-prow">
-          <div className="fx-ppill">
-            <div className="fx-ptok">◎</div>
-            <div>
-              <div className="fx-pv">{livePrice > 0 ? '$' + livePrice.toFixed(2) : '—'}</div>
-              <div className="fx-pl">SOL / USD</div>
-            </div>
+        <div className="fl-prow">
+          <div className="fl-ppill">
+            <div className="fl-ptok">◎</div>
+            <div><div className="fl-pv">{livePrice > 0 ? '$' + livePrice.toFixed(2) : '—'}</div><div className="fl-pl">SOL / USD</div></div>
           </div>
+          {pips.length > 0 && (
+            <div className="fl-pips">{pips.map((p, i) => <span key={i} className={'fl-pip ' + p} />)}</div>
+          )}
         </div>
 
-        {SOL_FORECASTS.length > 0 && (
+        {/* LIVE (watch-only) */}
+        {liveRound && (
           <>
-            <div className="fx-fclbl">◎ SOL FORECAST · ANALYST ESTIMATES</div>
-            <div className="fx-fcrow">
-              {SOL_FORECASTS.map((f, i) => (
-                <div className="fx-fcell" key={i}>
-                  <div className="fx-ft">{f.t}</div>
-                  <div className="fx-fp">{f.p}</div>
-                  <div className={'fx-fd ' + (f.k || 'n')}>{f.k === 'u' ? '↑ ' : ''}{f.d}</div>
-                </div>
-              ))}
-            </div>
+            <div className="fl-sec"><h3>Live now <em>#{liveRound.epoch}</em></h3><span className="r">watching</span></div>
+            <LiveHero round={liveRound} livePrice={livePrice} myBets={userBets[liveRound.epoch]} feeBps={feeBps} />
           </>
         )}
 
-        {pips.length > 0 && (
-          <div className="fx-hist">
-            <span className="fx-hl">LAST {pips.length}</span>
-            <span className="fx-pips">{pips.map((p, i) => <span key={i} className={'fx-pip ' + p} />)}</span>
-            <span className="fx-wr">{upRate}% ↑</span>
-          </div>
+        {/* UPCOMING (bettable) */}
+        <div className="fl-sec"><h3>Upcoming rounds</h3><span className="r">bet ahead →</span></div>
+        <div className="fl-hint">Pick how far SOL moves. Outer brackets are harder — they pay more.</div>
+
+        {loading && nothing && <div className="fl-empty">Loading rounds…</div>}
+        {!loading && nothing && chainError && (
+          <div className="fl-empty err"><div className="i">⚠️</div><div className="t">Couldn’t load rounds</div><div>{chainError}</div></div>
+        )}
+        {!loading && nothing && !chainError && (
+          <div className="fl-empty"><div className="i">⏳</div><div className="t">No rounds yet</div><div>New rounds start automatically.</div></div>
         )}
 
-        <div className="fx-rh">
-          <h3>{heroRound ? <>Live Round <em>#{heroRound.epoch}</em></> : <>Rounds</>}</h3>
-          <span className="fx-sw">↑ up or ↓ down?</span>
+        <div className="fl-feed">
+          {upcoming.map((r, i) => (
+            <UpcomingCard key={r.epoch} round={r} isNext={i === 0} onPick={handlePick} feeBps={feeBps} />
+          ))}
         </div>
 
-        <div className="fx-wrap">
-          {loading && nothingToShow && <div className="fx-empty">Loading rounds…</div>}
-          {!loading && nothingToShow && chainError && (
-            <div className="fx-empty err"><div className="fx-empty-i">⚠️</div><div className="fx-empty-t">Couldn't load rounds</div><div className="fx-empty-m">{chainError}</div></div>
-          )}
-          {!loading && nothingToShow && !chainError && (
-            <div className="fx-empty"><div className="fx-empty-i">⏳</div><div className="fx-empty-t">No active rounds</div><div className="fx-empty-m">New rounds start automatically. Hang tight.</div></div>
-          )}
-          {heroRound && (
-            <LiveHero round={heroRound} livePrice={livePrice} bets={getBetsForEpoch(heroRound.epoch)} onSide={handleSideTap} netMult={netMult} />
-          )}
-        </div>
-
-        {gridRounds.length > 0 && (
-          <>
-            <div className="fx-utitle"><h4>Upcoming rounds</h4><span className="fx-c">bet early →</span></div>
-            <div className="fx-ugrid">
-              {gridRounds.map((r, i) => (
-                <UpcomingTile key={r.epoch} round={r} next={!!liveRound && i === 0} onSide={handleSideTap} netMult={netMult} />
-              ))}
-            </div>
-          </>
-        )}
-
-        <div className="fx-tabs">
-          <div className="fx-tab on">◆ Play</div>
-          <div className="fx-tab disabled">🏆 Leaders<span className="fx-soon">soon</span></div>
-          <div className="fx-tab" onClick={() => setRoundsOpen(true)}>
-            📋 My Rounds{hasClaim ? ` · ${claimableRounds.length}` : ''}
+        <div className="fl-tabs">
+          <div className="fl-tab on">◆ Play</div>
+          <div className="fl-tab disabled">🏆 Leaders<span className="fl-soon">soon</span></div>
+          <div className="fl-tab" onClick={() => setRoundsOpen(true)}>
+            📋 My Rounds{claimableCount > 0 ? ` · ${claimableCount}` : ''}
           </div>
         </div>
-
-        <div className="fx-footer">Powered by Solana · Non-custodial · 25% fee on wins only · No other fees</div>
+        <div className="fl-foot">Powered by Solana · Non-custodial · {(feeBps / 100).toFixed(0)}% fee on winnings only</div>
       </div>
 
+      <BetModal
+        open={!!betModal}
+        epoch={betModal?.epoch}
+        bracket={betModal?.bracket}
+        round={betRound}
+        feeBps={feeBps}
+        balance={balance}
+        minUsd={minUsd}
+        maxUsd={maxUsd}
+        onClose={() => setBetModal(null)}
+        onConfirm={handleConfirm}
+      />
       <RoundsPopup
         open={roundsOpen}
         onClose={() => setRoundsOpen(false)}
+        userBets={userBets}
+        recentRounds={recentRounds}
         liveRound={liveRound}
         upcomingRounds={upcomingRounds}
-        recentRounds={recentRounds}
-        userBets={userBets}
         onClaim={handleClaim}
-        claimForfeitDelay={claimForfeitDelay}
       />
-
-      {betModal && (
-        <BetModal
-          open={!!betModal} side={betModal.side} epoch={betModal.epoch}
-          headsPayout={betModal.headsPayout} tailsPayout={betModal.tailsPayout}
-          balance={balance} livePrice={livePrice}
-          minBet={minBetUsd} maxBet={maxBetUsd}
-          onClose={() => setBetModal(null)} onTrade={handleTrade}
-        />
-      )}
     </div>
   );
 }
