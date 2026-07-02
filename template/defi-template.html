@@ -722,38 +722,14 @@ main{max-width:540px;margin:0 auto;background:#fff;
     </div>
   </header>
 
-  <!-- APP CTA (native, drives traffic to the full swap app) -->
-  <a class="nx-applink" href="https://swap.verixiaapps.com">
-    <span class="nx-applink-ic">
-      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M17 7H9M17 7v8"/></svg>
-    </span>
-    <span class="nx-applink-tx">
-      <b>Trade any Solana token &mdash; best route</b>
-      <span><span class="d"></span>swap.verixiaapps.com</span>
-    </span>
-    <span class="nx-applink-go">Open &rarr;</span>
-  </a>
-
-  <!-- HERO: keyword H1 (compact) -->
+  <!-- HERO: keyword H1 (compact) — stays first for SEO -->
   <section class="nx-hero">
     <div class="nx-eyebrow"><span class="dot"></span><span class="txt">SOLANA &middot; NON-CUSTODIAL &middot; NO KYC</span></div>
     <h1 class="nx-h1">{{STATIC_H1}}</h1>
     <p class="nx-lede">{{STATIC_INTRO}}</p>
   </section>
 
-  <!-- REFERRAL (highest-value CTA, moved to top above the swap) -->
-  <div class="nx-refer-stack">
-    <a class="nx-refer pump-tier" href="https://swap.verixiaapps.com">
-      <span class="nx-refer-l">
-        <span class="nx-refer-tag">REFERRAL</span>
-        <b>Earn <em>50%</em> of fees from everyone you refer</b>
-        <span>FOREVER &middot; PAID DAILY IN SOL</span>
-      </span>
-      <span class="nx-refer-r">Join &rarr;</span>
-    </a>
-  </div>
-
-  <!-- LIVE SWAP (hero conversion) -->
+  <!-- LIVE SWAP (hero conversion) — moved directly under the hero -->
   <div class="nx-swap-label">
     <div class="nx-swap-label-title">Live swap &mdash; <em>trade now</em></div>
     <div class="nx-live-pill"><span class="dot"></span>LIVE QUOTE</div>
@@ -777,6 +753,30 @@ main{max-width:540px;margin:0 auto;background:#fff;
       </div>
     </div>
   </section>
+
+  <!-- REFERRAL (moved below the swap) -->
+  <div class="nx-refer-stack">
+    <a class="nx-refer pump-tier" href="https://swap.verixiaapps.com">
+      <span class="nx-refer-l">
+        <span class="nx-refer-tag">REFERRAL</span>
+        <b>Earn <em>50%</em> of fees from everyone you refer</b>
+        <span>FOREVER &middot; PAID DAILY IN SOL</span>
+      </span>
+      <span class="nx-refer-r">Join &rarr;</span>
+    </a>
+  </div>
+
+  <!-- APP CTA (moved below the swap; on-message copy for keyword pages) -->
+  <a class="nx-applink" href="https://swap.verixiaapps.com">
+    <span class="nx-applink-ic">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M17 7H9M17 7v8"/></svg>
+    </span>
+    <span class="nx-applink-tx">
+      <b>More ways to trade on Verixia</b>
+      <span><span class="d"></span>swap.verixiaapps.com</span>
+    </span>
+    <span class="nx-applink-go">Open &rarr;</span>
+  </a>
 
   <!-- QUICK REASSURANCE (first-screen trust) -->
   <div class="nx-reassure">
@@ -1248,18 +1248,43 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
         var r = await fetch(GT_API + '/search/pools?query=' + encodeURIComponent(q) + '&network=solana&page=1');
         var d = await r.json();
         var pools = (d && d.data) || [];
-        var best = null, bestLiq = -1;
+        var USDT_MINT = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
+        var QUOTE = {}; QUOTE[SOL_MINT] = 1; QUOTE[USDC_MINT] = 1; QUOTE[USDT_MINT] = 1;
+        var want = String(q || '').toLowerCase().replace(/^\$+/, '');
+        // Aggregate pool liquidity per candidate contract, across BOTH sides of
+        // every matching pool, then pick the highest-liquidity contract whose
+        // symbol matches the keyword. This lands on the canonical (routable)
+        // token instead of a thin same-symbol impostor with no swap route.
+        var agg = {};
+        function consider(id, symRaw, liq) {
+          if (!id) return;
+          var mint = String(id).replace(/^solana_/, '');
+          if (!mint || QUOTE[mint]) return;
+          var sym = String(symRaw || '').trim().toLowerCase().replace(/^\$+/, '').split(/\s+/)[0];
+          if (!agg[mint]) agg[mint] = { liq: 0, sym: sym };
+          agg[mint].liq += liq;
+          if (!agg[mint].sym && sym) agg[mint].sym = sym;
+        }
         for (var i = 0; i < pools.length; i++) {
           var a = pools[i].attributes || {};
           var rel = pools[i].relationships || {};
-          var bt = rel.base_token && rel.base_token.data && rel.base_token.data.id;
           var liq = Number(a.reserve_in_usd || 0);
-          if (bt && liq > bestLiq) { bestLiq = liq; best = bt; }
+          if (!(liq > 0)) continue;
+          var sides = String(a.name || '').split('/');
+          var baseId = rel.base_token && rel.base_token.data && rel.base_token.data.id;
+          var quoteId = rel.quote_token && rel.quote_token.data && rel.quote_token.data.id;
+          consider(baseId, sides[0], liq);
+          consider(quoteId, sides[1], liq);
         }
-        if (!best) return null;
-        var mint = String(best).replace(/^solana_/, '');
-        if (!mint || mint === SOL_MINT || mint === USDC_MINT) return null;
-        return { address: mint, symbol: '', name: '', logoURI: null };
+        var best = null, bestLiq = -1, exact = null, exactLiq = -1;
+        for (var mint in agg) {
+          var e = agg[mint];
+          if (e.liq > bestLiq) { bestLiq = e.liq; best = mint; }
+          if (want && e.sym === want && e.liq > exactLiq) { exactLiq = e.liq; exact = mint; }
+        }
+        var pick = exact || best;
+        if (!pick || QUOTE[pick]) return null;
+        return { address: pick, symbol: '', name: '', logoURI: null };
       } catch (e) { return null; }
     }
     async function resolveTermToMint(term) {
@@ -2405,4 +2430,4 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
 {{PAGE_META_SCRIPT}}
 </body>
 </html>
-  
+ 
