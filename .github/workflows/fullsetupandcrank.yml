@@ -1,48 +1,84 @@
 # ============================================================================
-# fullsetupandcrank.yml — REVIEW NOTES (read me) — no logic changed
+# fullsetupandcrank.yml — Crank smoke test (devnet)
 # ----------------------------------------------------------------------------
-# - SECURITY: this passes the cranker key as a PLAINTEXT workflow_dispatch input,
-#   visible in the Actions UI / run logs / history. Prefer an encrypted repo
-#   secret (secrets.CRANK_KEYPAIR) and trigger without exposing the key. Always
-#   use a DEDICATED, low-funded cranker wallet — never your main wallet.
-# - This is an 8-minute SMOKE TEST (timeout 480s; exit 124 or 0 counts as pass),
-#   not continuous cranking. For that, run crank.ts as a long-lived service
-#   (e.g. Railway) with FLIPSY_PROGRAM_ID and CRANK_KEYPAIR set as variables.
-# - Requires the program deployed + IDL published on-chain (anchor idl init) and
-#   the config PDA initialized, or the crank idles / errors on boot.
+# WHAT THIS IS: an ~8-minute smoke test that boots crank.ts against devnet to
+# confirm it connects, finds the IDL/config, and cranks a round or two. It is
+# NOT continuous cranking — for that, run crank.ts as a long-lived service
+# (e.g. Railway) with FLIPSY_PROGRAM_ID and CRANK_KEYPAIR set as variables.
+#
+# SECURITY (important):
+#   - The cranker key is read from an ENCRYPTED REPO SECRET (secrets.CRANK_KEYPAIR),
+#     never a workflow input. GitHub masks secrets in logs. Do NOT switch this to a
+#     workflow_dispatch input — those are shown in the UI and are NOT masked.
+#   - Use a DEDICATED, low-funded devnet cranker wallet. Never your main wallet.
+#
+# PROGRAM ID: FLIPSY_PROGRAM_ID falls back to the System Program placeholder
+#   (11111111111111111111111111111111) when the secret is unset, so the crank
+#   boots on a VALID key and simply idles/warns instead of crashing on
+#   `new PublicKey(undefined)`. Set secrets.FLIPSY_PROGRAM_ID once deployed.
+#
+# PREREQS: program deployed + IDL published (anchor idl init) + config PDA
+#   initialized. Otherwise the crank boots and idles ("No IDL on chain").
+#
+# SETUP: repo Settings -> Secrets and variables -> Actions -> New repository secret
+#   CRANK_KEYPAIR      = base58 (or JSON array) secret key of the devnet cranker
+#   FLIPSY_PROGRAM_ID  = deployed program ID (optional; placeholder used if unset)
 # ============================================================================
 name: Crank Smoke Test
 
 on:
-  workflow_dispatch:
-    inputs:
-      crank_keypair:
-        description: Phantom base58 private key
-        required: true
+  workflow_dispatch: {}
 
 permissions:
   contents: read
 
+concurrency:
+  group: crank-smoke
+  cancel-in-progress: true
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm install --no-audit --no-fund
-      - name: Run crank (smoke test, 8 min)
+
+      - name: Guard — require CRANK_KEYPAIR secret
         env:
-          CRANK_KEYPAIR: ${{ github.event.inputs.crank_keypair }}
-          RPC_URL: https://api.devnet.solana.com
+          CRANK_KEYPAIR: ${{ secrets.CRANK_KEYPAIR }}
+        run: |
+          if [ -z "$CRANK_KEYPAIR" ]; then
+            echo "::error::CRANK_KEYPAIR secret is not set. Add it under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          echo "CRANK_KEYPAIR present (value hidden)."
+
+      - name: Install deps
+        run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+
+      - name: Run crank (smoke test, ~8 min)
+        env:
+          # Masked by GitHub Actions in all logs.
+          CRANK_KEYPAIR: ${{ secrets.CRANK_KEYPAIR }}
+          # Falls back to the System Program placeholder so the crank boots on a
+          # VALID pubkey and idles instead of crashing when the real ID isn't set.
+          FLIPSY_PROGRAM_ID: ${{ secrets.FLIPSY_PROGRAM_ID || '11111111111111111111111111111111' }}
         run: |
           set +e
-          timeout 480 npx tsx crank/crank.ts
+          if [ "$FLIPSY_PROGRAM_ID" = "11111111111111111111111111111111" ]; then
+            echo "::warning::FLIPSY_PROGRAM_ID not set — using placeholder. Crank will idle (no IDL/config). Set secrets.FLIPSY_PROGRAM_ID after deploy."
+          fi
+          timeout 480 npx --yes tsx crank/crank.ts
           code=$?
+          # 124 = timed out (crank was happily looping) ; 0 = clean exit. Both pass.
           if [ "$code" = "124" ] || [ "$code" = "0" ]; then
             echo "Smoke test passed (exit=$code)"
             exit 0
           fi
+          echo "::error::Crank exited with code $code"
           exit "$code"
+
