@@ -1,25 +1,37 @@
 // ============================================================================
-// lib.rs — REVIEW NOTES (read me)
+// lib.rs — BRACKETS REWORK (read me)
 // ----------------------------------------------------------------------------
-// - Changes from your upload:
-//     (a) FIXED a compile bug in validate_program_params(): the claim_forfeit_delay
-//         require! had a duplicate `FlipsyError::BadParams` with no comma (lines
-//         ~450-452 of your file) — would not compile. Removed the stray duplicate.
-//     (b) declare_id! placeholder set to the Solana
-//   Playground default (11111111111111111111111111111111); SolPG auto-syncs it to
-//   your program keypair on Build. No program logic was modified.
-// - Logic verified consistent: account ::LEN sizes match struct fields (Config 138,
-//   Round 91, Bet 59, Vault 1); all FlipsyError codes + 12 events are defined;
-//   payout math (fee on profit) matches the UI's livePayout()+feeBps; auth on
-//   start/end is authority||cranker; claim is per-user (has_one).
-// - NOT compiled here (no Rust/Anchor toolchain) — build on SolPG to confirm.
+// WHAT CHANGED IN THIS PASS (binary up/down -> 4 magnitude brackets):
+//   1. Side{Heads,Tails} -> Bracket{UpSmall,UpBig,DownSmall,DownBig}. "Small" =
+//      |move| < BRACKET_THRESHOLD_BPS (0.5%); "Big" = at/above it.
+//   2. Round now holds FOUR pools (up_small/up_big/down_small/down_big); Round::LEN
+//      grows 91 -> 107. Bet.side -> Bet.bracket (LEN unchanged, 59).
+//   3. end_round() computes the % move from lock/close price, picks the winning
+//      bracket, and that bracket splits the WHOLE pot. If nobody bet the winning
+//      bracket -> AllLost (pot to house). Exact flat -> Tie (full refund, no fee).
+//   4. compute_payout(): winner's share = stake * total_pot / winning_pool, minus
+//      fee. FEE IS NOW STRICTLY ON PROFIT — the old "fee on principal" cases
+//      (thin pool / tie) are gone. Set feeBps = 500 (5%) at initialize.
+//   5. Betting locks BET_LOCK_LEAD (60s) BEFORE close: start_round sets
+//      lock_time = close_time - 60, and place_bet rejects bets past lock_time.
+//      Future (not-yet-started) rounds still take pre-bets. This is the fairness
+//      fix — the final stretch of a live round is watch-only.
+//
+// STILL OPEN / KNOWN RISKS (unchanged this pass, by decision):
+//   - Prices come from the off-chain crank (Coinbase spot), NOT an on-chain oracle.
+//     The operator sets lock/close price. Consider Pyth/Switchboard before scale.
+//   - super_sweep() still lets the authority drain any vault at any time.
+//   - BRACKET_THRESHOLD_BPS is a FIXED 0.5%; not volatility-scaled.
+//
+// NOT COMPILED / NOT TESTED HERE (no Rust/Anchor toolchain, no network). This is a
+// careful draft: build on Solana Playground, run on devnet, and ideally audit the
+// payout math before any mainnet funds. Account ::LEN values below are by hand.
 //
 // DEPLOY (Solana Playground):
 //   1. Anchor 0.30.1 (or 0.31.x) — match @coral-xyz/anchor in crank + frontend.
 //   2. Cargo.toml MUST enable: anchor-lang = { version = "0.30.1", features = ["init-if-needed"] }
 //   3. After deploy, publish IDL: anchor idl init <id> -f target/idl/flipsy.json
-//   4. Call initialize once (sets authority, cranker, feeBps, durations, min/max).
-//      feeBps set here = what the UI displays.
+//   4. Call initialize once (authority, cranker, feeBps=500, durations, min/max).
 //   5. Put the deployed program ID in crank (FLIPSY_PROGRAM_ID) + frontend
 //      (REACT_APP_FLIPSY_PROGRAM_ID).
 // ============================================================================
@@ -39,6 +51,16 @@ declare_id!("11111111111111111111111111111111"); // Solana Playground auto-syncs
 // ALL TUNABLE PARAMETERS LIVE IN THE CONFIG ACCOUNT (see ProgramParams).
 // ============================================================
 const BPS_DIVISOR: u64 = 10_000;
+
+// Bracket boundary: moves smaller than this (in basis points of the lock price)
+// are the "small" bracket, moves at/above it are the "big" bracket.
+// 50 bps = 0.5%.
+const BRACKET_THRESHOLD_BPS: i64 = 50;
+
+// Betting on a LIVE round closes this many seconds BEFORE it settles, so no one
+// can bet once the move (and its bracket) is nearly certain. The last stretch of
+// each round is watch-only. Betting on not-yet-started future rounds is unaffected.
+const BET_LOCK_LEAD: i64 = 60;
 
 // Bounds for safety — authority can set any value within these guardrails.
 const MAX_FEE_BPS: u64 = 9_000;              // 90% — prevents fat-finger 100%+
@@ -127,7 +149,7 @@ pub mod flipsy {
     }
 
     /// Update the full set of tunable program parameters.
-    /// fee_bps: win fee in basis points (2500 = 25%)
+    /// fee_bps: fee on winnings (profit only) in basis points (500 = 5%)
     /// betting_duration: how long each round lasts (seconds)
     /// gap_duration: gap between rounds (seconds)
     /// max_future_rounds: how many rounds ahead users can bet
@@ -256,8 +278,10 @@ pub mod flipsy {
         let round = &mut ctx.accounts.round;
         round.epoch = config.current_epoch;
         round.start_time = clock.unix_timestamp;
-        round.lock_time = clock.unix_timestamp + betting_duration;
         round.close_time = clock.unix_timestamp + betting_duration;
+        // Betting locks BET_LOCK_LEAD seconds before close (never before start,
+        // in case a very short duration is configured).
+        round.lock_time = (round.close_time - BET_LOCK_LEAD).max(round.start_time);
         round.next_start_time = round.close_time + gap_duration;
         round.lock_price = lock_price;
         round.close_price = 0;
@@ -284,20 +308,57 @@ pub mod flipsy {
         );
         round.close_price = close_price;
         round.resolved_at = clock.unix_timestamp;
-        round.outcome = if close_price == round.lock_price {
-            Outcome::Tie
+
+        // Size of the move in basis points of the lock price (i128 to avoid overflow).
+        // lock_price > 0 is guaranteed at start_round, so the divide is safe.
+        let diff = (close_price as i128) - (round.lock_price as i128);
+        let mag_bps = diff
+            .abs()
+            .checked_mul(BPS_DIVISOR as i128)
+            .ok_or(FlipsyError::MathOverflow)?
+            .checked_div(round.lock_price as i128)
+            .ok_or(FlipsyError::MathOverflow)?;
+        let big = mag_bps >= BRACKET_THRESHOLD_BPS as i128;
+
+        // Direction is decided by the raw price comparison (not the rounded bps),
+        // so a tiny move is still classified up/down correctly.
+        let winning: Option<Bracket> = if close_price == round.lock_price {
+            None // exact flat -> Tie (everyone refunded, no fee)
         } else if close_price > round.lock_price {
-            if round.heads_pool > 0 { Outcome::Heads } else { Outcome::AllLost }
-        } else if round.tails_pool > 0 {
-            Outcome::Tails
+            Some(if big { Bracket::UpBig } else { Bracket::UpSmall })
         } else {
-            Outcome::AllLost
+            Some(if big { Bracket::DownBig } else { Bracket::DownSmall })
+        };
+
+        round.outcome = match winning {
+            None => Outcome::Tie,
+            Some(b) => {
+                let winning_pool = match b {
+                    Bracket::UpSmall => round.up_small_pool,
+                    Bracket::UpBig => round.up_big_pool,
+                    Bracket::DownSmall => round.down_small_pool,
+                    Bracket::DownBig => round.down_big_pool,
+                };
+                if winning_pool > 0 {
+                    match b {
+                        Bracket::UpSmall => Outcome::UpSmall,
+                        Bracket::UpBig => Outcome::UpBig,
+                        Bracket::DownSmall => Outcome::DownSmall,
+                        Bracket::DownBig => Outcome::DownBig,
+                    }
+                } else {
+                    // Nobody bet the winning bracket — the whole pot goes to the house.
+                    Outcome::AllLost
+                }
+            }
         };
 
         if round.outcome == Outcome::AllLost {
             let total = round
-                .heads_pool
-                .checked_add(round.tails_pool)
+                .up_small_pool
+                .checked_add(round.up_big_pool)
+                .and_then(|s| s.checked_add(round.down_small_pool))
+                .and_then(|s| s.checked_add(round.down_big_pool))
                 .ok_or(FlipsyError::MathOverflow)?;
             if total > 0 {
                 let vault_info = ctx.accounts.vault.to_account_info();
@@ -324,7 +385,7 @@ pub mod flipsy {
         target_epoch: u64,
         bet_index: u64,
         amount: u64,
-        side: Side,
+        bracket: Bracket,
     ) -> Result<()> {
         let config = &ctx.accounts.config;
         require!(!config.paused, FlipsyError::Paused);
@@ -343,6 +404,9 @@ pub mod flipsy {
 
         let clock = Clock::get()?;
         let round = &mut ctx.accounts.round;
+        // For a started round, lock_time is set to BET_LOCK_LEAD seconds before
+        // close — so betting stops there and the final stretch is watch-only.
+        // For a not-yet-started future round, lock_time == 0 and pre-betting is open.
         if round.lock_time > 0 {
             require!(
                 clock.unix_timestamp < round.lock_time,
@@ -374,24 +438,18 @@ pub mod flipsy {
         bet.epoch = target_epoch;
         bet.bet_index = bet_index;
         bet.amount = amount;
-        bet.side = side;
+        bet.bracket = bracket;
         bet.claimed = false;
         bet.bump = ctx.bumps.bet;
 
-        match side {
-            Side::Heads => {
-                round.heads_pool = round
-                    .heads_pool
-                    .checked_add(amount)
-                    .ok_or(FlipsyError::MathOverflow)?;
-            }
-            Side::Tails => {
-                round.tails_pool = round
-                    .tails_pool
-                    .checked_add(amount)
-                    .ok_or(FlipsyError::MathOverflow)?;
-            }
-        }
+        let pool = match bracket {
+            Bracket::UpSmall => &mut round.up_small_pool,
+            Bracket::UpBig => &mut round.up_big_pool,
+            Bracket::DownSmall => &mut round.down_small_pool,
+            Bracket::DownBig => &mut round.down_big_pool,
+        };
+        *pool = pool.checked_add(amount).ok_or(FlipsyError::MathOverflow)?;
+
         round.bet_count = round
             .bet_count
             .checked_add(1)
@@ -402,7 +460,7 @@ pub mod flipsy {
             user: bet.user,
             bet_index,
             amount,
-            side,
+            bracket,
         });
         Ok(())
     }
@@ -489,44 +547,50 @@ fn compute_payout(round: &Round, bet: &Bet, fee_bps: u64) -> Result<(u64, u64)> 
     let bps_div = BPS_DIVISOR as u128;
     let bet_amt = bet.amount as u128;
 
-    match round.outcome {
-        Outcome::Unresolved => Err(FlipsyError::NotResolved.into()),
-        Outcome::AllLost => Ok((0, 0)),
-        Outcome::Tie => {
-            let fee = bet_amt
-                .checked_mul(fee_bps_u).ok_or(FlipsyError::MathOverflow)?
-                .checked_div(bps_div).ok_or(FlipsyError::MathOverflow)?;
-            let payout = bet_amt.checked_sub(fee).ok_or(FlipsyError::MathOverflow)?;
-            Ok((payout as u64, fee as u64))
-        }
-        Outcome::Heads | Outcome::Tails => {
-            let winning_side = if round.outcome == Outcome::Heads { Side::Heads } else { Side::Tails };
-            if bet.side != winning_side {
-                return Ok((0, 0));
-            }
-            let winning_pool = (if winning_side == Side::Heads { round.heads_pool } else { round.tails_pool }) as u128;
-            let losing_pool  = (if winning_side == Side::Heads { round.tails_pool } else { round.heads_pool }) as u128;
+    // Resolve which bracket won (and handle the non-paying outcomes up front).
+    let winning_bracket = match round.outcome {
+        Outcome::Unresolved => return Err(FlipsyError::NotResolved.into()),
+        Outcome::AllLost => return Ok((0, 0)),
+        // Exact flat: full refund of principal, NO fee. Fee is never charged on
+        // stake — only on profit — so "5% on winnings" is literally true.
+        Outcome::Tie => return Ok((bet.amount, 0)),
+        Outcome::UpSmall => Bracket::UpSmall,
+        Outcome::UpBig => Bracket::UpBig,
+        Outcome::DownSmall => Bracket::DownSmall,
+        Outcome::DownBig => Bracket::DownBig,
+    };
 
-            if losing_pool == 0 {
-                let fee = bet_amt
-                    .checked_mul(fee_bps_u).ok_or(FlipsyError::MathOverflow)?
-                    .checked_div(bps_div).ok_or(FlipsyError::MathOverflow)?;
-                let payout = bet_amt.checked_sub(fee).ok_or(FlipsyError::MathOverflow)?;
-                Ok((payout as u64, fee as u64))
-            } else {
-                let total = winning_pool.checked_add(losing_pool).ok_or(FlipsyError::MathOverflow)?;
-                let gross = bet_amt
-                    .checked_mul(total).ok_or(FlipsyError::MathOverflow)?
-                    .checked_div(winning_pool).ok_or(FlipsyError::MathOverflow)?;
-                let profit = gross.checked_sub(bet_amt).ok_or(FlipsyError::MathOverflow)?;
-                let fee = profit
-                    .checked_mul(fee_bps_u).ok_or(FlipsyError::MathOverflow)?
-                    .checked_div(bps_div).ok_or(FlipsyError::MathOverflow)?;
-                let payout = gross.checked_sub(fee).ok_or(FlipsyError::MathOverflow)?;
-                Ok((payout as u64, fee as u64))
-            }
-        }
+    // Wrong bracket -> nothing.
+    if bet.bracket != winning_bracket {
+        return Ok((0, 0));
     }
+
+    let winning_pool = (match winning_bracket {
+        Bracket::UpSmall => round.up_small_pool,
+        Bracket::UpBig => round.up_big_pool,
+        Bracket::DownSmall => round.down_small_pool,
+        Bracket::DownBig => round.down_big_pool,
+    }) as u128;
+
+    // winning_pool > 0 is guaranteed here — a zero winning pool resolves as AllLost.
+    let total = (round.up_small_pool as u128)
+        .checked_add(round.up_big_pool as u128).ok_or(FlipsyError::MathOverflow)?
+        .checked_add(round.down_small_pool as u128).ok_or(FlipsyError::MathOverflow)?
+        .checked_add(round.down_big_pool as u128).ok_or(FlipsyError::MathOverflow)?;
+
+    // Winner's share of the WHOLE pot, proportional to their stake in the winning bracket.
+    let gross = bet_amt
+        .checked_mul(total).ok_or(FlipsyError::MathOverflow)?
+        .checked_div(winning_pool).ok_or(FlipsyError::MathOverflow)?;
+
+    // Fee only on profit. If no other bracket had bets (total == winning_pool),
+    // gross == stake -> profit 0 -> fee 0 -> you just get your money back.
+    let profit = gross.checked_sub(bet_amt).ok_or(FlipsyError::MathOverflow)?;
+    let fee = profit
+        .checked_mul(fee_bps_u).ok_or(FlipsyError::MathOverflow)?
+        .checked_div(bps_div).ok_or(FlipsyError::MathOverflow)?;
+    let payout = gross.checked_sub(fee).ok_or(FlipsyError::MathOverflow)?;
+    Ok((payout as u64, fee as u64))
 }
 
 // ============================================================
@@ -607,7 +671,7 @@ pub struct EndRound<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(target_epoch: u64, bet_index: u64, amount: u64, side: Side)]
+#[instruction(target_epoch: u64, bet_index: u64, amount: u64, bracket: Bracket)]
 pub struct PlaceBet<'info> {
     #[account(seeds = [b"config"], bump = config.bump)]
     pub config: Account<'info, Config>,
@@ -719,8 +783,10 @@ pub struct Round {
     pub next_start_time: i64,
     pub lock_price: i64,
     pub close_price: i64,
-    pub heads_pool: u64,
-    pub tails_pool: u64,
+    pub up_small_pool: u64,
+    pub up_big_pool: u64,
+    pub down_small_pool: u64,
+    pub down_big_pool: u64,
     pub bet_count: u64,
     pub outcome: Outcome,
     pub resolved_at: i64,
@@ -728,7 +794,10 @@ pub struct Round {
     pub bump: u8,
 }
 impl Round {
-    const LEN: usize = 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 1 + 8 + 1 + 1;
+    // epoch, start, lock, close, next_start, lock_price, close_price (7×8)
+    // + 4 bracket pools (4×8) + bet_count (8) + resolved_at (8) = 13×8
+    // + outcome (1) + swept (1) + bump (1)
+    const LEN: usize = 13 * 8 + 1 + 1 + 1; // = 107
 }
 
 #[account]
@@ -737,7 +806,7 @@ pub struct Bet {
     pub epoch: u64,
     pub bet_index: u64,
     pub amount: u64,
-    pub side: Side,
+    pub bracket: Bracket,
     pub claimed: bool,
     pub bump: u8,
 }
@@ -753,19 +822,25 @@ impl Vault {
     const LEN: usize = 1;
 }
 
+/// The four brackets a player can pick — direction AND size of the move.
+/// Small = |move| < BRACKET_THRESHOLD_BPS (0.5%); Big = |move| >= threshold.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
-pub enum Side {
-    Heads,
-    Tails,
+pub enum Bracket {
+    UpSmall,
+    UpBig,
+    DownSmall,
+    DownBig,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
     Unresolved,
-    Heads,
-    Tails,
-    Tie,
-    AllLost,
+    UpSmall,
+    UpBig,
+    DownSmall,
+    DownBig,
+    Tie,      // exact flat (close_price == lock_price) — everyone refunded, no fee
+    AllLost,  // winning bracket had no bets — pot goes to the house
 }
 
 // ============================================================
@@ -783,7 +858,7 @@ pub enum Outcome {
     pub force_refund_delay: i64,
 }
 #[event] pub struct RoundStarted        { pub epoch: u64, pub lock_price: i64 }
-#[event] pub struct BetPlaced           { pub epoch: u64, pub user: Pubkey, pub bet_index: u64, pub amount: u64, pub side: Side }
+#[event] pub struct BetPlaced           { pub epoch: u64, pub user: Pubkey, pub bet_index: u64, pub amount: u64, pub bracket: Bracket }
 #[event] pub struct RoundEnded          { pub epoch: u64, pub close_price: i64, pub outcome: Outcome }
 #[event] pub struct Claimed             { pub epoch: u64, pub user: Pubkey, pub bet_index: u64, pub payout: u64, pub fee: u64 }
 #[event] pub struct RoundForceRefunded  { pub epoch: u64 }
