@@ -27,7 +27,7 @@
   "url": "https://swap.verixiaapps.com/best-multi-chain-dex/",
   "name": "Best Multi Chain DEX — Wallet-Native Swap on Solana",
   "description": "Solana&#x27;s wallet-native swap layer. 400ms blocks, sub-cent fees, Jupiter aggregation. No KYC, no email, no sign-up. Connect Phantom or Solflare and you&#x27;re in.",
-  "dateModified": "2026-06-30T17:02:50Z",
+  "dateModified": "2026-07-02T14:24:17Z",
   "isPartOf": { "@type": "WebSite", "url": "https://verixiaapps.com/", "name": "Verixia" },
   "publisher": { "@type": "Organization", "name": "Verixia", "url": "https://verixiaapps.com/" }
 }
@@ -265,23 +265,28 @@ a{color:inherit;text-decoration:none}
 /* ---- STICKY SWAP CTA ---- */
 .nx-sticky-cta{position:fixed;left:50%;bottom:14px;transform:translate(-50%,160%);
   z-index:60;width:calc(100% - 26px);max-width:454px;
-  display:flex;align-items:center;justify-content:space-between;gap:12px;
-  padding:13px 16px;border-radius:16px;
-  background:linear-gradient(135deg,rgba(25,210,122,.96),rgba(20,170,150,.96));
-  border:1px solid rgba(255,255,255,.28);
-  box-shadow:0 12px 34px rgba(0,0,0,.5),0 0 22px rgba(25,210,122,.34);
-  color:#03281a;font-weight:800;opacity:0;pointer-events:none;
-  transition:transform .32s cubic-bezier(.16,1,.3,1),opacity .32s ease}
+  display:flex;align-items:center;gap:11px;padding:9px 11px 9px 10px;border-radius:14px;
+  background:linear-gradient(180deg,rgba(46,36,82,.9),rgba(18,13,40,.92));
+  border:1px solid var(--line);border-top:1px solid rgba(255,255,255,.2);
+  backdrop-filter:blur(12px);box-shadow:0 16px 42px rgba(0,0,0,.55);
+  opacity:0;pointer-events:none;
+  transition:transform .32s cubic-bezier(.16,1,.3,1),opacity .32s ease,border-color .18s ease}
 .nx-sticky-cta.show{transform:translate(-50%,0);opacity:1;pointer-events:auto}
-.nx-sticky-l{display:inline-flex;align-items:center;gap:8px;font-size:13.5px}
-.nx-sticky-l b{color:#03281a}
-.nx-sticky-dot{width:8px;height:8px;border-radius:50%;background:#03281a;box-shadow:0 0 0 3px rgba(3,40,26,.25);animation:nxpulse 1.8s ease-in-out infinite}
-.nx-sticky-r{font-size:14px;white-space:nowrap}
+.nx-sticky-cta:hover{border-color:rgba(139,92,255,.55)}
+.nx-sticky-ic{width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,#8b5cff,#ff4d9e);box-shadow:0 0 14px rgba(139,92,255,.42)}
+.nx-sticky-ic svg{width:16px;height:16px;display:block}
+.nx-sticky-tx{display:flex;flex-direction:column;min-width:0;flex:1}
+.nx-sticky-tx b{font-size:13px;font-weight:700;color:#fff;line-height:1.2}
+.nx-sticky-tx span{font-size:10.5px;color:var(--dim);margin-top:2px;font-family:'JetBrains Mono',monospace;display:flex;align-items:center;gap:5px}
+.nx-sticky-tx span .d{width:5px;height:5px;border-radius:50%;background:var(--g);box-shadow:0 0 7px var(--g);animation:nxpulse 1.8s ease-in-out infinite}
+.nx-sticky-go{flex:none;display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:800;color:#03281a;
+  background:linear-gradient(135deg,#6df2a8,#19d27a);border-radius:20px;padding:6px 12px;box-shadow:0 0 12px rgba(25,210,122,.3)}
 @keyframes nxpulse{0%,100%{opacity:1}50%{opacity:.4}}
 @media (prefers-reduced-motion:reduce){
   .nx-sticky-cta{transition:opacity .2s ease}
   .nx-sticky-cta.show{transform:translate(-50%,0)}
-  .nx-sticky-dot{animation:none}
+  .nx-sticky-tx span .d{animation:none}
 }
 
 /* ===== SWAP WIDGET STYLES (ported from working template) ===== */
@@ -496,6 +501,20 @@ main{max-width:540px;margin:0 auto;background:#fff;
 .nx-connect{border:none;background:var(--blue);color:#fff;font-family:'Space Grotesk',sans-serif;
   font-weight:600;font-size:13px;padding:9px 16px;border-radius:9px;cursor:pointer}
 .nx-connect:hover{background:#2457d6}
+.nx-applink{display:flex;align-items:center;gap:11px;margin:2px 0 4px;padding:9px 11px 9px 10px;border-radius:13px;
+  background:linear-gradient(180deg,rgba(46,36,82,.72),rgba(18,13,40,.72));
+  border:1px solid var(--line);border-top:1px solid rgba(255,255,255,.20);
+  backdrop-filter:blur(10px);transition:border-color .18s ease,transform .18s ease}
+.nx-applink:hover{border-color:rgba(139,92,255,.55);transform:translateY(-1px)}
+.nx-applink-ic{width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,#8b5cff,#ff4d9e);box-shadow:0 0 14px rgba(139,92,255,.42)}
+.nx-applink-ic svg{width:16px;height:16px;display:block}
+.nx-applink-tx{display:flex;flex-direction:column;min-width:0;flex:1}
+.nx-applink-tx b{font-size:13px;font-weight:700;color:#fff;line-height:1.2}
+.nx-applink-tx span{font-size:10.5px;color:var(--dim);letter-spacing:.02em;margin-top:2px;font-family:'JetBrains Mono',monospace;display:flex;align-items:center;gap:5px}
+.nx-applink-tx span .d{width:5px;height:5px;border-radius:50%;background:var(--g);box-shadow:0 0 7px var(--g)}
+.nx-applink-go{flex:none;display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:800;color:#03281a;
+  background:linear-gradient(135deg,#6df2a8,#19d27a);border-radius:20px;padding:6px 12px;box-shadow:0 0 12px rgba(25,210,122,.3)}
 
 /* Hero text */
 .nx-hero{padding-top:18px}
@@ -703,26 +722,14 @@ main{max-width:540px;margin:0 auto;background:#fff;
     </div>
   </header>
 
-  <!-- HERO: keyword H1 (compact) -->
+  <!-- HERO: keyword H1 (compact) — stays first for SEO -->
   <section class="nx-hero">
     <div class="nx-eyebrow"><span class="dot"></span><span class="txt">SOLANA &middot; NON-CUSTODIAL &middot; NO KYC</span></div>
     <h1 class="nx-h1">Best Multi Chain DEX on Solana</h1>
     <p class="nx-lede">Verixia is a non-custodial swap on Solana. Connect a Solana wallet and you&#x27;re trading. No KYC. No accounts. No limits. Non-custodial.</p>
   </section>
 
-  <!-- REFERRAL (highest-value CTA, moved to top above the swap) -->
-  <div class="nx-refer-stack">
-    <a class="nx-refer pump-tier" href="https://swap.verixiaapps.com">
-      <span class="nx-refer-l">
-        <span class="nx-refer-tag">REFERRAL</span>
-        <b>Earn <em>50%</em> of fees from everyone you refer</b>
-        <span>FOREVER &middot; PAID DAILY IN SOL</span>
-      </span>
-      <span class="nx-refer-r">Join &rarr;</span>
-    </a>
-  </div>
-
-  <!-- LIVE SWAP (hero conversion) -->
+  <!-- LIVE SWAP (hero conversion) — moved directly under the hero -->
   <div class="nx-swap-label">
     <div class="nx-swap-label-title">Live swap &mdash; <em>trade now</em></div>
     <div class="nx-live-pill"><span class="dot"></span>LIVE QUOTE</div>
@@ -746,6 +753,30 @@ main{max-width:540px;margin:0 auto;background:#fff;
       </div>
     </div>
   </section>
+
+  <!-- REFERRAL (moved below the swap) -->
+  <div class="nx-refer-stack">
+    <a class="nx-refer pump-tier" href="https://swap.verixiaapps.com">
+      <span class="nx-refer-l">
+        <span class="nx-refer-tag">REFERRAL</span>
+        <b>Earn <em>50%</em> of fees from everyone you refer</b>
+        <span>FOREVER &middot; PAID DAILY IN SOL</span>
+      </span>
+      <span class="nx-refer-r">Join &rarr;</span>
+    </a>
+  </div>
+
+  <!-- APP CTA (moved below the swap; on-message copy for keyword pages) -->
+  <a class="nx-applink" href="https://swap.verixiaapps.com">
+    <span class="nx-applink-ic">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M17 7H9M17 7v8"/></svg>
+    </span>
+    <span class="nx-applink-tx">
+      <b>More ways to trade on Verixia</b>
+      <span><span class="d"></span>swap.verixiaapps.com</span>
+    </span>
+    <span class="nx-applink-go">Open &rarr;</span>
+  </a>
 
   <!-- QUICK REASSURANCE (first-screen trust) -->
   <div class="nx-reassure">
@@ -827,10 +858,10 @@ main{max-width:540px;margin:0 auto;background:#fff;
     <div class="section-tag">OVERVIEW</div>
     <h2 class="section-title">Why Verixia</h2>
     <p class="section-lede">DeFi on Solana means the wallet is the account, the smart contract is the only intermediary, and the network does the rest in under a second.</p>
-    <div class="ai-article" data-ai-content><p>Routing math wins every time. Verixia scans 50+ Solana pools across Raydium, Orca, Meteora, Phoenix, Lifinity, OpenBook, and Whirlpools simultaneously. Big swaps get sliced and diced across multiple pools to squeeze out the best price impact. On a $10K swap, you’re looking at 0.10-0.15% better fills compared to single-pool trades—that’s $10-15 back in your pocket, scaling linearly as you go bigger. This is why Verixia is the best multi chain dex for serious apes who want every edge on Solana.</p>
-<p>Verixia routes your swap through Jupiter’s aggregation engine, checking every block for fresh liquidity and price updates. The route you see is the route that executes—no guesswork, no slippage surprises. Whether it’s a quick flip of trending Solana tokens, a move into brand tokens like Apple or Tesla price-tracks settled in USDC, or aping Wonderland memes, Verixia’s got your back with the tightest fills and fastest execution in the game.</p>
-<p>Speed and cost? Solana’s 400ms blocks at fractions of a cent in fees mean your $20 swap costs the same as $20K. Verixia locks in your quote and settles your trade in the same block, no waiting, no re-quotes. That’s turbocharged DeFi with zero congestion and no gas wars. Plus, bridging ETH to Solana is smooth and integrated, so you can move assets across 69 chains and swap instantly once on Solana.</p>
-<p>No KYC, no accounts, no hassle. Connect Phantom, Solflare, Backpack, or any wallet-connect compatible app and you’re live. Wallet is your account, keys stay with you, tokens never leave your control. Verixia is pure non-custodial DeFi—no freezes, no bans, just global access. Ready to ape? Start swapping and bridging with Verixia, the best multi chain dex on Solana.</p></div>
+    <div class="ai-article" data-ai-content><p>Finding the best multi chain dex means locking in the tightest fills across every pool on Solana. Verixia checks 50+ DEXes like Raydium, Orca, Meteora, and Lifinity in parallel, splitting big swaps across multiple pools to keep slippage low. For a $10K swap, that’s typically 0.10-0.15% better execution—translating to $10-15 saved per trade. This routing math isn’t guesswork; it’s live, on-chain, and scales linearly for bigger bags. Whether you’re moving Solana tokens or bridging from 69 chains, Verixia’s got your back.</p>
+<p>Verixia routes every swap through Jupiter’s aggregation layer, scanning every block for the freshest pools and best prices. What you see is what you get—the route you sign off on executes exactly as quoted, no surprises. Pools like Phoenix and OpenBook join the party, alongside Whirlpools and others, making sure your swap slices through the market with surgical precision. That’s how Verixia delivers the best multi chain dex experience without any middlemen or custody risk.</p>
+<p>Solana’s lightning-fast 400ms blocks and near-zero fees mean your quote and execution land in the same block, no front-running, no waiting. Verixia’s swaps cost fractions of a cent whether you’re sending $20 or $20,000. This speed and cost combo lets you ape Wonderland memes, chase trending Solana tokens, or grab brand tokens that price-track Apple or Tesla without sweating fees or delays. It’s DeFi on Solana, but faster and cheaper than anything else out there.</p>
+<p>No accounts, no KYC, no email, no passwords. Just connect your Phantom, Solflare, Backpack, or any wallet-connect compatible app and you’re live. Verixia never holds your tokens—your keys, your coins—so there’s zero risk of freezes or bans. Ready to bridge ETH to Solana or dive into the Wonderland tab? Connect, sign, and send it. That’s the best multi chain dex vibe right now.</p></div>
   </section>
 
   <section class="section">
@@ -1239,18 +1270,43 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
         var r = await fetch(GT_API + '/search/pools?query=' + encodeURIComponent(q) + '&network=solana&page=1');
         var d = await r.json();
         var pools = (d && d.data) || [];
-        var best = null, bestLiq = -1;
+        var USDT_MINT = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
+        var QUOTE = {}; QUOTE[SOL_MINT] = 1; QUOTE[USDC_MINT] = 1; QUOTE[USDT_MINT] = 1;
+        var want = String(q || '').toLowerCase().replace(/^\$+/, '');
+        // Aggregate pool liquidity per candidate contract, across BOTH sides of
+        // every matching pool, then pick the highest-liquidity contract whose
+        // symbol matches the keyword. This lands on the canonical (routable)
+        // token instead of a thin same-symbol impostor with no swap route.
+        var agg = {};
+        function consider(id, symRaw, liq) {
+          if (!id) return;
+          var mint = String(id).replace(/^solana_/, '');
+          if (!mint || QUOTE[mint]) return;
+          var sym = String(symRaw || '').trim().toLowerCase().replace(/^\$+/, '').split(/\s+/)[0];
+          if (!agg[mint]) agg[mint] = { liq: 0, sym: sym };
+          agg[mint].liq += liq;
+          if (!agg[mint].sym && sym) agg[mint].sym = sym;
+        }
         for (var i = 0; i < pools.length; i++) {
           var a = pools[i].attributes || {};
           var rel = pools[i].relationships || {};
-          var bt = rel.base_token && rel.base_token.data && rel.base_token.data.id;
           var liq = Number(a.reserve_in_usd || 0);
-          if (bt && liq > bestLiq) { bestLiq = liq; best = bt; }
+          if (!(liq > 0)) continue;
+          var sides = String(a.name || '').split('/');
+          var baseId = rel.base_token && rel.base_token.data && rel.base_token.data.id;
+          var quoteId = rel.quote_token && rel.quote_token.data && rel.quote_token.data.id;
+          consider(baseId, sides[0], liq);
+          consider(quoteId, sides[1], liq);
         }
-        if (!best) return null;
-        var mint = String(best).replace(/^solana_/, '');
-        if (!mint || mint === SOL_MINT || mint === USDC_MINT) return null;
-        return { address: mint, symbol: '', name: '', logoURI: null };
+        var best = null, bestLiq = -1, exact = null, exactLiq = -1;
+        for (var mint in agg) {
+          var e = agg[mint];
+          if (e.liq > bestLiq) { bestLiq = e.liq; best = mint; }
+          if (want && e.sym === want && e.liq > exactLiq) { exactLiq = e.liq; exact = mint; }
+        }
+        var pick = exact || best;
+        if (!pick || QUOTE[pick]) return null;
+        return { address: pick, symbol: '', name: '', logoURI: null };
       } catch (e) { return null; }
     }
     async function resolveTermToMint(term) {
@@ -2329,9 +2385,10 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
 
 
 <!-- STICKY SWAP CTA (appears after hero scrolls away) -->
-<a href="#verixia-swap-root" class="nx-sticky-cta" id="nx-sticky-cta" aria-hidden="true">
-  <span class="nx-sticky-l"><span class="nx-sticky-dot"></span>Trade now &middot; <b>No KYC</b></span>
-  <span class="nx-sticky-r">Swap &rarr;</span>
+<a href="https://swap.verixiaapps.com" class="nx-sticky-cta" id="nx-sticky-cta" aria-hidden="true">
+  <span class="nx-sticky-ic"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M17 7H9M17 7v8"/></svg></span>
+  <span class="nx-sticky-tx"><b>Trade any Solana token &mdash; best route</b><span><span class="d"></span>swap.verixiaapps.com</span></span>
+  <span class="nx-sticky-go">Open &rarr;</span>
 </a>
 
 <script>
@@ -2395,4 +2452,4 @@ window.__VERIXIA_CONFIG__ = window.__VERIXIA_CONFIG__ || { rpc: window.location.
 <script id="page-meta">window.__pageMeta = {"title":"Best Multi Chain DEX — Wallet-Native Swap on Solana | Verixia","description":"Solana's wallet-native swap layer. 400ms blocks, sub-cent fees, Jupiter aggregation. No KYC, no email, no sign-up. Connect Phantom or Solflare and you're in.","h1":"Best Multi Chain DEX on Solana","intro":"Verixia is a non-custodial swap on Solana. Connect a Solana wallet and you're trading. No KYC. No accounts. No limits. Non-custodial.","contentHeading":"Why Verixia for Best Multi Chain DEX","contentBridge":"Hub: Solana Swap","breadcrumb":"Best Multi Chain DEX","intent":"commercial_native","subIntent":"general","framingName":"commercial_best_price_lead","subject":"","faq":[{"q":"Is Verixia really non-custodial?","a":"Yes. The smart contract routes your swap directly between your wallet and the liquidity pool. Verixia never holds funds, never has signing authority over your assets, never takes custody at any point."},{"q":"Can I use Verixia from anywhere?","a":"Verixia is global DeFi. Connect a wallet and you're in. The product surface is the same everywhere — same swap, same routing, same wallet flow."},{"q":"How fast are swaps on Verixia?","a":"Solana settles in roughly 400ms per block. The quote you sign on lands in the same block. Fees are fractions of a cent, so a $20 swap is as economical as a $20,000 one."},{"q":"Do I need an account to use Verixia?","a":"No. Verixia is DeFi — connect a Solana wallet like Phantom, Solflare, or Backpack, and you're in. No email, no password, no KYC, no sign-up of any kind. The wallet is the account."}],"recognitionChips":[{"l":"No KYC, ever","c":"Connect a wallet — that's the entire login. No email, no password, no liveness check."},{"l":"Non-custodial","c":"The smart contract routes the swap between your wallet and the pool. Your keys, your coins."},{"l":"50+ DEXes routed","c":"Jupiter checks Raydium, Orca, Meteora, Phoenix, Lifinity in parallel for best fill."},{"l":"Sub-second on Solana","c":"400ms blocks at fractions of a cent in fees. Quote and execution land in the same heartbeat."}],"supplementaryHeading":"Why Verixia","supplementaryIntro":"DeFi on Solana means the wallet is the account, the smart contract is the only intermediary, and the network does the rest in under a second.","supplementaryCards":[{"i":"⚡","title":"All Solana","body":"400ms blocks, sub-cent fees, no congestion. A $20 swap and a $20K swap settle the same way."},{"i":"🔑","title":"Your keys, your coins","body":"Non-custodial. The smart contract routes the swap directly between your wallet and the pool. Verixia never holds your funds."},{"i":"🌍","title":"Global DeFi","body":"No KYC, no accounts, no limits. Connect a wallet and you're in. Same product everywhere."}],"pageSignals":{"aggregateRatingJson":"{}"},"jitter":{"blockTimeMs":400,"dexCount":50,"walletsToday":12790,"swapsToday":56947,"aggImprovement":0.13,"settlementMs":395},"observations":[]};</script>
 </body>
 </html>
- 
+  
