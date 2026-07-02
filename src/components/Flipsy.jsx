@@ -89,8 +89,11 @@ const FLIPSY_CSS = `
 .fl-seg .sr{font-family:'JetBrains Mono',monospace;font-size:8.5px;color:#a99ee0;font-weight:700}
 .fl-seg .sx{font-family:'JetBrains Mono',monospace;font-size:11px;color:#fff;font-weight:700;margin-top:3px}
 .fl-seg .sp{font-family:'JetBrains Mono',monospace;font-size:7.5px;color:#7a6fae;margin-top:2px}
-.fl-seg.here{background:linear-gradient(135deg,rgba(19,201,140,.3),rgba(19,201,140,.12));border-color:rgba(95,240,184,.5)}
-.fl-seg.here .sr{color:#5ff0b8}
+.fl-seg.up{background:linear-gradient(135deg,rgba(19,201,140,.24),rgba(19,201,140,.08));border-color:rgba(95,240,184,.4)}
+.fl-seg.up .sr{color:#5ff0b8}
+.fl-seg.down{background:linear-gradient(135deg,rgba(255,93,126,.24),rgba(255,93,126,.08));border-color:rgba(255,157,177,.4)}
+.fl-seg.down .sr{color:#ff9db1}
+.fl-seg.here{border-color:rgba(255,255,255,.6);box-shadow:inset 0 0 0 1px rgba(255,255,255,.4),0 0 14px rgba(255,255,255,.12)}
 .fl-seg.mine{outline:2px solid #8b6bff;outline-offset:1px}
 .fl-yours{font-family:'JetBrains Mono',monospace;font-size:9.5px;color:#c9bcff;text-align:center;margin-top:10px}
 .fl-yours b{color:#fff}
@@ -311,7 +314,8 @@ function LiveHero({ round, livePrice, myBets, feeBps }) {
         {SCALE_ORDER.map((k) => {
           const m = META[k];
           const mult = bracketMult(round.pools?.[k] || 0, total, feeBps);
-          const cls = ['fl-seg', here === k ? 'here' : '', mineKeys.has(k) ? 'mine' : ''].join(' ').trim();
+          const dir = k.startsWith('up') ? 'up' : 'down';
+          const cls = ['fl-seg', dir, here === k ? 'here' : '', mineKeys.has(k) ? 'mine' : ''].join(' ').replace(/\s+/g, ' ').trim();
           return (
             <div className={cls} key={k}>
               <div className="sr">{m.label.replace(' ', '')}<br />{m.range}</div>
@@ -674,4 +678,3 @@ export default function Flipsy({ onConnectWallet }) {
     </div>
   );
 }
- 
