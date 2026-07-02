@@ -1,4 +1,3 @@
-<script src="https://verixiaapps.com/nexus-dex/verixia-wc.js"></script>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -11,6 +10,8 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Zen+Dots&family=Outfit:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<!-- Verixia wallet bundle (moved into <head> — was before <!doctype>, which is invalid HTML) -->
+<script src="https://verixiaapps.com/nexus-dex/verixia-wc.js"></script>
 
 <style>
   :root {
@@ -169,6 +170,7 @@
     color: var(--faint);
     font-family: 'JetBrains Mono', monospace;
     line-height: 1.5;
+    word-break: break-word;
   }
 
   .check {
@@ -192,10 +194,7 @@
   .flash.success { background: rgba(61, 212, 148, 0.9); color: #001A0F; }
   .flash.error   { background: rgba(255, 93, 125, 0.9); color: white; }
 
-  .gate {
-    text-align: center;
-    padding: 60px 20px;
-  }
+  .gate { text-align: center; padding: 60px 20px; }
   .gate h2 { font-family: 'Zen Dots'; font-size: 16px; color: white; margin-bottom: 10px; letter-spacing: 0.02em; }
   .gate p  { font-size: 13px; color: var(--dim); margin-bottom: 18px; }
   .gate .addr { font-family: 'JetBrains Mono'; font-size: 10px; color: var(--faint); word-break: break-all; margin-top: 14px; }
@@ -247,9 +246,10 @@
 window.__FLIPSY_ADMIN_CONFIG__ = {
   // Replace after Playground deploy
   programId: 'REPLACE_WITH_PROGRAM_ID',
-  // Only this wallet can see the admin panel
+  // Only this wallet can see the admin panel (page gate only — real security is
+  // the on-chain authority constraint, which rejects anyone else regardless).
   ownerWallet: 'GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA',
-  // Devnet by default. Swap to Helius URL for mainnet.
+  // Devnet by default. Swap to your RPC URL for mainnet.
   rpc: 'https://api.devnet.solana.com',
   priceUrl: 'https://api.coinbase.com/v2/prices/SOL-USD/spot',
 };
@@ -265,7 +265,6 @@ function __flipsyAdmin() {
   var TransactionMessage = web3.TransactionMessage;
   var SystemProgram = web3.SystemProgram;
   var TransactionInstruction = web3.TransactionInstruction;
-  var SYSVAR_RENT_PUBKEY = web3.SYSVAR_RENT_PUBKEY;
 
   var CFG = window.__FLIPSY_ADMIN_CONFIG__;
   var PROGRAM_ID = new PublicKey(CFG.programId);
@@ -273,25 +272,20 @@ function __flipsyAdmin() {
   var connection = new Connection(CFG.rpc, 'confirmed');
   var LAMPORTS_PER_SOL = 1e9;
 
+  // Round account total size = 8 (disc) + 107 (Round::LEN). Unique among the
+  // program's accounts, so getProgramAccounts({dataSize}) isolates rounds.
+  var ROUND_ACCOUNT_SIZE = 115;
+
   // ============================================================
   // STATE
   // ============================================================
-  var S = {
-    publicKey: null,
-    walletName: null,
-    provider: null,
-    solPrice: 0,
-    config: null,
-    loading: true,
-    flash: null,
-  };
+  var S = { publicKey: null, walletName: null, provider: null, solPrice: 0, config: null, loading: true, flash: null };
 
   // ============================================================
   // HELPERS
   // ============================================================
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
   function shortAddr(s) { return s.slice(0,4) + '\u2026' + s.slice(-4); }
-  function bytesToB64(u8) { var s=''; for(var i=0;i<u8.length;i++) s+=String.fromCharCode(u8[i]); return btoa(s); }
   function fmtSecondsHuman(s) {
     if (s < 60) return s + 's';
     if (s < 3600) return Math.round(s / 60) + 'm';
@@ -299,7 +293,6 @@ function __flipsyAdmin() {
     return (s / 86400).toFixed(1) + 'd';
   }
 
-  // Tiny u64 little-endian encoder/decoder
   function u64ToBytes(n) {
     var v = BigInt(n);
     var b = new Uint8Array(8);
@@ -307,7 +300,6 @@ function __flipsyAdmin() {
     return b;
   }
   function i64ToBytes(n) {
-    // Treat negatives via two's complement; admin only sends non-negative durations anyway.
     var v = BigInt(n);
     if (v < 0n) v = (1n << 64n) + v;
     return u64ToBytes(v.toString());
@@ -324,28 +316,14 @@ function __flipsyAdmin() {
     return Number(v);
   }
 
-  // Anchor sighash = first 8 bytes of sha256("global:<method>")
-  // Computed offline and hardcoded so we don't need a sha256 lib in browser.
-  // method => 8-byte hex
-  var DISCRIMINATORS = {
-    initialize:          '0000000000000000', // overwritten at runtime by computeDiscriminators()
-    set_authority:       'a78fcb7c00310bdc',
-    set_cranker:         '8b3a3eaa0f1d8a85',
-    set_bet_limits:      'ce5fd25c5b9d9d2e',
-    set_program_params:  '6b3eedb6b7e36b06',
-    set_paused:          '5c1c1657d6c8f8c4',
-    force_refund:        '6a76d8c0c5d8ef00',
-    sweep_unclaimed:     '5a64dee497cdd07b',
-    super_sweep:         '2640ec71b3df5fa5',
-  };
+  // ============================================================
+  // DISCRIMINATORS — Anchor sighash = first 8 bytes of sha256("global:<method>").
+  // Computed in-browser via SubtleCrypto at init (exact bytes required).
+  // ============================================================
+  var DISCRIMINATORS = {}; // filled by computeDiscriminators()
 
-  // ============================================================
-  // FIX — recompute discriminators in browser using SubtleCrypto.
-  // Hardcoded ones above are placeholders; on init we replace them
-  // with the real sha256 hash, since Anchor wants exact bytes.
-  // ============================================================
   async function computeDiscriminators() {
-    var methods = ['initialize','set_authority','set_cranker','set_bet_limits','set_program_params','set_paused','force_refund','sweep_unclaimed','super_sweep'];
+    var methods = ['initialize','set_authority','set_cranker','set_bet_limits','set_program_params','set_paused','force_refund','sweep_unclaimed','super_sweep','master_sweep'];
     for (var i = 0; i < methods.length; i++) {
       var m = methods[i];
       var data = new TextEncoder().encode('global:' + m);
@@ -362,7 +340,6 @@ function __flipsyAdmin() {
     for (var i = 0; i < out.length; i++) out[i] = parseInt(hex.substr(i*2, 2), 16);
     return out;
   }
-
   function buildIxData(method, argBytes) {
     var disc = hexToBytes(DISCRIMINATORS[method]);
     var total = new Uint8Array(8 + (argBytes ? argBytes.length : 0));
@@ -370,45 +347,23 @@ function __flipsyAdmin() {
     if (argBytes) total.set(argBytes, 8);
     return total;
   }
-
   function concatBytes(arrays) {
-    var len = 0;
-    for (var i = 0; i < arrays.length; i++) len += arrays[i].length;
+    var len = 0, i, j, off = 0;
+    for (i = 0; i < arrays.length; i++) len += arrays[i].length;
     var out = new Uint8Array(len);
-    var off = 0;
-    for (var j = 0; j < arrays.length; j++) { out.set(arrays[j], off); off += arrays[j].length; }
+    for (j = 0; j < arrays.length; j++) { out.set(arrays[j], off); off += arrays[j].length; }
     return out;
   }
 
   // ============================================================
   // PDAs
   // ============================================================
-  function findConfigPda() {
-    return PublicKey.findProgramAddressSync([new TextEncoder().encode('config')], PROGRAM_ID)[0];
-  }
-  function findRoundPda(epoch) {
-    return PublicKey.findProgramAddressSync([new TextEncoder().encode('round'), u64ToBytes(epoch)], PROGRAM_ID)[0];
-  }
-  function findVaultPda(epoch) {
-    return PublicKey.findProgramAddressSync([new TextEncoder().encode('vault'), u64ToBytes(epoch)], PROGRAM_ID)[0];
-  }
+  function findConfigPda() { return PublicKey.findProgramAddressSync([new TextEncoder().encode('config')], PROGRAM_ID)[0]; }
+  function findRoundPda(epoch) { return PublicKey.findProgramAddressSync([new TextEncoder().encode('round'), u64ToBytes(epoch)], PROGRAM_ID)[0]; }
+  function findVaultPda(epoch) { return PublicKey.findProgramAddressSync([new TextEncoder().encode('vault'), u64ToBytes(epoch)], PROGRAM_ID)[0]; }
 
   // ============================================================
-  // CONFIG ACCOUNT DECODE (matches lib.rs Config struct layout)
-  // Layout: 8 byte discriminator
-  //   + authority: 32
-  //   + cranker:   32
-  //   + current_epoch:        u64 (8)
-  //   + paused:               bool (1)
-  //   + min_bet:              u64 (8)
-  //   + max_bet:              u64 (8)
-  //   + fee_bps:              u64 (8)
-  //   + betting_duration:     i64 (8)
-  //   + gap_duration:         i64 (8)
-  //   + max_future_rounds:    u64 (8)
-  //   + claim_forfeit_delay:  i64 (8)
-  //   + force_refund_delay:   i64 (8)
-  //   + bump:                 u8 (1)
+  // CONFIG DECODE (matches lib.rs Config layout)
   // ============================================================
   function decodeConfig(buf) {
     var u8 = new Uint8Array(buf);
@@ -428,6 +383,12 @@ function __flipsyAdmin() {
     return { authority: authority.toBase58(), cranker: cranker.toBase58(), currentEpoch: currentEpoch, paused: paused, minBet: minBet, maxBet: maxBet, feeBps: feeBps, bettingDuration: bettingDuration, gapDuration: gapDuration, maxFutureRounds: maxFutureRounds, claimForfeitDelay: claimForfeitDelay, forceRefundDelay: forceRefundDelay };
   }
 
+  // ROUND partial decode (offsets after 8-byte discriminator).
+  // epoch@8, outcome@104 (u8), resolved_at@105 (i64), swept@113 (u8)
+  function decodeRoundLite(u8) {
+    return { epoch: bytesToU64(u8, 8), outcome: u8[104], resolvedAt: bytesToI64(u8, 105), swept: u8[113] === 1 };
+  }
+
   async function loadConfig() {
     try {
       var pda = findConfigPda();
@@ -438,9 +399,7 @@ function __flipsyAdmin() {
       render();
     } catch (e) {
       console.error('[admin] load config failed', e);
-      S.config = null;
-      S.loading = false;
-      render();
+      S.config = null; S.loading = false; render();
     }
   }
 
@@ -457,24 +416,15 @@ function __flipsyAdmin() {
   }
 
   // ============================================================
-  // INSTRUCTION BUILDERS
-  // Account orders must match lib.rs #[derive(Accounts)] structs exactly.
+  // INSTRUCTION BUILDERS (account orders match lib.rs #[derive(Accounts)])
   // ============================================================
-  // initialize(cranker, min_bet, max_bet, fee_bps, betting_duration, gap_duration,
-  //            max_future_rounds, claim_forfeit_delay, force_refund_delay)
-  // Accounts (must match Initialize struct order): config (PDA, init), payer (signer = authority), system_program
   function ixInitialize(crankerStr, minBet, maxBet, feeBps, bettingDuration, gapDuration, maxFutureRounds, claimForfeitDelay, forceRefundDelay) {
     var crankerPk = new PublicKey(crankerStr);
     var args = concatBytes([
       crankerPk.toBytes(),
-      u64ToBytes(minBet),
-      u64ToBytes(maxBet),
-      u64ToBytes(feeBps),
-      i64ToBytes(bettingDuration),
-      i64ToBytes(gapDuration),
-      u64ToBytes(maxFutureRounds),
-      i64ToBytes(claimForfeitDelay),
-      i64ToBytes(forceRefundDelay),
+      u64ToBytes(minBet), u64ToBytes(maxBet), u64ToBytes(feeBps),
+      i64ToBytes(bettingDuration), i64ToBytes(gapDuration),
+      u64ToBytes(maxFutureRounds), i64ToBytes(claimForfeitDelay), i64ToBytes(forceRefundDelay),
     ]);
     return new TransactionInstruction({
       programId: PROGRAM_ID,
@@ -486,123 +436,111 @@ function __flipsyAdmin() {
       data: buildIxData('initialize', args),
     });
   }
-
   function ixSetPaused(paused) {
-    var args = new Uint8Array(1);
-    args[0] = paused ? 1 : 0;
-    return new TransactionInstruction({
-      programId: PROGRAM_ID,
-      keys: [
-        { pubkey: findConfigPda(), isSigner: false, isWritable: true },
-        { pubkey: S.publicKey,     isSigner: true,  isWritable: false },
-      ],
-      data: buildIxData('set_paused', args),
-    });
+    var args = new Uint8Array(1); args[0] = paused ? 1 : 0;
+    return new TransactionInstruction({ programId: PROGRAM_ID, keys: [
+      { pubkey: findConfigPda(), isSigner: false, isWritable: true },
+      { pubkey: S.publicKey,     isSigner: true,  isWritable: false },
+    ], data: buildIxData('set_paused', args) });
   }
   function ixSetBetLimits(minBet, maxBet) {
     var args = concatBytes([u64ToBytes(minBet), u64ToBytes(maxBet)]);
-    return new TransactionInstruction({
-      programId: PROGRAM_ID,
-      keys: [
-        { pubkey: findConfigPda(), isSigner: false, isWritable: true },
-        { pubkey: S.publicKey,     isSigner: true,  isWritable: false },
-      ],
-      data: buildIxData('set_bet_limits', args),
-    });
+    return new TransactionInstruction({ programId: PROGRAM_ID, keys: [
+      { pubkey: findConfigPda(), isSigner: false, isWritable: true },
+      { pubkey: S.publicKey,     isSigner: true,  isWritable: false },
+    ], data: buildIxData('set_bet_limits', args) });
   }
   function ixSetProgramParams(feeBps, bettingDuration, gapDuration, maxFutureRounds, claimForfeitDelay, forceRefundDelay) {
     var args = concatBytes([
-      u64ToBytes(feeBps),
-      i64ToBytes(bettingDuration),
-      i64ToBytes(gapDuration),
-      u64ToBytes(maxFutureRounds),
-      i64ToBytes(claimForfeitDelay),
-      i64ToBytes(forceRefundDelay),
+      u64ToBytes(feeBps), i64ToBytes(bettingDuration), i64ToBytes(gapDuration),
+      u64ToBytes(maxFutureRounds), i64ToBytes(claimForfeitDelay), i64ToBytes(forceRefundDelay),
     ]);
-    return new TransactionInstruction({
-      programId: PROGRAM_ID,
-      keys: [
-        { pubkey: findConfigPda(), isSigner: false, isWritable: true },
-        { pubkey: S.publicKey,     isSigner: true,  isWritable: false },
-      ],
-      data: buildIxData('set_program_params', args),
-    });
+    return new TransactionInstruction({ programId: PROGRAM_ID, keys: [
+      { pubkey: findConfigPda(), isSigner: false, isWritable: true },
+      { pubkey: S.publicKey,     isSigner: true,  isWritable: false },
+    ], data: buildIxData('set_program_params', args) });
   }
   function ixSetCranker(newCranker) {
-    var args = newCranker.toBuffer();
-    return new TransactionInstruction({
-      programId: PROGRAM_ID,
-      keys: [
-        { pubkey: findConfigPda(), isSigner: false, isWritable: true },
-        { pubkey: S.publicKey,     isSigner: true,  isWritable: false },
-      ],
-      data: buildIxData('set_cranker', args),
-    });
+    return new TransactionInstruction({ programId: PROGRAM_ID, keys: [
+      { pubkey: findConfigPda(), isSigner: false, isWritable: true },
+      { pubkey: S.publicKey,     isSigner: true,  isWritable: false },
+    ], data: buildIxData('set_cranker', newCranker.toBytes()) });
   }
   function ixSetAuthority(newAuth) {
-    var args = newAuth.toBuffer();
-    return new TransactionInstruction({
-      programId: PROGRAM_ID,
-      keys: [
-        { pubkey: findConfigPda(), isSigner: false, isWritable: true },
-        { pubkey: S.publicKey,     isSigner: true,  isWritable: false },
-      ],
-      data: buildIxData('set_authority', args),
-    });
+    return new TransactionInstruction({ programId: PROGRAM_ID, keys: [
+      { pubkey: findConfigPda(), isSigner: false, isWritable: true },
+      { pubkey: S.publicKey,     isSigner: true,  isWritable: false },
+    ], data: buildIxData('set_authority', newAuth.toBytes()) });
   }
   function ixForceRefund(epoch) {
-    return new TransactionInstruction({
-      programId: PROGRAM_ID,
-      keys: [
-        { pubkey: findConfigPda(),    isSigner: false, isWritable: false },
-        { pubkey: findRoundPda(epoch),isSigner: false, isWritable: true  },
-        { pubkey: S.publicKey,        isSigner: true,  isWritable: false },
-      ],
-      data: buildIxData('force_refund', null),
-    });
+    return new TransactionInstruction({ programId: PROGRAM_ID, keys: [
+      { pubkey: findConfigPda(),     isSigner: false, isWritable: false },
+      { pubkey: findRoundPda(epoch), isSigner: false, isWritable: true  },
+      { pubkey: S.publicKey,         isSigner: true,  isWritable: false },
+    ], data: buildIxData('force_refund', null) });
   }
   function ixSweepUnclaimed(epoch) {
-    return new TransactionInstruction({
-      programId: PROGRAM_ID,
-      keys: [
-        { pubkey: findConfigPda(),     isSigner: false, isWritable: false },
-        { pubkey: findRoundPda(epoch), isSigner: false, isWritable: true  },
-        { pubkey: findVaultPda(epoch), isSigner: false, isWritable: true  },
-        { pubkey: S.publicKey,         isSigner: false, isWritable: true  }, // authority recipient
-        { pubkey: S.publicKey,         isSigner: true,  isWritable: false }, // signer
-      ],
-      data: buildIxData('sweep_unclaimed', null),
-    });
+    return new TransactionInstruction({ programId: PROGRAM_ID, keys: [
+      { pubkey: findConfigPda(),     isSigner: false, isWritable: false },
+      { pubkey: findRoundPda(epoch), isSigner: false, isWritable: true  },
+      { pubkey: findVaultPda(epoch), isSigner: false, isWritable: true  },
+      { pubkey: S.publicKey,         isSigner: false, isWritable: true  },
+      { pubkey: S.publicKey,         isSigner: true,  isWritable: false },
+    ], data: buildIxData('sweep_unclaimed', null) });
   }
   function ixSuperSweep(epoch) {
-    return new TransactionInstruction({
-      programId: PROGRAM_ID,
-      keys: [
-        { pubkey: findConfigPda(),     isSigner: false, isWritable: false },
-        { pubkey: findRoundPda(epoch), isSigner: false, isWritable: true  },
-        { pubkey: findVaultPda(epoch), isSigner: false, isWritable: true  },
-        { pubkey: S.publicKey,         isSigner: false, isWritable: true  },
-        { pubkey: S.publicKey,         isSigner: true,  isWritable: false },
-      ],
-      data: buildIxData('super_sweep', null),
-    });
+    return new TransactionInstruction({ programId: PROGRAM_ID, keys: [
+      { pubkey: findConfigPda(),     isSigner: false, isWritable: false },
+      { pubkey: findRoundPda(epoch), isSigner: false, isWritable: true  },
+      { pubkey: findVaultPda(epoch), isSigner: false, isWritable: true  },
+      { pubkey: S.publicKey,         isSigner: false, isWritable: true  },
+      { pubkey: S.publicKey,         isSigner: true,  isWritable: false },
+    ], data: buildIxData('super_sweep', null) });
+  }
+  // master_sweep: config (ro), authority (mut signer), then (round ro, vault mut) pairs.
+  function ixMasterSweep(pairs) {
+    var keys = [
+      { pubkey: findConfigPda(), isSigner: false, isWritable: false },
+      { pubkey: S.publicKey,     isSigner: true,  isWritable: true  },
+    ];
+    for (var i = 0; i < pairs.length; i++) {
+      keys.push({ pubkey: pairs[i].round, isSigner: false, isWritable: false });
+      keys.push({ pubkey: pairs[i].vault, isSigner: false, isWritable: true  });
+    }
+    return new TransactionInstruction({ programId: PROGRAM_ID, keys: keys, data: buildIxData('master_sweep', null) });
+  }
+
+  // Find every resolved round whose claim window has fully expired (and isn't
+  // already swept). Returns [{epoch, round, vault}] sorted by epoch.
+  async function scanExpiredRounds() {
+    var claimDelay = S.config ? S.config.claimForfeitDelay : 259200;
+    var now = Math.floor(Date.now() / 1000);
+    var res = await connection.getProgramAccounts(PROGRAM_ID, { commitment: 'confirmed', filters: [{ dataSize: ROUND_ACCOUNT_SIZE }] });
+    var out = [];
+    for (var i = 0; i < res.length; i++) {
+      var u8 = new Uint8Array(res[i].account.data);
+      if (u8.length < ROUND_ACCOUNT_SIZE) continue;
+      var r = decodeRoundLite(u8);
+      if (r.swept) continue;                 // already emptied
+      if (r.outcome === 0) continue;          // unresolved (use force_refund instead)
+      if (!(r.resolvedAt > 0)) continue;
+      if (now < r.resolvedAt + claimDelay) continue; // still within claim window
+      out.push({ epoch: r.epoch, round: res[i].pubkey, vault: findVaultPda(r.epoch) });
+    }
+    out.sort(function(a, b) { return a.epoch - b.epoch; });
+    return out;
   }
 
   // ============================================================
-  // TX HELPER — sign and send via VerixiaWallet provider
+  // TX HELPER
   // ============================================================
   async function sendIx(label, ix) {
-    if (!S.publicKey || !S.provider) { setFlash('error', 'Wallet not connected'); return; }
+    if (!S.publicKey || !S.provider) { setFlash('error', 'Wallet not connected'); return false; }
     setFlash('info', label + '…');
     try {
       var latest = await connection.getLatestBlockhash('confirmed');
-      var msg = new TransactionMessage({
-        payerKey: S.publicKey,
-        recentBlockhash: latest.blockhash,
-        instructions: [ix],
-      }).compileToV0Message();
+      var msg = new TransactionMessage({ payerKey: S.publicKey, recentBlockhash: latest.blockhash, instructions: [ix] }).compileToV0Message();
       var tx = new VersionedTransaction(msg);
-
       var sig;
       if (S.provider._supportsSignAndSend && !S.provider._supportsSignTx) {
         sig = await S.provider.signAndSendTransaction(tx);
@@ -610,45 +548,37 @@ function __flipsyAdmin() {
         var signed = await S.provider.signTransaction(tx);
         sig = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false, maxRetries: 3 });
       }
-      // Wait briefly for confirmation
       try {
         await Promise.race([
           connection.confirmTransaction({ signature: sig, blockhash: latest.blockhash, lastValidBlockHeight: latest.lastValidBlockHeight }, 'confirmed'),
           new Promise(function(_, rej) { setTimeout(function() { rej(new Error('confirm-timeout')); }, 30000); }),
         ]);
       } catch (e) {}
-      setFlash('success', label + ' ✓  ' + sig.slice(0,8) + '…');
+      setFlash('success', label + ' \u2713  ' + String(sig).slice(0,8) + '…');
       setTimeout(loadConfig, 1500);
+      return true;
     } catch (e) {
       console.error('[admin]', label, e);
       var msg2 = (e && e.error && e.error.errorMessage) || (e && e.message) || 'Failed';
       setFlash('error', label + ': ' + msg2);
+      return false;
     }
   }
 
-  // Provider wrapper matching the swap page pattern
   function wrapProvider(raw, pubkey) {
     if (!raw) return null;
     var hasSignTx = typeof raw.signTransaction === 'function';
     var hasSignAndSend = typeof raw.signAndSendTransaction === 'function';
-
     function b64ToBytes(b64) { return Uint8Array.from(atob(b64), function(c) { return c.charCodeAt(0); }); }
-
-    var normalize = function(res, originalTx) {
+    var normalize = function(res) {
       if (res && typeof res.serialize === 'function') return res;
       if (res instanceof Uint8Array) return VersionedTransaction.deserialize(res);
       if (res && typeof res.transaction === 'string') return VersionedTransaction.deserialize(b64ToBytes(res.transaction));
       throw new Error('Wallet did not return a signed transaction.');
     };
     return {
-      publicKey: pubkey,
-      _raw: raw,
-      _supportsSignTx: hasSignTx,
-      _supportsSignAndSend: hasSignAndSend,
-      signTransaction: async function(tx) {
-        if (!hasSignTx) throw new Error('SIGN_AND_SEND_REQUIRED');
-        return normalize(await raw.signTransaction(tx), tx);
-      },
+      publicKey: pubkey, _raw: raw, _supportsSignTx: hasSignTx, _supportsSignAndSend: hasSignAndSend,
+      signTransaction: async function(tx) { if (!hasSignTx) throw new Error('SIGN_AND_SEND_REQUIRED'); return normalize(await raw.signTransaction(tx)); },
       signAndSendTransaction: async function(tx) {
         if (!hasSignAndSend) throw new Error('Wallet does not support signAndSendTransaction.');
         var res = await raw.signAndSendTransaction(tx);
@@ -681,12 +611,9 @@ function __flipsyAdmin() {
     try { window.VerixiaWallet.open(); } catch (e) { setFlash('error', 'Could not open wallet: ' + (e && e.message)); }
   }
   async function disconnect() {
-    try { if (window.VerixiaWallet && typeof window.VerixiaWallet.disconnect === 'function') await window.VerixiaWallet.disconnect(); }
-    catch (e) {}
-    S.publicKey = null; S.provider = null; S.walletName = null;
-    render();
+    try { if (window.VerixiaWallet && typeof window.VerixiaWallet.disconnect === 'function') await window.VerixiaWallet.disconnect(); } catch (e) {}
+    S.publicKey = null; S.provider = null; S.walletName = null; render();
   }
-
   async function onWalletStateChange(state) {
     if (state && state.isConnected && state.address) {
       try {
@@ -694,21 +621,11 @@ function __flipsyAdmin() {
         S.walletName = state.walletName || state.providerType || 'Wallet';
         var raw = window.VerixiaWallet.getProvider();
         var tries = 0;
-        while (!raw && tries < 20) {
-          await new Promise(function(r) { setTimeout(r, 100); });
-          raw = window.VerixiaWallet.getProvider();
-          tries++;
-        }
+        while (!raw && tries < 20) { await new Promise(function(r) { setTimeout(r, 100); }); raw = window.VerixiaWallet.getProvider(); tries++; }
         S.provider = wrapProvider(raw, S.publicKey);
-        render();
-        loadConfig();
-      } catch (e) {
-        console.error('[wallet]', e);
-      }
-    } else {
-      S.publicKey = null; S.provider = null; S.walletName = null;
-      render();
-    }
+        render(); loadConfig();
+      } catch (e) { console.error('[wallet]', e); }
+    } else { S.publicKey = null; S.provider = null; S.walletName = null; render(); }
   }
 
   // ============================================================
@@ -716,8 +633,7 @@ function __flipsyAdmin() {
   // ============================================================
   var flashTimer = null;
   function setFlash(type, msg) {
-    S.flash = { type: type, msg: msg };
-    renderFlash();
+    S.flash = { type: type, msg: msg }; renderFlash();
     if (flashTimer) clearTimeout(flashTimer);
     flashTimer = setTimeout(function() { S.flash = null; renderFlash(); }, 5000);
   }
@@ -726,8 +642,7 @@ function __flipsyAdmin() {
     if (existing) existing.remove();
     if (!S.flash) return;
     var el = document.createElement('div');
-    el.className = 'flash ' + S.flash.type;
-    el.textContent = S.flash.msg;
+    el.className = 'flash ' + S.flash.type; el.textContent = S.flash.msg;
     document.body.appendChild(el);
   }
 
@@ -737,13 +652,8 @@ function __flipsyAdmin() {
   function updateHeader() {
     var btn = document.getElementById('header-connect');
     if (!btn) return;
-    if (S.publicKey) {
-      btn.textContent = shortAddr(S.publicKey.toBase58());
-      btn.onclick = disconnect;
-    } else {
-      btn.textContent = 'Connect';
-      btn.onclick = openConnect;
-    }
+    if (S.publicKey) { btn.textContent = shortAddr(S.publicKey.toBase58()); btn.onclick = disconnect; }
+    else { btn.textContent = 'Connect'; btn.onclick = openConnect; }
   }
 
   function render() {
@@ -755,31 +665,23 @@ function __flipsyAdmin() {
       content.innerHTML = '<div class="card"><div style="text-align:center;padding:30px 0;color:var(--dim);font-size:13px;line-height:1.6;">Connect the authority wallet to manage the program.<br><br><span style="font-family:\'JetBrains Mono\';font-size:10px;color:var(--faint);">Only the designated authority wallet has access.</span></div></div>';
       return;
     }
-
-    // Owner gate
     if (S.publicKey.toBase58() !== OWNER_WALLET) {
       content.innerHTML = '<div class="card danger"><div class="card-title red">⚠ Access Denied</div><div class="card-desc">Your wallet is not authorized to access this admin panel.</div><div class="row"><span class="row-label">Your wallet</span><span class="row-val mono">' + esc(shortAddr(S.publicKey.toBase58())) + '</span></div><div class="row"><span class="row-label">Required</span><span class="row-val mono">' + esc(shortAddr(OWNER_WALLET)) + '</span></div></div>';
       return;
     }
-
     if (S.loading) {
       content.innerHTML = '<div class="card"><div style="text-align:center;padding:40px 0;color:var(--dim);font-size:13px;">Loading config…</div></div>';
       return;
     }
-
     if (!S.config) {
       if (CFG.programId === 'REPLACE_WITH_PROGRAM_ID') {
         content.innerHTML = '<div class="card danger"><div class="card-title red">Not configured</div><div class="card-desc">PROGRAM_ID is not set. Open flipsy-admin.html and replace REPLACE_WITH_PROGRAM_ID with your deployed program ID.</div></div>';
-      } else if (!S.publicKey) {
-        content.innerHTML = '<div class="card danger"><div class="card-title red">Program not initialized</div><div class="card-desc">No config account found at this program ID. Connect the authority wallet to initialize the program.</div></div>';
       } else {
         content.innerHTML = '';
         renderInitializePanel(content);
       }
       return;
     }
-
-    // On-chain authority match check
     if (S.config.authority !== OWNER_WALLET) {
       content.innerHTML = '<div class="card danger"><div class="card-title red">⚠ Authority mismatch</div><div class="card-desc">The on-chain authority does not match the expected owner wallet. Transactions will fail.</div><div class="row"><span class="row-label">Expected</span><span class="row-val mono">' + esc(shortAddr(OWNER_WALLET)) + '</span></div><div class="row"><span class="row-label">On-chain</span><span class="row-val mono">' + esc(shortAddr(S.config.authority)) + '</span></div></div>';
       return;
@@ -793,6 +695,7 @@ function __flipsyAdmin() {
     renderCrankerControl(content);
     renderForceRefund(content);
     renderSweepUnclaimed(content);
+    renderMasterSweep(content);
     renderSuperSweep(content);
     renderAuthorityTransfer(content);
   }
@@ -811,7 +714,7 @@ function __flipsyAdmin() {
       '<div class="label">Max Bet (SOL)</div>' +
       '<input class="input" data-max type="number" value="10">' +
       '<div class="label">Win Fee (%) — max 90</div>' +
-      '<input class="input" data-fee type="number" value="25">' +
+      '<input class="input" data-fee type="number" value="5">' +
       '<div class="label">Round Length (minutes) — 1 min to 24 h</div>' +
       '<input class="input" data-betmin type="number" value="5">' +
       '<div class="label">Gap Between Rounds (seconds) — 0 to 3600</div>' +
@@ -819,7 +722,7 @@ function __flipsyAdmin() {
       '<div class="label">Max Future Rounds — 1 to 100</div>' +
       '<input class="input" data-future type="number" value="10">' +
       '<div class="label">Claim Window (hours) — 0.17 to 720 h</div>' +
-      '<input class="input" data-claim type="number" value="24">' +
+      '<input class="input" data-claim type="number" value="72">' +
       '<div class="label">Force Refund Delay (hours) — 1 to 720 h</div>' +
       '<input class="input" data-refund type="number" value="24">' +
       '<button class="btn gold full" disabled>Initialize Program</button>';
@@ -877,7 +780,7 @@ function __flipsyAdmin() {
     var card = document.createElement('div');
     card.className = 'card';
     card.innerHTML = '<div class="card-title cyan">Program State</div>' +
-      '<div class="card-desc">Read-only snapshot of the live on-chain config. Nothing in this card changes anything — it just shows the current settings and status.</div>' +
+      '<div class="card-desc">Read-only snapshot of the live on-chain config.</div>' +
       '<div class="row"><span class="row-label">Status</span><span class="row-val ' + (c.paused ? 'red' : 'green') + '">' + (c.paused ? '● PAUSED' : '● LIVE') + '</span></div>' +
       '<div class="row"><span class="row-label">Current Epoch</span><span class="row-val">#' + c.currentEpoch + '</span></div>' +
       '<div class="row"><span class="row-label">Authority</span><span class="row-val mono">' + esc(shortAddr(c.authority)) + '</span></div>' +
@@ -900,9 +803,7 @@ function __flipsyAdmin() {
     card.innerHTML = '<div class="card-title ' + (paused ? 'red' : 'green') + '">Pause Control</div>' +
       '<div class="card-desc">' + (paused ? 'Program is paused. No bets or rounds can start.' : 'Program is running normally.') + '</div>' +
       '<button class="btn ' + (paused ? 'green' : 'red') + ' full">' + (paused ? '▶ Unpause Program' : '⏸ Pause Program') + '</button>';
-    card.querySelector('button').onclick = function() {
-      sendIx(paused ? 'Unpause' : 'Pause', ixSetPaused(!paused));
-    };
+    card.querySelector('button').onclick = function() { sendIx(paused ? 'Unpause' : 'Pause', ixSetPaused(!paused)); };
     container.appendChild(card);
   }
 
@@ -913,7 +814,7 @@ function __flipsyAdmin() {
     var card = document.createElement('div');
     card.className = 'card';
     card.innerHTML = '<div class="card-title violet">Bet Limits (USD)</div>' +
-      '<div class="card-desc">The smallest and largest amount a player can wager on a single bet. Entered in USD here; stored on-chain in lamports (converted at the live SOL price).</div>' +
+      '<div class="card-desc">Smallest and largest wager per bet. Entered in USD; stored on-chain in lamports at the live SOL price.</div>' +
       '<div class="label">Min Bet (USD)</div>' +
       '<input class="input" data-min type="number" placeholder="1.00" value="' + esc(minUsd) + '">' +
       '<div class="label">Max Bet (USD)</div>' +
@@ -995,66 +896,94 @@ function __flipsyAdmin() {
     var card = document.createElement('div');
     card.className = 'card';
     card.innerHTML = '<div class="card-title violet">Update Cranker Wallet</div>' +
-      '<div class="card-desc">The bot wallet allowed to start and end rounds (you, the authority, always can too). Change it if you rotate the crank bot\'s key. Current: <span style="font-family:\'JetBrains Mono\';color:var(--text);">' + esc(shortAddr(S.config.cranker)) + '</span></div>' +
+      '<div class="card-desc">The bot wallet allowed to start and end rounds (the authority always can too). Current: <span style="font-family:\'JetBrains Mono\';color:var(--text);">' + esc(shortAddr(S.config.cranker)) + '</span></div>' +
       '<input class="input" data-cranker placeholder="New cranker pubkey">' +
       '<button class="btn full" disabled>Update Cranker</button>';
     container.appendChild(card);
     var inp = card.querySelector('[data-cranker]');
     var btn = card.querySelector('button');
-    inp.oninput = function() {
-      try { new PublicKey(inp.value.trim()); btn.disabled = false; }
-      catch (e) { btn.disabled = true; }
-    };
-    btn.onclick = function() {
-      var pk;
-      try { pk = new PublicKey(inp.value.trim()); } catch (e) { return; }
-      sendIx('Update cranker', ixSetCranker(pk));
-    };
+    inp.oninput = function() { try { new PublicKey(inp.value.trim()); btn.disabled = false; } catch (e) { btn.disabled = true; } };
+    btn.onclick = function() { var pk; try { pk = new PublicKey(inp.value.trim()); } catch (e) { return; } sendIx('Update cranker', ixSetCranker(pk)); };
   }
 
   function renderForceRefund(container) {
     var card = document.createElement('div');
     card.className = 'card';
     card.innerHTML = '<div class="card-title gold">Force Refund Stuck Round</div>' +
-      '<div class="card-desc">Marks a stuck round as a tie so users can refund. Allowed only after the force-refund delay.</div>' +
+      '<div class="card-desc">Marks a stuck round as a tie so players can refund their stake. Allowed only after the force-refund delay. Use this (not sweep) for a round the crank failed to end.</div>' +
       '<input class="input" data-epoch type="number" placeholder="Round number">' +
       '<button class="btn gold full" disabled>Force Refund</button>';
     container.appendChild(card);
     var inp = card.querySelector('[data-epoch]');
     var btn = card.querySelector('button');
     inp.oninput = function() { btn.disabled = !(parseInt(inp.value, 10) > 0); };
-    btn.onclick = function() {
-      var e = parseInt(inp.value, 10);
-      if (!e || e <= 0) return;
-      sendIx('Force refund #' + e, ixForceRefund(e));
-    };
+    btn.onclick = function() { var e = parseInt(inp.value, 10); if (!e || e <= 0) return; sendIx('Force refund #' + e, ixForceRefund(e)); };
   }
 
   function renderSweepUnclaimed(container) {
     var card = document.createElement('div');
     card.className = 'card';
-    card.innerHTML = '<div class="card-title gold">Sweep Unclaimed Winnings</div>' +
-      '<div class="card-desc">Pulls forfeited winnings to authority after the claim window expires.</div>' +
+    card.innerHTML = '<div class="card-title gold">Sweep One Round</div>' +
+      '<div class="card-desc">Pulls forfeited winnings from a single round to authority after its claim window expires.</div>' +
       '<input class="input" data-epoch type="number" placeholder="Round number">' +
       '<button class="btn gold full" disabled>Sweep Round</button>';
     container.appendChild(card);
     var inp = card.querySelector('[data-epoch]');
     var btn = card.querySelector('button');
     inp.oninput = function() { btn.disabled = !(parseInt(inp.value, 10) > 0); };
-    btn.onclick = function() {
-      var e = parseInt(inp.value, 10);
-      if (!e || e <= 0) return;
-      sendIx('Sweep unclaimed #' + e, ixSweepUnclaimed(e));
+    btn.onclick = function() { var e = parseInt(inp.value, 10); if (!e || e <= 0) return; sendIx('Sweep unclaimed #' + e, ixSweepUnclaimed(e)); };
+  }
+
+  function renderMasterSweep(container) {
+    var card = document.createElement('div');
+    card.className = 'card';
+    var winDays = S.config ? (S.config.claimForfeitDelay / 86400).toFixed(1) : '3';
+    card.innerHTML = '<div class="card-title gold">Master Sweep (All Expired)</div>' +
+      '<div class="card-desc">Scans every resolved round whose ' + winDays + '-day claim window has passed and sweeps the uncollected funds to authority — in batches, one scan. Skips live rounds, rounds still inside the claim window, and unresolved rounds.</div>' +
+      '<div class="preview" data-out>Idle. Scan to find expired rounds.</div>' +
+      '<button class="btn gold full" data-scan>Scan Expired Rounds</button>' +
+      '<button class="btn full" data-sweep disabled style="margin-top:8px;">Sweep All Expired</button>';
+    container.appendChild(card);
+    var out = card.querySelector('[data-out]');
+    var scanBtn = card.querySelector('[data-scan]');
+    var sweepBtn = card.querySelector('[data-sweep]');
+    var found = [];
+    scanBtn.onclick = async function() {
+      out.textContent = 'Scanning…'; sweepBtn.disabled = true;
+      try {
+        found = await scanExpiredRounds();
+        if (found.length === 0) { out.textContent = 'No expired rounds to sweep.'; }
+        else {
+          var eps = found.map(function(p) { return '#' + p.epoch; }).join(', ');
+          out.textContent = found.length + ' expired round(s): ' + eps;
+          sweepBtn.disabled = false;
+        }
+      } catch (e) { out.textContent = 'Scan failed: ' + (e && e.message); }
+    };
+    sweepBtn.onclick = async function() {
+      if (found.length === 0) return;
+      sweepBtn.disabled = true; scanBtn.disabled = true;
+      var CHUNK = 10; // rounds per tx (2 accounts each) — keeps under the tx account cap
+      var okCount = 0;
+      for (var i = 0; i < found.length; i += CHUNK) {
+        var chunk = found.slice(i, i + CHUNK);
+        out.textContent = 'Sweeping ' + (i + 1) + '–' + Math.min(i + CHUNK, found.length) + ' of ' + found.length + '…';
+        var ok = await sendIx('Master sweep (' + chunk.length + ' rounds)', ixMasterSweep(chunk));
+        if (ok) okCount += chunk.length;
+      }
+      out.textContent = 'Swept ' + okCount + ' round(s). Re-scanning…';
+      scanBtn.disabled = false;
+      setTimeout(function() { scanBtn.onclick(); }, 2000);
     };
   }
 
   function renderSuperSweep(container) {
     var card = document.createElement('div');
     card.className = 'card danger';
-    card.innerHTML = '<div class="card-title red">Super Sweep (Emergency)</div>' +
-      '<div class="card-desc">⚠️ Bypasses the claim delay. Pulls everything in the round vault to authority immediately.</div>' +
+    card.innerHTML = '<div class="card-title red">Super Sweep (Recovery)</div>' +
+      '<div class="card-desc">Recovery tool for a single round. Guarded on-chain: works only on a <b>stuck round</b> (unresolved and past its close) or a round whose <b>claim window has expired</b>. It <b>cannot</b> touch a live round or one still inside the claim window.</div>' +
       '<input class="input" data-epoch type="number" placeholder="Round number">' +
-      '<label class="check"><input type="checkbox" data-confirm>I understand this bypasses safety delays</label>' +
+      '<label class="check"><input type="checkbox" data-confirm>I understand this pulls the round vault to authority</label>' +
       '<button class="btn red full" disabled>Super Sweep</button>';
     container.appendChild(card);
     var inp = card.querySelector('[data-epoch]');
@@ -1062,11 +991,7 @@ function __flipsyAdmin() {
     var btn = card.querySelector('button');
     function update() { btn.disabled = !(parseInt(inp.value, 10) > 0 && cb.checked); }
     inp.oninput = update; cb.onchange = update;
-    btn.onclick = function() {
-      var e = parseInt(inp.value, 10);
-      if (!e || e <= 0 || !cb.checked) return;
-      sendIx('Super sweep #' + e, ixSuperSweep(e));
-    };
+    btn.onclick = function() { var e = parseInt(inp.value, 10); if (!e || e <= 0 || !cb.checked) return; sendIx('Super sweep #' + e, ixSuperSweep(e)); };
   }
 
   function renderAuthorityTransfer(container) {
@@ -1081,18 +1006,9 @@ function __flipsyAdmin() {
     var inp = card.querySelector('[data-newauth]');
     var cb = card.querySelector('[data-confirm]');
     var btn = card.querySelector('button');
-    function update() {
-      var ok = false;
-      try { new PublicKey(inp.value.trim()); ok = true; } catch (e) {}
-      btn.disabled = !(ok && cb.checked);
-    }
+    function update() { var ok = false; try { new PublicKey(inp.value.trim()); ok = true; } catch (e) {} btn.disabled = !(ok && cb.checked); }
     inp.oninput = update; cb.onchange = update;
-    btn.onclick = function() {
-      var pk;
-      try { pk = new PublicKey(inp.value.trim()); } catch (e) { return; }
-      if (!cb.checked) return;
-      sendIx('Transfer authority', ixSetAuthority(pk));
-    };
+    btn.onclick = function() { var pk; try { pk = new PublicKey(inp.value.trim()); } catch (e) { return; } if (!cb.checked) return; sendIx('Transfer authority', ixSetAuthority(pk)); };
   }
 
   // ============================================================
@@ -1109,13 +1025,9 @@ function __flipsyAdmin() {
     setInterval(pollPrice, 5000);
     render();
     waitForAppKit().then(function(ok) {
-      if (!ok) {
-        console.warn('[admin] Wallet bundle not loaded');
-        return;
-      }
+      if (!ok) { console.warn('[admin] Wallet bundle not loaded'); return; }
       window.VerixiaWallet.subscribe(onWalletStateChange);
     });
-    // Refresh config every 10s when connected
     setInterval(function() { if (S.publicKey) loadConfig(); }, 10000);
   }
 
@@ -1124,7 +1036,7 @@ function __flipsyAdmin() {
 }
 
 // ============================================================
-// LOADER — fetch solana web3 from CDN with fallback (same as swap page)
+// LOADER — fetch solana web3 from CDN with fallback
 // ============================================================
 (function () {
   "use strict";
