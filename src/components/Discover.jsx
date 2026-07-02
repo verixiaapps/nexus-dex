@@ -395,7 +395,7 @@ function TokenRow({ t, rank, last, onOpen }){
           {t.sym}
           <span style={{fontFamily:MONO,fontSize:8,fontWeight:700,padding:'1px 5px',borderRadius:4,letterSpacing:'0.04em',textTransform:'uppercase',
             color:t.kind==='new'?C.green:C.ink3, background:t.kind==='new'?'rgba(22,192,138,.12)':'#f4f4f5'}}>
-            {t.kind==='new'?t.age:t.kind}
+            {t.kind==='new'?t.age:(t.kind==='stock'?'xStock':t.kind)}
           </span>
           {t.flags&&t.flags.length>0&&FLAG_META[t.flags[0]]&&(
             <span style={{fontFamily:MONO,fontSize:8,fontWeight:700,padding:'1px 5px',borderRadius:4,letterSpacing:'0.04em',color:'#fff',background:FLAG_META[t.flags[0]].color}}>
