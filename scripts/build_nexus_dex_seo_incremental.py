@@ -1208,6 +1208,10 @@ def git_checkpoint(generated_count, new_generated_keywords, new_generated_slugs,
 
     try:
         subprocess.run(["git", "add", "-A"], check=True)
+        # Never stage anything under .github/ (workflow files). The default
+        # GITHUB_TOKEN can't push changes there, so an unrelated workflow file
+        # in the repo would otherwise get swept in and reject the whole push.
+        subprocess.run(["git", "reset", "-q", "--", ".github"], check=False)
         result = subprocess.run(["git", "diff", "--cached", "--quiet"], capture_output=True)
         if result.returncode == 0:
             print(f"[checkpoint] No changes to commit at {generated_count} pages.")
