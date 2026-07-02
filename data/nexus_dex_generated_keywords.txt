@@ -541,26 +541,42 @@ cross chain routing
 cross chain sol swap
 cross chain solana to aptos
 cross chain solana to arbitrum
+cross chain solana to avalanche
+cross chain solana to base
+cross chain solana to bitcoin
+cross chain solana to bnb
+cross chain solana to ethereum
+cross chain solana to optimism
+cross chain solana to polygon
+cross chain solana to sui
+cross chain solana to tron
 cross chain stablecoin exchange
 cross chain stablecoin swap
 cross chain stablecoin transfer
 cross chain swap
 cross chain swap aggregator
+cross chain swap comparison
 cross chain swaps
 cross chain token converter
 cross chain token exchange
 cross chain token routing
+cross chain token swap
 cross chain token swaps
 cross chain token trading
+cross chain ton swap
 cross chain trading
 cross chain trading platform
 cross chain transfer
+cross chain usdc swap
+cross chain usdt swap
 cross chain wallet
+cross chain xrp swap
 crypto aggregator
 crypto alpha scanner
 crypto analytics
 crypto assets
 crypto bridge
+crypto bridge comparison
 crypto bridge platform
 crypto contract checker
 crypto dashboard
@@ -569,6 +585,7 @@ crypto due diligence
 crypto ecosystem
 crypto exchange
 crypto exchange alternative
+crypto exchange no verification
 crypto exchange without kyc
 crypto fraud detection
 crypto freedom
@@ -579,6 +596,7 @@ crypto intelligence
 crypto interoperability
 crypto launch tracker
 crypto liquidity
+crypto liquidity aggregator
 crypto liquidity app
 crypto market scanner
 crypto marketplace
@@ -588,6 +606,7 @@ crypto opportunities
 crypto opportunity scanner
 crypto pair scanner
 crypto platform
+crypto price routing
 crypto project analysis
 crypto radar
 crypto research
@@ -603,6 +622,9 @@ crypto screener
 crypto security analysis
 crypto sentiment tracker
 crypto staking
+crypto swap aggregator
+crypto swap app
+crypto swap service
 crypto swaps
 crypto tracker
 crypto trading
@@ -618,20 +640,27 @@ crypto without id
 crypto without sign up
 crypto without verification
 crypto worldwide
+daddy solana dex swap
 decentralized crypto platform
+decentralized crypto trading
 decentralized exchange
 decentralized exchange no kyc
 decentralized finance
 decentralized finance platform
+decentralized solana exchange
 decentralized swap
 decentralized trading
+deep liquidity dex
 defi dex
 defi platform
 defi routing
+defi swap app
 defi trading
+degen crypto exchange
 dex aggregator
 dex analytics
 dex screener alternative
+dexscreener alternative solana dex
 dexscreener vs gmgn fees
 dexscreener vs gmgn for beginners
 dexscreener vs gmgn for memecoins
@@ -639,6 +668,7 @@ dexscreener vs gmgn for new tokens
 dexscreener vs gmgn reddit
 dexscreener vs gmgn slippage
 dexscreener vs gmgn speed
+dexscreener vs gmgn swap fees compared
 dexscreener vs gmgn which is better
 digital asset exchange
 digital assets
