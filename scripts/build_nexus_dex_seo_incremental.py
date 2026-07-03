@@ -81,6 +81,88 @@ SITEMAP_FILE  = os.path.join(OUTPUT_DIR, "nexus-sitemap.xml")
 # canonical/og/JSON-LD URLs point there.
 SITE      = "https://verixiaapps.com"
 SWAP_SITE = "https://swap.verixiaapps.com"
+
+# --- Cross-link injection: pull 6 real token-risk URLs from that sitemap ---
+CROSS_SITEMAP_URL = "https://verixiaapps.com/token-risk-sitemap.xml"
+CROSS_LINKS_PER_PAGE = 6
+CROSS_MARKER = "data-risk-crosslinks"
+_CROSS_POOL = None
+
+
+def _cross_load_risk_slugs():
+    global _CROSS_POOL
+    if _CROSS_POOL is not None:
+        return _CROSS_POOL
+    pool = []
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            CROSS_SITEMAP_URL,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+                "Accept": "application/xml,text/xml,*/*;q=0.9",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            xml = resp.read().decode("utf-8", "replace")
+        seen = set()
+        for loc in re.findall(r"<loc>\s*(.*?)\s*</loc>", xml, flags=re.IGNORECASE):
+            m = re.search(r"verixiaapps\.com/token-risk/([a-z0-9-]+)/?", loc.strip())
+            if not m:
+                continue
+            s = m.group(1).strip("-")
+            if s and s not in seen:
+                seen.add(s)
+                pool.append(s)
+        print(f"[crosslink] loaded {len(pool)} token-risk slugs")
+    except Exception as e:
+        print(f"[crosslink] sitemap fetch failed: {e}")
+        pool = []
+    _CROSS_POOL = pool
+    return _CROSS_POOL
+
+
+def _cross_build_section(page_slug):
+    import random
+    pool = _cross_load_risk_slugs()
+    if not pool:
+        return ""
+    rng = random.Random(page_slug)
+    picks = pool[:] if len(pool) <= CROSS_LINKS_PER_PAGE else rng.sample(pool, CROSS_LINKS_PER_PAGE)
+    base = "https://verixiaapps.com/token-risk"
+    lis = "\n".join(
+        f'<li><a href="{base}/{escape_html(s)}/">{escape_html(" ".join(w.capitalize() for w in s.replace("-"," ").split()))}</a></li>'
+        for s in picks
+    )
+    return (
+        f'<section {CROSS_MARKER} class="section" style="margin-top:24px;padding-top:20px;border-top:1px solid var(--hairline);">'
+        f'<div class="section-tag">VERIFY BEFORE YOU SWAP</div>'
+        f'<h2 class="section-title">Check token risk on <span class="grad">Verixia</span></h2>'
+        f'<ul class="related-links" style="margin-bottom:0;">{lis}</ul>'
+        f'</section>\n'
+    )
+
+
+def inject_cross_links_into_existing(path, page_slug):
+    try:
+        with open(path, encoding="utf-8") as f:
+            html = f.read()
+    except Exception:
+        return False
+    if CROSS_MARKER in html:
+        return False
+    anchor = '<footer class="nx-foot">'
+    if anchor not in html:
+        return False
+    section = _cross_build_section(page_slug)
+    if not section:
+        return False
+    html = html.replace(anchor, section + anchor, 1)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(html)
+    return True
+
+
 OG_IMAGE  = f"{SITE}/og/nexus-dex.png"
 
 RELATED_LINKS_COUNT = 6
@@ -89,22 +171,6 @@ DAILY_LIMIT         = int(os.getenv("DAILY_LIMIT", "100"))
 COMMIT_EVERY        = int(os.getenv("COMMIT_EVERY", "30"))
 RESUME              = os.getenv("RESUME", "true").lower() == "true"
 RESET_ENGINE        = os.getenv("RESET_ENGINE", "false").lower() == "true"
-
-# ---- Cross-domain linking to the token-risk pages ----
-# Each swap page links to REAL token-risk pages. We read the token-risk repo's
-# live sitemap once per run, extract real slugs, and match ones sharing keyword
-# tokens with the current page. Real pages only -> no 404s. Falls back to risk
-# hub slugs when there's no match. Set CROSS_SITEMAP_URL="" to use hubs only.
-CROSS_SITEMAP_URL    = os.getenv(
-    "CROSS_SITEMAP_URL", "https://verixiaapps.com/token-risk-sitemap.xml"
-)
-CROSS_LINKS_PER_PAGE = int(os.getenv("CROSS_LINKS_PER_PAGE", "6"))
-CROSS_RISK_HUBS      = [
-    ("solana-token-risk",  "Solana token risk checker"),
-    ("token-safety-check", "Token safety check"),
-    ("meme-token-risk",    "Meme coin risk checker"),
-    ("token-risk-hub",     "All token risk guides"),
-]
 # Only full rebuilds set this. When on, we install the SIGTERM/SIGINT handlers
 # above so a timeout flushes a final checkpoint instead of losing the batch.
 REBUILD_MODE        = os.getenv("REBUILD_MODE", "false").lower() == "true"
@@ -155,7 +221,6 @@ REQUIRED_TEMPLATE_PLACEHOLDERS = {
     "{{SUPP_HEADING}}",
     "{{SUPP_INTRO}}",
     "{{PAGE_META_SCRIPT}}",
-    "{{TOKEN_RISK_LINK}}",
 }
 
 # Ranking-only signal sets (used for internal-link relatedness + ordering).
@@ -929,118 +994,6 @@ def build_canonical(slug):
 
 
 # -----------------------------
-# CROSS-DOMAIN LINKING (real pages from the token-risk sitemap)
-# -----------------------------
-_CROSS_SLUGS_CACHE = None
-
-_CROSS_STOPWORDS = {
-    "token", "tokens", "crypto", "coin", "coins", "solana", "sol", "the", "a",
-    "to", "for", "swap", "risk", "check", "checker", "best", "no", "safe",
-    "scam", "how", "is", "buy", "sell", "trade", "trading", "dex", "exchange",
-    "defi", "on", "of", "and", "with", "your", "app", "online", "instant",
-}
-
-
-def _cross_slug_tokens(slug):
-    return {t for t in slug.split("-") if t and t not in _CROSS_STOPWORDS}
-
-
-def load_cross_slugs():
-    """Fetch the token-risk sitemap once; return [(slug, token_set), ...].
-    Returns [] on failure/disabled so callers fall back to hubs."""
-    global _CROSS_SLUGS_CACHE
-    if _CROSS_SLUGS_CACHE is not None:
-        return _CROSS_SLUGS_CACHE
-    if not CROSS_SITEMAP_URL:
-        _CROSS_SLUGS_CACHE = []
-        return _CROSS_SLUGS_CACHE
-
-    result = []
-    try:
-        import urllib.request
-        req = urllib.request.Request(
-            CROSS_SITEMAP_URL, headers={"User-Agent": "verixia-seo-crosslink"}
-        )
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            xml = resp.read().decode("utf-8", "replace")
-        for loc in re.findall(r"<loc>\s*(.*?)\s*</loc>", xml, flags=re.IGNORECASE):
-            m = re.search(r"verixiaapps\.com/token-risk/([a-z0-9-]+)/?", loc.strip())
-            if not m:
-                continue
-            s = slugify(m.group(1))
-            if s:
-                result.append((s, _cross_slug_tokens(s)))
-        seen = set()
-        deduped = []
-        for s, toks in result:
-            if s in seen:
-                continue
-            seen.add(s)
-            deduped.append((s, toks))
-        _CROSS_SLUGS_CACHE = deduped
-        print(f"[crosslink] loaded {len(deduped)} token-risk slugs from sitemap")
-    except Exception as e:
-        print(f"[crosslink] sitemap fetch failed ({e}); using hub fallback")
-        _CROSS_SLUGS_CACHE = []
-    return _CROSS_SLUGS_CACHE
-
-
-def match_cross_slugs(keyword, slug, limit):
-    """Pick `limit` real token-risk slugs from the live sitemap for this page.
-    No keyword matching -- varied per-page selection, seeded by slug so it's
-    stable per page but different across pages."""
-    pool = load_cross_slugs()
-    if not pool:
-        return []
-    import random
-    rng = random.Random(slug)
-    all_slugs = [s for s, _toks in pool]
-    if len(all_slugs) <= limit:
-        picks = all_slugs[:]
-    else:
-        picks = rng.sample(all_slugs, limit)
-    return [(s, humanize_slug(s)) for s in picks]
-
-
-def build_token_risk_link_html(slug, keyword):
-    """Cross-links to REAL token-risk pages (matched from the live sitemap),
-    plus a risk hub as a guaranteed anchor. Never invents a URL."""
-    base = "https://verixiaapps.com/token-risk"
-    items = []
-    seen = set()
-
-    for cand_slug, label in match_cross_slugs(keyword, slug, CROSS_LINKS_PER_PAGE):
-        if cand_slug in seen:
-            continue
-        seen.add(cand_slug)
-        items.append(
-            f'<li><a href="{base}/{escape_html(cand_slug)}/">'
-            f'{escape_html(label)}</a></li>'
-        )
-
-    for hub_slug, hub_label in CROSS_RISK_HUBS:
-        if hub_slug in seen:
-            continue
-        items.append(
-            f'<li><a href="{base}/{hub_slug}/">{escape_html(hub_label)}</a></li>'
-        )
-        break
-
-    if len(items) <= 1:
-        for hub_slug, hub_label in CROSS_RISK_HUBS:
-            if hub_slug in seen:
-                continue
-            seen.add(hub_slug)
-            items.append(
-                f'<li><a href="{base}/{hub_slug}/">{escape_html(hub_label)}</a></li>'
-            )
-            if len(items) >= 4:
-                break
-
-    return "\n".join(items)
-
-
-# -----------------------------
 # LINKING HELPERS
 # -----------------------------
 def dedupe_pages_by_slug(pages_list):
@@ -1257,7 +1210,6 @@ def render_full_page(template, keyword, keyword_display, payload, slug,
         "{{RELATED_LINKS}}":         related_links_html,
         "{{MORE_LINKS}}":            more_links_html,
         "{{PAGE_META_SCRIPT}}":      meta_script,
-        "{{TOKEN_RISK_LINK}}":       build_token_risk_link_html(slug, keyword),
     }
 
     html = template
@@ -1439,6 +1391,46 @@ def main():
     print(f"Sitemap file: {SITEMAP_FILE}")
     print(f"Canonical base: {SWAP_SITE}")
 
+    # --- Cross-link pass: inject 6 real token-risk URLs into EVERY existing
+    # page on disk, regardless of whether its keyword is still in the queue.
+    # Idempotent (skips pages that already have the section). ---
+    _cross_injected = 0
+    _cross_skipped_existing = 0
+    _cross_skipped_no_anchor = 0
+    if os.path.isdir(OUTPUT_DIR):
+        for _dir in sorted(os.listdir(OUTPUT_DIR)):
+            _slug = slugify(_dir)
+            if not _slug or _slug in PROTECTED_SLUGS:
+                continue
+            _path = page_path(_slug)
+            if not os.path.isfile(_path):
+                continue
+            try:
+                with open(_path, encoding="utf-8") as _f:
+                    _html = _f.read()
+            except Exception:
+                continue
+            if CROSS_MARKER in _html:
+                _cross_skipped_existing += 1
+                continue
+            if '<footer class="nx-foot">' not in _html:
+                _cross_skipped_no_anchor += 1
+                continue
+            _section = _cross_build_section(_slug)
+            if not _section:
+                continue
+            _html = _html.replace(
+                '<footer class="nx-foot">', _section + '<footer class="nx-foot">', 1
+            )
+            with open(_path, "w", encoding="utf-8") as _f:
+                _f.write(_html)
+            _cross_injected += 1
+    print(
+        f"[crosslink] injected into {_cross_injected} existing pages "
+        f"(already had section: {_cross_skipped_existing}, "
+        f"no anchor: {_cross_skipped_no_anchor})"
+    )
+
     generated_count = 0
     skipped_existing_count = 0
     ai_failure_count = 0
@@ -1474,6 +1466,7 @@ def main():
             new_generated_slugs.add(slug)
             new_generated_keywords.add(keyword)
             processed_keywords.add(keyword_norm)
+            inject_cross_links_into_existing(path, slug)
             continue
 
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -1504,6 +1497,12 @@ def main():
         if validation_errors:
             validation_error_count += 1
             print(f"Validation warning for {slug}: {'; '.join(validation_errors)}")
+
+        # Always add 6 real token-risk URLs from the other sitemap. No exceptions.
+        if CROSS_MARKER not in html:
+            _section = _cross_build_section(slug)
+            if _section and '<footer class="nx-foot">' in html:
+                html = html.replace('<footer class="nx-foot">', _section + '<footer class="nx-foot">', 1)
 
         with open(path, "w", encoding="utf-8") as f:
             f.write(html)
