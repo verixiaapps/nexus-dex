@@ -1,7 +1,7 @@
 {
-  "keywords_loaded": 2328,
+  "keywords_loaded": 2573,
   "hubs_built": 11,
-  "validation_warnings": 2,
+  "validation_warnings": 1,
   "validation_details": [
     {
       "hub_slug": "brand-tokens",
@@ -10,14 +10,6 @@
       "errors": [
         "no linked child pages",
         "matched keywords exist but no child pages were found on disk"
-      ]
-    },
-    {
-      "hub_slug": "how-to-guides",
-      "matched_keywords": 0,
-      "linked_pages": 0,
-      "errors": [
-        "no linked child pages"
       ]
     }
   ]
